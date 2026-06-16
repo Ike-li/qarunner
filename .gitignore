@@ -1,0 +1,54 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code / OMC
+.claude/
+.omc/
+.omx/
+.antigravitycli/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Coverage
+.coverage
+
+# Node (frontend)
+node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+!frontend/.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright
+.playwright-mcp/
+*-artifacts/
+artifacts/
+test-results/
+playwright-report/
+smoke-results/
+
+# T14 dogfooding 导入状态（本地）
+.qap-import-state.json
+.reasonix
+.codegraph
