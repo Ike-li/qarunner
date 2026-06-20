@@ -1,0 +1,153 @@
+"""Tests for api.app — create_app factory and lifespan."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from fastapi import FastAPI
+from starlette.testclient import TestClient
+
+from qarunner.api.app import create_app
+from qarunner.api.deps import Container
+from qarunner.errors import RunNotFound
+from qarunner.models import Run
+
+
+@dataclass
+class _FakeStore:
+    _runs: dict[str, Run] = field(default_factory=dict)
+    initialized: bool = False
+    closed: bool = False
+
+    async def save(self, run: Run) -> None:
+        self._runs[run.id] = run
+
+    async def get(self, run_id: str) -> Run:
+        raise RunNotFound(run_id)
+
+    async def list(self) -> list[Run]:
+        return []
+
+    async def initialize(self) -> None:
+        self.initialized = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def list_schedules(self, profile_id: str | None = None) -> list:
+        return []
+
+    async def get_schedule(self, schedule_id: str) -> None:
+        return None
+
+    async def save_schedule(self, schedule: any) -> None:
+        pass
+
+    async def get_profile(self, profile_id: str) -> None:
+        return None
+
+
+
+@dataclass
+class _FakeOrch:
+    store: _FakeStore
+
+
+def test_create_app_returns_fastapi() -> None:
+    app = create_app()
+    assert isinstance(app, FastAPI)
+    assert app.title == "qarunner"
+
+
+def test_create_app_with_container_injects_it() -> None:
+    container = Container(orchestrator=None, store=None)  # type: ignore[arg-type]
+    app = create_app(container)
+    assert app.state.container is container
+
+
+def test_create_app_without_container() -> None:
+    app = create_app()
+    assert not hasattr(app.state, "container")
+
+
+def test_lifespan_runs_without_error() -> None:
+    from datetime import UTC, datetime
+
+    from qarunner.api.deps import get_current_user
+    from qarunner.models import User, UserRole
+
+    async def mock_get_current_user() -> User:
+        return User(username="test_user", role=UserRole.ADMIN, created_at=datetime.now(UTC))
+
+    store = _FakeStore()
+    orch = _FakeOrch(store=store)
+    container = Container(orchestrator=orch, store=store)  # type: ignore[arg-type]
+    app = create_app(container)
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    with TestClient(app) as client:
+        resp = client.get("/runs")
+    assert resp.status_code == 200
+    assert store.initialized is True
+    assert store.closed is True
+
+
+def test_lifespan_without_container_creates_one(monkeypatch) -> None:
+    """When no container is injected, lifespan creates a real one."""
+    import tempfile
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from qarunner.api.deps import get_current_user
+    from qarunner.models import User, UserRole
+
+    async def mock_get_current_user() -> User:
+        return User(username="test_user", role=UserRole.ADMIN, created_at=datetime.now(UTC))
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("QARUNNER_DB_PATH", str(Path(td) / "test.db"))
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(Path(td) / "tests"))
+        monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
+        app = create_app()
+        app.dependency_overrides[get_current_user] = mock_get_current_user
+        with TestClient(app) as client:
+            resp = client.get("/runs")
+        assert resp.status_code == 200
+        assert resp.json() == {"runs": []}
+
+
+def test_static_files_mounting(tmp_path, monkeypatch) -> None:
+    """Test that StaticFiles mounts index.html if QARUNNER_STATIC_ROOT is set."""
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    index_html = dist_dir / "index.html"
+    index_html.write_text("Hello React", encoding="utf-8")
+
+    monkeypatch.setenv("QARUNNER_STATIC_ROOT", str(dist_dir))
+
+    # Provide a mock store so create_app's lifespan doesn't try to open real sqlite
+    store = _FakeStore()
+    orch = _FakeOrch(store=store)
+    container = Container(orchestrator=orch, store=store)  # type: ignore[arg-type]
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.text == "Hello React"
+
+
+def test_static_files_not_mounted_if_no_dir(monkeypatch) -> None:
+    """Test that static files are not mounted if the directory does not exist."""
+    monkeypatch.setenv("QARUNNER_STATIC_ROOT", "/nonexistent/static/path")
+
+    store = _FakeStore()
+    orch = _FakeOrch(store=store)
+    container = Container(orchestrator=orch, store=store)  # type: ignore[arg-type]
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/")
+    # Should 404 since root is not mounted
+    assert resp.status_code == 404
+

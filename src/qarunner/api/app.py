@@ -1,0 +1,57 @@
+"""FastAPI application factory."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from qarunner.api.deps import Container, create_container
+from qarunner.api.routes import router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Application lifecycle — initialise container if not injected."""
+    if not hasattr(app.state, "container") or app.state.container is None:
+        container = create_container()
+        app.state.container = container
+    # Initialize SQLite store
+    await app.state.container.store.initialize()
+    from qarunner.core.scheduler import start_scheduler, shutdown_scheduler
+    await start_scheduler(app)
+    yield
+    # Cleanup
+    await shutdown_scheduler(app)
+    await app.state.container.store.close()
+
+
+def create_app(container: Container | None = None) -> FastAPI:
+    """Build and return a configured ``FastAPI`` instance."""
+    app = FastAPI(title="qarunner", lifespan=lifespan)
+    app.include_router(router)
+    if container is not None:
+        app.state.container = container
+
+    import os
+    from pathlib import Path
+
+    from fastapi.staticfiles import StaticFiles
+
+    static_dir = os.environ.get("QARUNNER_STATIC_ROOT")
+    if static_dir:
+        dist_path = Path(static_dir)
+    else:
+        # Resolve project root relative to this file: src/qarunner/api/app.py -> parents[3]
+        project_root = Path(__file__).resolve().parents[3]
+        dist_path = project_root / "frontend" / "dist"
+
+    if dist_path.is_dir():
+        app.mount("/", StaticFiles(directory=str(dist_path), html=True), name="static")
+
+    return app
+
+
+app = create_app()
+

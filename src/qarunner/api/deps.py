@@ -1,0 +1,126 @@
+"""Dependency container for DI ports and authentication dependencies."""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from datetime import UTC
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer
+
+from qarunner.adapters.allure_cli_reporter import AllureCliReporter
+from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
+from qarunner.adapters.junit_collector import JunitCollector
+from qarunner.adapters.sqlite_store import SqliteStore
+from qarunner.adapters.subprocess_runner import SubprocessRunner
+from qarunner.adapters.docker_runner import DockerRunner
+from qarunner.adapters.system_clock import SystemClock
+from qarunner.adapters.uuid_ids import UuidIds
+from qarunner.config import Settings
+from qarunner.core.auth import decode_access_token
+from qarunner.core.orchestrator import RunOrchestrator
+from qarunner.core.runners.pytest_runner import PytestRunner
+from qarunner.core.runners.registry import RunnerRegistry
+from qarunner.models import User, UserRole
+
+
+@dataclass
+class Container:
+    """Holds all port implementations.  Tests inject fakes."""
+
+    orchestrator: RunOrchestrator
+    store: SqliteStore
+
+
+def create_container(settings: Settings | None = None) -> Container:
+    """Wire up real adapters from settings."""
+    cfg = settings or Settings()
+    executable = cfg.executable or sys.executable
+
+    store = SqliteStore(cfg.db_path)
+    clock = SystemClock()
+    ids = UuidIds()
+    process = SubprocessRunner()
+    docker_process = DockerRunner()
+    collector = JunitCollector()
+    reporter = AllureCliReporter(process=process, allure_bin=cfg.allure_bin)
+    scheduler = AsyncioScheduler(max_concurrency=cfg.max_concurrency)
+
+    registry = RunnerRegistry()
+    registry.register(PytestRunner())
+
+    orchestrator = RunOrchestrator(
+        registry=registry,
+        store=store,
+        scheduler=scheduler,
+        process=process,
+        collector=collector,
+        reporter=reporter,
+        clock=clock,
+        ids=ids,
+        tests_root=cfg.tests_root,
+        artifacts_root=cfg.artifacts_root,
+        executable=executable,
+        process_docker=docker_process,
+        default_timeout=cfg.default_timeout_seconds,
+    )
+
+    return Container(orchestrator=orchestrator, store=store)
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+
+
+async def get_current_user(request: Request, token: str | None = Depends(oauth2_scheme)) -> User:
+    """FastAPI dependency to retrieve the current authenticated user via JWT."""
+    # If not in headers, fall back to query parameter (helps with direct browser report downloads)
+    if not token:
+        token = request.query_params.get("token")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = decode_access_token(token)
+    if not payload or "sub" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    username = payload["sub"]
+
+    container = request.app.state.container
+    user_record = await container.store.get_user(username)
+    if not user_record:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    from datetime import datetime
+    created_at_dt = (
+        datetime.fromisoformat(user_record["created_at"])
+        if user_record.get("created_at")
+        else datetime.now(UTC)
+    )
+    return User(
+        username=user_record["username"],
+        role=UserRole(user_record["role"]),
+        created_at=created_at_dt,
+    )
+
+
+async def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    """FastAPI dependency to enforce that the user is an Administrator."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires Admin role",
+        )
+    return current_user

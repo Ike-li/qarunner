@@ -17,7 +17,7 @@
 
 | 维度 | 决策 |
 |---|---|
-| 架构 | 精简内核 + 薄 FastAPI（不引入 Postgres/Redis/arq/S3/多租户） |
+| 架构 | 精简内核 + 薄 FastAPI (包含完整的 JWT 鉴权与管理员用户管理中台，不引入 Postgres/Redis/arq/S3) |
 | 执行隔离 | 子进程 subprocess（`asyncio.create_subprocess_exec`），挡在 `ProcessRunner` 端口后 |
 | **测试运行环境** | 复用 qarunner 自己的 venv（默认 `sys.executable`，可配 `executable`）；**外部测试的依赖须装进此 venv** |
 | 测试框架 | 统一 Runner 插件接口，首版只实现 pytest（`allure-pytest` 因此是**运行时**依赖） |
@@ -31,9 +31,9 @@
 
 ## 范围
 
-**做：** 触发 pytest 运行 → 收 junit 出摘要 → 产 allure-results + 生成单文件 HTML → 落 SQLite → API 查询/查看。
+**做：** 触发 pytest 运行 → 收 junit 出摘要 → 产 allure-results + 生成单文件 HTML → 落 SQLite → API 查询/查看。已包含完整的 JWT 鉴权与管理员账户管理体系。
 
-**不做（留接口/后续）：** 多租户/鉴权、Docker 执行、git clone、取消、Redis/SSE、arq、S3、通知、调度、
+**不做（留接口/后续）：** 真正的多租户隔离、Docker 执行、git clone、取消、Redis/SSE、arq、S3、通知、调度、
 分析/triage、quarantine、审计、报告分享 token、per-case 入库、依赖隔离 venv。
 
 外部测试代码来源：**固定 `tests_root`（默认 `./external_tests/`）下的相对路径**，`safe_subpath` 防穿越。
@@ -88,7 +88,7 @@ QUEUED ──(scheduler 取得信号量)──▶ RUNNING ──▶ COMPLETED | 
 ```
 无 PENDING、无 CANCELLED。每个 run 行只被它自己的后台 task 写（`create()` 在前），单一 owner。
 
-## 核心数据模型（`models.py`，Pydantic frozen）
+## 核心数据模型（`models.py`，Run 为 frozen Pydantic model）
 
 - `RunStatus`: `QUEUED / RUNNING / COMPLETED / FAILED / TIMEOUT`
 - `RunRequest`: `tests_path:str`, `runner="pytest"`, `args:list[str]=[]`, `allure=True`, `timeout:int|None=None`
@@ -97,9 +97,10 @@ QUEUED ──(scheduler 取得信号量)──▶ RUNNING ──▶ COMPLETED | 
 - `TestSummary`: `total, passed, failed, skipped, error, duration_ms, pass_rate`
 - `CollectResult`: `summary:TestSummary`, `cases:list[TestCaseResult]`（cases 只用于算 summary，不入库）
 - `ReportRef`: `allure_results_dir`, `allure_report_file|None`(单个 index.html), `html_generated:bool`
-- `Run`: `id, status, runner, tests_path, summary|None, report|None, exit_code|None, error|None,`
+- `Run`: `id, status, runner, tests_path, args|[], allure_enabled|True, timeout|None, summary|None, report|None, exit_code|None, error|None,`
   `created_at, started_at|None, finished_at|None`
-- API 响应额外派生 **`passed:bool`** = `status==COMPLETED and summary.failed==0 and summary.error==0`
+  > 注：`args`/`allure_enabled`/`timeout` 来自 `RunRequest`，存于 Run 以使 `execute(run_id)` 自包含。
+- API 响应额外派生 **`passed:bool|None`** = `COMPLETED` 时 `summary.failed==0 and summary.error==0`，其他状态为 `None`
 
 ## 核心执行流程
 
@@ -122,7 +123,7 @@ QUEUED ──(scheduler 取得信号量)──▶ RUNNING ──▶ COMPLETED | 
 
 **错误模型（Area A 拍板）**
 - 超时**标志式**：`ProcessResult.timed_out=True`（不抛异常）；`exec 不存在/无权限`才抛。
-- `execute()` **顶层 `try/except Exception`**：任何意外 → 置 `FAILED`、`error=repr+stderr 尾部截断(~2000 字符)`、
+- `execute()` **顶层 `try/except Exception`**：任何意外 → 置 `FAILED`、`error=repr(exc)+traceback 尾部截断(~2000 字符)`、
   `finished_at`，**尽力落库**（二次失败只记日志），保证**绝不卡在 RUNNING**。
 - `error` 字段：简讯 + stderr 尾部截断；脱敏后续再做。
 
@@ -141,8 +142,8 @@ QUEUED ──(scheduler 取得信号量)──▶ RUNNING ──▶ COMPLETED | 
 
 - **单一共享 aiosqlite 连接** + **WAL** + `busy_timeout=5000`：连接内串行化，避免自并发写互撞；
   单行小事务（upsert）；**不需要** `WHERE status=expected` 条件更新（单一 owner）。
-- 单表 `runs(id PK, status, runner, tests_path, summary JSON, report JSON, exit_code, error,`
-  `created_at, started_at, finished_at)`；时间存 ISO 字符串。
+- 单表 `runs(id PK, status, runner, tests_path, args_json, allure_enabled, timeout,`
+  `summary JSON, report JSON, exit_code, error, created_at, started_at, finished_at)`；时间存 ISO 字符串。
 
 ## Allure（Area C 拍板）
 

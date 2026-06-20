@@ -1,0 +1,306 @@
+"""Tests for SqliteStore adapter."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from qarunner.adapters.sqlite_store import SqliteStore
+from qarunner.errors import RunNotFound
+from qarunner.models import (
+    ReportRef,
+    Run,
+    RunStatus,
+    TestSummary,
+    TestProfile,
+    TestSchedule,
+)
+
+
+@pytest.fixture
+async def store(tmp_path: object) -> SqliteStore:
+    s = SqliteStore(":memory:")
+    await s.initialize()
+    yield s  # type: ignore[misc]
+    await s.close()
+
+
+def _make_run(**kwargs: object) -> Run:
+    defaults: dict[str, object] = {
+        "id": "run-001",
+        "status": RunStatus.QUEUED,
+        "runner": "pytest",
+        "created_by": "test_user",
+        "tests_path": "tests/",
+        "args": ["-v"],
+        "allure_enabled": True,
+        "timeout": 300,
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+    }
+    defaults.update(kwargs)
+    return Run(**defaults)  # type: ignore[arg-type]
+
+
+async def test_save_and_get(store: SqliteStore) -> None:
+    run = _make_run()
+    await store.save(run)
+    retrieved = await store.get("run-001")
+    assert retrieved.id == "run-001"
+    assert retrieved.status == RunStatus.QUEUED
+    assert retrieved.runner == "pytest"
+    assert retrieved.created_by == "test_user"
+    assert retrieved.tests_path == "tests/"
+    assert retrieved.args == ["-v"]
+    assert retrieved.allure_enabled is True
+    assert retrieved.timeout == 300
+    assert retrieved.created_at == datetime(2025, 1, 1, tzinfo=UTC)
+
+
+async def test_get_missing_raises_run_not_found(store: SqliteStore) -> None:
+    with pytest.raises(RunNotFound):
+        await store.get("nonexistent-id")
+
+
+async def test_list_empty(store: SqliteStore) -> None:
+    result = await store.list()
+    assert result == []
+
+
+async def test_list_ordered_by_created_at_desc(store: SqliteStore) -> None:
+    run1 = _make_run(id="run-001", created_at=datetime(2025, 1, 1, tzinfo=UTC))
+    run2 = _make_run(id="run-002", created_at=datetime(2025, 6, 1, tzinfo=UTC))
+    await store.save(run1)
+    await store.save(run2)
+    result = await store.list()
+    assert [r.id for r in result] == ["run-002", "run-001"]
+
+
+async def test_save_with_summary(store: SqliteStore) -> None:
+    summary = TestSummary(
+        total=10, passed=8, failed=1, skipped=1, error=0, duration_ms=5000
+    )
+    run = _make_run(summary=summary, status=RunStatus.COMPLETED)
+    await store.save(run)
+    retrieved = await store.get("run-001")
+    assert retrieved.summary is not None
+    assert retrieved.summary.total == 10
+    assert retrieved.summary.passed == 8
+
+
+async def test_save_with_report(store: SqliteStore) -> None:
+    report = ReportRef(
+        allure_results_dir="/tmp/results",
+        allure_report_file="/tmp/results/report/index.html",
+        html_generated=True,
+    )
+    run = _make_run(report=report, status=RunStatus.COMPLETED)
+    await store.save(run)
+    retrieved = await store.get("run-001")
+    assert retrieved.report is not None
+    assert retrieved.report.html_generated is True
+    assert retrieved.report.allure_report_file == "/tmp/results/report/index.html"
+
+
+async def test_save_with_started_and_finished(store: SqliteStore) -> None:
+    started = datetime(2025, 1, 1, 0, 0, 1, tzinfo=UTC)
+    finished = datetime(2025, 1, 1, 0, 0, 5, tzinfo=UTC)
+    run = _make_run(
+        status=RunStatus.COMPLETED,
+        started_at=started,
+        finished_at=finished,
+        exit_code=0,
+    )
+    await store.save(run)
+    retrieved = await store.get("run-001")
+    assert retrieved.started_at == started
+    assert retrieved.finished_at == finished
+    assert retrieved.exit_code == 0
+
+
+async def test_save_with_error(store: SqliteStore) -> None:
+    run = _make_run(status=RunStatus.FAILED, error="something went wrong")
+    await store.save(run)
+    retrieved = await store.get("run-001")
+    assert retrieved.error == "something went wrong"
+
+
+async def test_upsert(store: SqliteStore) -> None:
+    run = _make_run(status=RunStatus.QUEUED)
+    await store.save(run)
+    updated = _make_run(status=RunStatus.RUNNING)
+    await store.save(updated)
+    retrieved = await store.get("run-001")
+    assert retrieved.status == RunStatus.RUNNING
+    # Should still be only one row
+    all_runs = await store.list()
+    assert len(all_runs) == 1
+
+
+async def test_close(store: SqliteStore) -> None:
+    await store.close()
+    # Second close is a no-op
+    await store.close()
+
+
+async def test_user_operations(store: SqliteStore) -> None:
+    assert await store.get_user("nonexistent") is None
+
+    await store.create_user("alice", "hashed_pwd", "user")
+    user = await store.get_user("alice")
+    assert user is not None
+    assert user["username"] == "alice"
+    assert user["password_hash"] == "hashed_pwd"
+    assert user["role"] == "user"
+
+    users = await store.list_users()
+    assert len(users) >= 2
+    usernames = [u["username"] for u in users]
+    assert "alice" in usernames
+    assert "admin" in usernames
+
+
+async def test_schema_migration_adds_created_by(tmp_path) -> None:
+    import aiosqlite
+    db_file = tmp_path / "legacy.db"
+    db_path = str(db_file)
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                runner TEXT NOT NULL,
+                tests_path TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                allure_enabled INTEGER NOT NULL,
+                timeout INTEGER,
+                summary TEXT,
+                report TEXT,
+                exit_code INTEGER,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            )
+            """
+        )
+        await db.commit()
+
+    store = SqliteStore(db_path)
+    await store.initialize()
+
+    assert store._db is not None
+    async with store._db.execute("PRAGMA table_info(runs)") as cursor:
+        columns = [row[1] for row in await cursor.fetchall()]
+        assert "created_by" in columns
+
+    await store.close()
+
+
+async def test_initialize_already_has_users(tmp_path) -> None:
+    db_file = tmp_path / "test_init.db"
+    db_path = str(db_file)
+
+    store = SqliteStore(db_path)
+    await store.initialize()
+    await store.close()
+
+    store2 = SqliteStore(db_path)
+    await store2.initialize()
+
+    users = await store2.list_users()
+    assert len(users) >= 1
+    await store2.close()
+
+
+async def test_profile_crud(store: SqliteStore) -> None:
+    profile = TestProfile(
+        id="profile-001",
+        name="Regression Profile",
+        description="Daily regression suite",
+        tests_path="tests/",
+        selected_files=["test_smoke.py"],
+        selected_markers=["smoke"],
+        extra_args="-v",
+        executor_mode="subprocess",
+        timeout=120,
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+
+    retrieved = await store.get_profile("profile-001")
+    assert retrieved is not None
+    assert retrieved.id == "profile-001"
+    assert retrieved.name == "Regression Profile"
+    assert retrieved.selected_files == ["test_smoke.py"]
+
+    profiles = await store.list_profiles()
+    assert len(profiles) == 1
+    assert profiles[0].id == "profile-001"
+
+    deleted = await store.delete_profile("profile-001")
+    assert deleted is True
+
+    retrieved2 = await store.get_profile("profile-001")
+    assert retrieved2 is None
+
+
+async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
+    # 1. Create a profile
+    profile = TestProfile(
+        id="profile-002",
+        name="Profile for schedule",
+        tests_path="tests/",
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+
+    # 2. Save schedule
+    schedule = TestSchedule(
+        id="sched-001",
+        name="Nightly Sched",
+        profile_id="profile-002",
+        cron_expression="0 2 * * *",
+        enabled=True,
+        timezone="America/New_York",
+        last_run_at=datetime(2025, 1, 1, 2, 0, tzinfo=UTC),
+        next_run_at=datetime(2025, 1, 2, 2, 0, tzinfo=UTC),
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_schedule(schedule)
+
+    # 3. Get schedule
+    retrieved = await store.get_schedule("sched-001")
+    assert retrieved is not None
+    assert retrieved.id == "sched-001"
+    assert retrieved.name == "Nightly Sched"
+    assert retrieved.cron_expression == "0 2 * * *"
+    assert retrieved.enabled is True
+    assert retrieved.timezone == "America/New_York"
+    assert retrieved.last_run_at == datetime(2025, 1, 1, 2, 0, tzinfo=UTC)
+    assert retrieved.next_run_at == datetime(2025, 1, 2, 2, 0, tzinfo=UTC)
+
+    # 4. List schedules
+    schedules = await store.list_schedules()
+    assert len(schedules) == 1
+    assert schedules[0].id == "sched-001"
+
+    schedules_by_profile = await store.list_schedules(profile_id="profile-002")
+    assert len(schedules_by_profile) == 1
+
+    schedules_by_empty_profile = await store.list_schedules(profile_id="nonexistent")
+    assert len(schedules_by_empty_profile) == 0
+
+    # 5. Cascade delete verification
+    await store.delete_profile("profile-002")
+    # Because foreign keys are ON and ON DELETE CASCADE is specified, sched-001 should be deleted automatically!
+    retrieved_after_cascade = await store.get_schedule("sched-001")
+    assert retrieved_after_cascade is None
+
+
+
+

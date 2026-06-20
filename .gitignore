@@ -52,3 +52,10 @@ smoke-results/
 .qap-import-state.json
 .reasonix
 .codegraph
+
+# qarunner project
+htmlcov/
+*.xml
+allure-results/
+allure-report/
+external_tests/

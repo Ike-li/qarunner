@@ -1,0 +1,292 @@
+"""Tests for DockerRunner adapter using mocks."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+from docker.errors import ImageNotFound
+
+from qarunner.adapters.docker_runner import DockerRunner
+from qarunner.errors import RunnerError
+
+
+class MockImage:
+
+    def __init__(self, tag: str) -> None:
+        self.tags = [tag]
+
+
+class MockContainer:
+
+    def __init__(
+        self,
+        wait_status: int | str = 0,
+        logs_stdout: bytes = b"hello",
+        logs_stderr: bytes = b"error",
+        kill_fails: bool = False,
+        remove_fails: bool = False,
+        is_falsy: bool = False,
+    ) -> None:
+        self.wait_status = wait_status
+        self.logs_stdout = logs_stdout
+        self.logs_stderr = logs_stderr
+        self.kill_called = False
+        self.remove_called = False
+        self.kill_fails = kill_fails
+        self.remove_fails = remove_fails
+        self.is_falsy = is_falsy
+        self.status = "running"
+
+    def reload(self) -> None:
+        self.status = "completed"
+
+    def __bool__(self) -> bool:
+        return not self.is_falsy
+
+    def wait(self, timeout: int | None = None) -> dict[str, int]:
+        if self.wait_status == "timeout":
+            raise Exception("Timeout")
+        return {"StatusCode": int(self.wait_status)}
+
+    def kill(self) -> None:
+        self.kill_called = True
+        if self.kill_fails:
+            raise Exception("Kill failed")
+
+    def remove(self, force: bool = False) -> None:
+        self.remove_called = True
+        if self.remove_fails:
+            raise Exception("Remove failed")
+
+    def logs(self, stdout: bool = True, stderr: bool = True) -> bytes:
+        if self.wait_status == "timeout":
+            # Force log retrieval to fail during timeout to hit the outer except block with timed_out = True
+            raise Exception("Logs failed during timeout")
+        if stdout:
+            return self.logs_stdout
+        return self.logs_stderr
+
+
+
+class MockClient:
+
+    def __init__(
+        self,
+        images_exist: bool = True,
+        wait_status: int | str = 0,
+        kill_fails: bool = False,
+        remove_fails: bool = False,
+        is_container_falsy: bool = False,
+    ) -> None:
+        self.images_exist = images_exist
+        self.wait_status = wait_status
+        self.kill_fails = kill_fails
+        self.remove_fails = remove_fails
+        self.is_container_falsy = is_container_falsy
+        self.build_called = False
+        self.run_called = False
+        self.run_args = None
+        self.run_kwargs = None
+        self.mock_container = None
+
+        # Images API
+        self.images = MagicMock()
+        self.images.get.side_effect = self._get_image
+        self.images.build.side_effect = self._build_image
+
+        # Containers API
+        self.containers = MagicMock()
+        self.containers.run.side_effect = self._run_container
+
+    def _get_image(self, tag: str) -> MockImage:
+        if not self.images_exist:
+            self.images_exist = True
+            raise ImageNotFound("Image not found")
+        return MockImage(tag)
+
+    def _build_image(self, *args, **kwargs) -> tuple[MockImage, list]:
+        self.build_called = True
+        return MockImage("qarunner-executor:latest"), []
+
+    def _run_container(self, *args, **kwargs) -> MockContainer:
+        self.run_called = True
+        self.run_args = args
+        self.run_kwargs = kwargs
+        self.mock_container = MockContainer(
+            wait_status=self.wait_status,
+            kill_fails=self.kill_fails,
+            remove_fails=self.remove_fails,
+            is_falsy=self.is_container_falsy,
+        )
+        return self.mock_container
+
+
+async def test_docker_runner_success() -> None:
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["/usr/bin/python", "-m", "pytest", "--junitxml=/tmp/res/junit.xml"]
+    result = await runner.run(cmd, cwd="/tmp/tests", timeout=10)
+
+    assert result.exit_code == 0
+    assert "hello" in result.stdout
+    assert "error" in result.stderr
+    assert result.timed_out is False
+    assert mock_client.run_called is True
+    assert mock_client.run_kwargs["command"] == ["python", "-m", "pytest", "--junitxml=/tmp/res/junit.xml"]
+    assert mock_client.run_kwargs["volumes"] == {
+        "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
+        "/tmp/res": {"bind": "/tmp/res", "mode": "rw"},
+    }
+    assert mock_client.mock_container.remove_called is True
+
+
+async def test_docker_runner_falsy_container() -> None:
+    # Test successful run with a falsy container to cover the "if container:" falsy branch transitioning to normal end
+    mock_client = MockClient(images_exist=True, wait_status=0, is_container_falsy=True)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests")
+
+    assert result.exit_code == 0
+    assert mock_client.mock_container.remove_called is False  # bypassed because container evaluated to falsy
+
+
+async def test_docker_runner_alternate_args_and_mapping() -> None:
+    # Test all variations of command rewriting and --alluredir extraction
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    # 1. Test empty command
+    await runner.run([], cwd="/tmp/tests")
+    assert mock_client.run_kwargs["command"] == []
+
+    # 2. Test python3 mapping & --alluredir extraction with subfolder to match dirname
+    await runner.run(["python3", "-m", "pytest", "--alluredir=/tmp/allure/allure-results"], cwd="/tmp/tests")
+    assert mock_client.run_kwargs["command"] == ["python", "-m", "pytest", "--alluredir=/tmp/allure/allure-results"]
+    assert mock_client.run_kwargs["volumes"] == {
+        "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
+        "/tmp/allure": {"bind": "/tmp/allure", "mode": "rw"},
+    }
+
+    # 3. Test non-python, non-path command without results_dir
+    await runner.run(["pytest", "-k", "test_math"], cwd="/tmp/tests")
+    assert mock_client.run_kwargs["command"] == ["pytest", "-k", "test_math"]
+    assert mock_client.run_kwargs["volumes"] == {
+        "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
+    }
+
+
+async def test_docker_runner_image_not_found_causes_build() -> None:
+    mock_client = MockClient(images_exist=False, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests", timeout=10)
+
+    assert result.exit_code == 0
+    assert mock_client.build_called is True
+    assert mock_client.run_called is True
+
+
+async def test_docker_runner_timeout() -> None:
+    mock_client = MockClient(images_exist=True, wait_status="timeout")
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests", timeout=1)
+
+    assert result.exit_code == 137
+    assert result.timed_out is True
+    assert mock_client.mock_container.kill_called is True
+    assert mock_client.mock_container.remove_called is True
+
+
+async def test_docker_runner_timeout_kill_fails() -> None:
+    # Test that if container.kill raises exception during timeout, we log it and proceed
+    mock_client = MockClient(images_exist=True, wait_status="timeout", kill_fails=True)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests", timeout=1)
+
+    assert result.exit_code == 137
+    assert result.timed_out is True
+    assert mock_client.mock_container.kill_called is True
+    assert mock_client.mock_container.remove_called is True
+
+
+async def test_docker_runner_remove_fails() -> None:
+    # Test that if container.remove raises exception in finally, we handle it gracefully
+    mock_client = MockClient(images_exist=True, wait_status=0, remove_fails=True)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests")
+
+    assert result.exit_code == 0
+    assert mock_client.mock_container.remove_called is True
+
+
+async def test_docker_runner_init_failure() -> None:
+    # Test when docker.from_env() raises an exception during client lazy loading
+    with patch("docker.from_env", side_effect=Exception("Docker socket missing")):
+        runner = DockerRunner()
+        with pytest.raises(RunnerError, match="Docker initialization failed"):
+            await runner.run(["python"], cwd="/tmp/tests")
+
+
+async def test_docker_runner_generic_run_failure() -> None:
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    # Force client.containers.run to raise exception
+    mock_client.containers.run.side_effect = Exception("Docker daemon exploded")
+
+    with pytest.raises(RunnerError, match="Docker container execution failed"):
+        await runner.run(["python"], cwd="/tmp/tests")
+
+
+def test_docker_runner_lazy_loading() -> None:
+    # Test that _get_client correctly lazy-loads from env if none was passed
+    runner = DockerRunner()
+    with patch("docker.from_env") as mock_from_env:
+        client = runner._get_client()
+        mock_from_env.assert_called_once()
+        assert client == mock_from_env.return_value
+
+
+def test_docker_runner_find_project_root_with_temp_dir(tmp_path: Path) -> None:
+    # Test that _find_project_root covers all branches by running in a fake tmp_path workspace
+    adapter_dir = tmp_path / "src" / "qarunner" / "adapters"
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+
+    runner = DockerRunner()
+
+    # 1. Test finding Dockerfile
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.touch()
+
+    fake_file_path = adapter_dir / "docker_runner.py"
+    with patch("pathlib.Path.resolve", return_value=fake_file_path):
+        root = runner._find_project_root()
+        assert root == tmp_path
+
+    # 2. Test finding pyproject.toml instead of Dockerfile
+    dockerfile.unlink()
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.touch()
+
+    with patch("pathlib.Path.resolve", return_value=fake_file_path):
+        root = runner._find_project_root()
+        assert root == tmp_path
+
+    # 3. Test fallback to Path.cwd() when neither exists
+    pyproject.unlink()
+    with patch("pathlib.Path.resolve", return_value=fake_file_path):
+        root = runner._find_project_root()
+        assert root == Path.cwd()

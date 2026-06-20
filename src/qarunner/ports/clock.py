@@ -1,0 +1,13 @@
+"""Clock port."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Clock(Protocol):
+    """Port for obtaining the current time."""
+
+    def now(self) -> datetime: ...
