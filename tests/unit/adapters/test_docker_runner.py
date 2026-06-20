@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from docker.errors import ImageNotFound
@@ -285,8 +285,130 @@ def test_docker_runner_find_project_root_with_temp_dir(tmp_path: Path) -> None:
         root = runner._find_project_root()
         assert root == tmp_path
 
-    # 3. Test fallback to Path.cwd() when neither exists
+    # 3. Fallback to Path.cwd() when neither exists
     pyproject.unlink()
     with patch("pathlib.Path.resolve", return_value=fake_file_path):
         root = runner._find_project_root()
         assert root == Path.cwd()
+
+
+async def test_docker_runner_stdout_stderr_files(tmp_path: Path) -> None:
+    stdout_file = tmp_path / "logs" / "stdout.log"
+    stderr_file = tmp_path / "logs" / "stderr.log"
+    
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+    
+    cmd = ["python", "-m", "pytest"]
+    
+    with patch("asyncio.sleep", AsyncMock()):
+        result = await runner.run(
+            cmd,
+            cwd="/tmp/tests",
+            stdout_file=str(stdout_file),
+            stderr_file=str(stderr_file),
+        )
+        
+    assert result.exit_code == 0
+    assert stdout_file.exists()
+    assert stderr_file.exists()
+    assert stdout_file.read_text() == "hello"
+    assert stderr_file.read_text() == "error"
+
+
+async def test_docker_runner_streamer_reload_exception() -> None:
+    # Test when reload() raises an exception during streaming (streamer breaks)
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+    
+    cmd = ["python", "-m", "pytest"]
+    
+    original_run_container = mock_client._run_container
+    def reload_failing_container(*args, **kwargs) -> MockContainer:
+        container = original_run_container(*args, **kwargs)
+        container.reload = MagicMock(side_effect=Exception("Reload failed"))
+        return container
+    
+    mock_client.containers.run.side_effect = reload_failing_container
+    
+    with patch("asyncio.sleep", AsyncMock()):
+        result = await runner.run(cmd, cwd="/tmp/tests")
+        
+    assert result.exit_code == 0
+    assert result.stdout == "hello"
+
+
+async def test_docker_runner_streamer_logs_exception() -> None:
+    # Test when logs() raises an exception inside the streamer loop but succeeds later
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+    
+    cmd = ["python", "-m", "pytest"]
+    
+    original_run_container = mock_client._run_container
+    def logs_failing_container(*args, **kwargs) -> MockContainer:
+        container = original_run_container(*args, **kwargs)
+        
+        # We want logs to fail during streaming (status is 'running')
+        # and succeed during final gather (or succeed after one failure)
+        # To make it robust: raise Exception only if called when container.status is running,
+        # but let final gather pass by changing status, or simply tracking calls.
+        container_logs_called = 0
+        def logs_side_effect(stdout=True, stderr=True):
+            nonlocal container_logs_called
+            container_logs_called += 1
+            if container.status == "running" and container_logs_called <= 2:
+                raise Exception("Logs failed during stream")
+            return b"hello" if stdout else b"error"
+            
+        container.logs = MagicMock(side_effect=logs_side_effect)
+        return container
+        
+    mock_client.containers.run.side_effect = logs_failing_container
+    
+    with patch("asyncio.sleep", AsyncMock()):
+        result = await runner.run(cmd, cwd="/tmp/tests")
+        
+    assert result.exit_code == 0
+    assert result.stdout == "hello"
+
+
+async def test_docker_runner_streamer_cancellation_and_sleep() -> None:
+    # Test to hit await asyncio.sleep(1.0) and task cancellation error handling
+    import asyncio
+    import time
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+    
+    cmd = ["python", "-m", "pytest"]
+    
+    original_run_container = mock_client._run_container
+    def sleeping_container(*args, **kwargs) -> MockContainer:
+        container = original_run_container(*args, **kwargs)
+        
+        # Override reload to be a no-op, status remains "running"
+        container.reload = MagicMock()
+        container.status = "running"
+        
+        # Override wait to sleep in the background thread, allowing streamer to run
+        def mock_wait(timeout=None):
+            time.sleep(0.05)
+            return {"StatusCode": 0}
+        container.wait = MagicMock(side_effect=mock_wait)
+        return container
+        
+    mock_client.containers.run.side_effect = sleeping_container
+    
+    original_sleep = asyncio.sleep
+    # Mock asyncio.sleep to yield control immediately (0.001 seconds sleep)
+    async def mock_async_sleep(delay):
+        await original_sleep(0.001)
+        
+    with patch("asyncio.sleep", side_effect=mock_async_sleep):
+        result = await runner.run(cmd, cwd="/tmp/tests")
+        
+    assert result.exit_code == 0
+    assert result.stdout == "hello"
+
+
+

@@ -302,5 +302,172 @@ async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
     assert retrieved_after_cascade is None
 
 
+async def test_sqlite_store_migration_env_json(tmp_path) -> None:
+    # 1. Create legacy database schema without 'env_json' column in test_profiles
+    import aiosqlite
+    db_path = tmp_path / "legacy.db"
+    
+    async with aiosqlite.connect(db_path) as db:
+        # Create legacy test_profiles table
+        await db.execute(
+            """
+            CREATE TABLE test_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                tests_path TEXT NOT NULL,
+                selected_files TEXT NOT NULL,
+                selected_markers TEXT NOT NULL,
+                extra_args TEXT NOT NULL,
+                executor_mode TEXT NOT NULL,
+                timeout INTEGER,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # Create users table so pre-populate admin has a table
+        await db.execute("CREATE TABLE users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL)")
+        await db.commit()
+        
+    # 2. Instantiate SqliteStore and initialize (triggers self-migration)
+    store = SqliteStore(str(db_path))
+    await store.initialize()
+    
+    # 3. Verify env_json column now exists and can be queried
+    profile = TestProfile(
+        id="profile-migrated",
+        name="Migrated Profile",
+        tests_path="tests/",
+        env={"FOO": "BAR"},
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    retrieved = await store.get_profile("profile-migrated")
+    assert retrieved is not None
+    assert retrieved.env == {"FOO": "BAR"}
+    
+    await store.close()
+
+
+async def test_sqlite_store_list_profiles_filter(store: SqliteStore) -> None:
+    p1 = TestProfile(
+        id="p1",
+        name="Profile 1",
+        tests_path="suite_a",
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    p2 = TestProfile(
+        id="p2",
+        name="Profile 2",
+        tests_path="suite_b",
+        created_by="test_user",
+        created_at=datetime(2025, 1, 2, tzinfo=UTC),
+    )
+    await store.save_profile(p1)
+    await store.save_profile(p2)
+    
+    res = await store.list_profiles(tests_path="suite_a")
+    assert len(res) == 1
+    assert res[0].id == "p1"
+
+
+async def test_sqlite_store_lock_run(store: SqliteStore) -> None:
+    run = _make_run(id="run-lock-test")
+    await store.save(run)
+    
+    # By default, run should not be locked
+    retrieved = await store.get("run-lock-test")
+    assert retrieved.locked is False
+    
+    # Lock run
+    await store.lock_run("run-lock-test", True)
+    retrieved = await store.get("run-lock-test")
+    assert retrieved.locked is True
+    
+    # Unlock run
+    await store.lock_run("run-lock-test", False)
+    retrieved = await store.get("run-lock-test")
+    assert retrieved.locked is False
+
+
+async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
+    from datetime import UTC, datetime, timedelta
+    now = datetime.now(UTC)
+    
+    # 1. Finished, unlocked, 10 days old (should be returned)
+    old_run = _make_run(
+        id="run-old",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(days=10),
+    )
+    old_run = old_run.model_copy(update={"finished_at": now - timedelta(days=10)})
+    await store.save(old_run)
+    
+    # 2. Finished, locked, 10 days old (should NOT be returned)
+    old_locked_run = _make_run(
+        id="run-old-locked",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(days=10),
+    )
+    old_locked_run = old_locked_run.model_copy(update={"finished_at": now - timedelta(days=10), "locked": True})
+    await store.save(old_locked_run)
+    await store.lock_run("run-old-locked", True)
+    
+    # 3. Finished, unlocked, 2 days old (should NOT be returned)
+    new_run = _make_run(
+        id="run-new",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(days=2),
+    )
+    new_run = new_run.model_copy(update={"finished_at": now - timedelta(days=2)})
+    await store.save(new_run)
+    
+    # Call get_old_unlocked_runs with 7 days retention
+    unlocked_old = await store.get_old_unlocked_runs(7)
+    assert len(unlocked_old) == 1
+    assert unlocked_old[0].id == "run-old"
+
+
+async def test_sqlite_store_delete_schedule(store: SqliteStore) -> None:
+    # Save profile first
+    profile = TestProfile(
+        id="p-sched-del",
+        name="Profile",
+        tests_path="tests/",
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    
+    # Save schedule
+    schedule = TestSchedule(
+        id="sched-del",
+        name="Nightly Sched",
+        profile_id="p-sched-del",
+        cron_expression="0 2 * * *",
+        enabled=True,
+        timezone="UTC",
+        created_by="test_user",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_schedule(schedule)
+    
+    # Delete non-existent schedule
+    res = await store.delete_schedule("nonexistent-sched")
+    assert res is False
+    
+    # Delete existent schedule
+    res = await store.delete_schedule("sched-del")
+    assert res is True
+    
+    # Verify deleted
+    retrieved = await store.get_schedule("sched-del")
+    assert retrieved is None
+
+
+
 
 

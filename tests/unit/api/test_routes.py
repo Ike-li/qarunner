@@ -51,10 +51,41 @@ class FakeStore:
     _runs: dict[str, Run] = field(default_factory=dict)
     _profiles: dict[str, TestProfile] = field(default_factory=dict)
     _schedules: dict[str, TestSchedule] = field(default_factory=dict)
+    _users: dict[str, dict] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._profiles = {}
         self._schedules = {}
+        self._users = {}
+        from qarunner.core.auth import hash_password
+        self._users["test_user"] = {
+            "username": "test_user",
+            "password_hash": hash_password("test_pass"),
+            "role": "admin",
+            "created_at": "2026-06-20T16:00:00Z"
+        }
+
+    async def get_user(self, username: str) -> dict | None:
+        return self._users.get(username)
+
+    async def create_user(self, username: str, password_hash: str, role: str) -> None:
+        from datetime import UTC, datetime
+        self._users[username] = {
+            "username": username,
+            "password_hash": password_hash,
+            "role": role,
+            "created_at": datetime.now(UTC).isoformat()
+        }
+
+    async def list_users(self) -> list[dict]:
+        return [
+            {
+                "username": u["username"],
+                "role": u["role"],
+                "created_at": u["created_at"]
+            }
+            for u in sorted(self._users.values(), key=lambda x: x["username"])
+        ]
 
     async def save(self, run: Run) -> None:
         self._runs[run.id] = run
@@ -540,7 +571,7 @@ def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     # Write dummy stdout log
     run_dir = tmp_path / "run-stream"
     run_dir.mkdir()
-    (run_dir / "stdout.log").write_text("line1\nline2\n")
+    (run_dir / "stdout.log").write_text("line1\nline2\n", encoding="utf-8")
 
     import asyncio
     loop = asyncio.new_event_loop()
@@ -555,5 +586,629 @@ def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         lines = resp.text.split("\n\n")
         assert "data: line1" in lines
         assert "data: line2" in lines
+
+
+def test_user_registration_and_login() -> None:
+    from qarunner.core.auth import hash_password
+    container = _make_container()
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        # A. Register user successfully
+        payload = {
+            "username": "new_guy",
+            "password": "secret_password",
+            "role": "user"
+        }
+        resp = client.post("/users", json=payload)
+        assert resp.status_code == 201
+        assert resp.json()["username"] == "new_guy"
+        assert resp.json()["role"] == "user"
+
+        # B. Register user with already existing username
+        resp_err = client.post("/users", json=payload)
+        assert resp_err.status_code == 400
+        assert "Username already exists" in resp_err.json()["detail"]
+
+        # C. List users
+        resp_list = client.get("/users")
+        assert resp_list.status_code == 200
+        usernames = [u["username"] for u in resp_list.json()["users"]]
+        assert "new_guy" in usernames
+
+        # D. Login successfully
+        resp_login = client.post("/auth/login", json={"username": "new_guy", "password": "secret_password"})
+        assert resp_login.status_code == 200
+        assert "access_token" in resp_login.json()
+
+        # E. Login with incorrect password
+        resp_bad_pw = client.post("/auth/login", json={"username": "new_guy", "password": "wrong_password"})
+        assert resp_bad_pw.status_code == 401
+
+        # F. Login with nonexistent user
+        resp_bad_user = client.post("/auth/login", json={"username": "ghost", "password": "some_password"})
+        assert resp_bad_user.status_code == 401
+
+        # G. Get me
+        resp_me = client.get("/auth/me")
+        assert resp_me.status_code == 200
+        assert resp_me.json()["username"] == "test_user"
+
+
+def test_test_tree_and_markers_detailed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Set up simulated test root folder structure
+    tests_dir = tmp_path / "test_suites"
+    tests_dir.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+
+    suite_dir = tests_dir / "suite_xyz"
+    suite_dir.mkdir()
+
+    # Create directories and files
+    (suite_dir / "test_active.py").write_text("""
+import pytest
+
+@pytest.mark.foo
+def test_one():
+    pass
+
+@pytest.mark.bar()
+class TestClass:
+    @pytest.mark.nested
+    def test_two(self):
+        pass
+""", encoding="utf-8")
+
+    # Create empty folders and internal pycache/hidden files to verify filtering
+    (suite_dir / ".hidden_folder").mkdir()
+    (suite_dir / "__pycache__").mkdir()
+    (suite_dir / "empty_folder").mkdir()
+    (suite_dir / "empty_folder" / "unused.py").touch()
+    
+    # Create non-python and non-test python files to cover branch logic
+    (suite_dir / "some_file.txt").touch()
+    (suite_dir / ".hidden.py").touch()
+
+    # Subdirectory with Python file
+    sub_dir = suite_dir / "sub_folder"
+    sub_dir.mkdir()
+    (sub_dir / "test_sub.py").write_text("""
+import pytest
+@pytest.mark.sub_marker
+def test_three():
+    pass
+""", encoding="utf-8")
+
+    # Valid subdirectory with python file and various decorators to cover AST branch branches
+    valid_sub = suite_dir / "valid_sub_folder"
+    valid_sub.mkdir()
+    (valid_sub / "test_another.py").write_text("""
+import pytest
+
+def simple_decorator(f):
+    return f
+
+@simple_decorator
+@foo.bar
+@custom.mark.my_marker
+@pytest.mark
+@pytest.mark.another_marker
+def test_four():
+    pass
+""", encoding="utf-8")
+
+    # Syntax error file to trigger AST exception
+    (suite_dir / "test_bad.py").write_text("""
+def parse_error_here(
+""", encoding="utf-8")
+
+    # Mock Path.iterdir to throw an exception for sub_folder to cover except Exception in walk_dir
+    original_iterdir = Path.iterdir
+    def mock_iterdir(self: Path):
+        if self.name == "sub_folder":
+            raise OSError("Access Denied")
+        return original_iterdir(self)
+    monkeypatch.setattr(Path, "iterdir", mock_iterdir)
+
+    container = _make_container()
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        # A. GET test tree
+        resp_tree = client.get("/tests/suite_xyz/tree")
+        assert resp_tree.status_code == 200
+        tree = resp_tree.json()
+        
+        # Verify node structures
+        names = {n["name"] for n in tree}
+        assert "test_active.py" in names
+        assert "valid_sub_folder" in names
+        assert "sub_folder" not in names  # Because its iterdir raised an exception and was skipped!
+        # Hidden and pycache and bad parsing/empty should be handled or skipped
+        assert "empty_folder" not in names
+        assert ".hidden_folder" not in names
+
+        # B. GET test tree unsafe path (via safe_subpath monkeypatch)
+        from qarunner.errors import UnsafePath
+        def mock_unsafe_subpath(root, relative):
+            raise UnsafePath("Unsafe path detected")
+        monkeypatch.setattr("qarunner.core.paths.safe_subpath", mock_unsafe_subpath)
+
+        resp_unsafe = client.get("/tests/any_suite/tree")
+        assert resp_unsafe.status_code == 400
+
+        # C. GET test tree nonexistent suite (restore safe_subpath first)
+        monkeypatch.undo()  # Undo route-level subpath mocking to allow normal safe_subpath execution
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+        resp_missing = client.get("/tests/non_existent/tree")
+        assert resp_missing.status_code == 404
+
+        # D. GET markers
+        resp_markers = client.get("/tests/suite_xyz/markers")
+        assert resp_markers.status_code == 200
+        markers = resp_markers.json()
+        assert "foo" in markers
+        assert "bar" in markers
+        assert "nested" in markers
+        assert "another_marker" in markers
+
+        # E. GET markers unsafe path
+        monkeypatch.setattr("qarunner.core.paths.safe_subpath", mock_unsafe_subpath)
+        resp_markers_unsafe = client.get("/tests/any_suite/markers")
+        assert resp_markers_unsafe.status_code == 400
+
+        # F. GET markers missing suite (should return [])
+        monkeypatch.undo()
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+        resp_markers_missing = client.get("/tests/non_existent/markers")
+        assert resp_markers_missing.status_code == 200
+        assert resp_markers_missing.json() == []
+
+
+def test_profile_crud_endpoints() -> None:
+    container = _make_container()
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        # A. Create profile
+        payload = {
+            "name": "Integration Profile",
+            "description": "Integration testing profile",
+            "tests_path": "tests/unit",
+            "selected_files": ["test_routes.py"],
+            "selected_markers": ["unit"],
+            "extra_args": "-vv",
+            "executor_mode": "subprocess",
+            "timeout": 120
+        }
+        resp = client.post("/profiles", json=payload)
+        assert resp.status_code == 201
+        profile_id = resp.json()["id"]
+        assert resp.json()["name"] == "Integration Profile"
+
+        # B. List profiles (no filter)
+        resp_list = client.get("/profiles")
+        assert resp_list.status_code == 200
+        assert len(resp_list.json()) == 1
+
+        # C. List profiles (with matching tests_path)
+        resp_filtered_match = client.get("/profiles?tests_path=tests/unit")
+        assert resp_filtered_match.status_code == 200
+        assert len(resp_filtered_match.json()) == 1
+
+        # D. List profiles (with mismatching tests_path)
+        resp_filtered_mismatch = client.get("/profiles?tests_path=tests/integration")
+        assert resp_filtered_mismatch.status_code == 200
+        assert len(resp_filtered_mismatch.json()) == 0
+
+        # E. Update profile
+        update_payload = {
+            "name": "Updated Profile",
+            "description": "Updated desc",
+            "tests_path": "tests/unit",
+            "selected_files": ["test_routes.py"],
+            "selected_markers": ["unit"],
+            "extra_args": "-v",
+            "executor_mode": "docker",
+            "timeout": 300
+        }
+        resp_update = client.put(f"/profiles/{profile_id}", json=update_payload)
+        assert resp_update.status_code == 200
+        assert resp_update.json()["name"] == "Updated Profile"
+        assert resp_update.json()["executor_mode"] == "docker"
+
+        # F. Update nonexistent profile
+        resp_update_err = client.put("/profiles/ghost-profile-id", json=update_payload)
+        assert resp_update_err.status_code == 404
+
+        # G. Delete profile
+        resp_delete = client.delete(f"/profiles/{profile_id}")
+        assert resp_delete.status_code == 200
+        assert resp_delete.json()["status"] == "success"
+
+        # H. Delete nonexistent profile
+        resp_delete_err = client.delete("/profiles/ghost-profile-id")
+        assert resp_delete_err.status_code == 404
+
+
+def test_get_run_detailed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+
+    # Create runs and test file locations
+    _make_run_in_store(container.store, id="run_standard")
+    _make_run_in_store(container.store, id="run_fallback")
+    _make_run_in_store(container.store, id="run_exception")
+
+    # 1. Standard stdout/stderr paths
+    standard_dir = tmp_path / "run_standard"
+    standard_dir.mkdir()
+    (standard_dir / "stdout.log").write_text("standard stdout", encoding="utf-8")
+    (standard_dir / "stderr.log").write_text("standard stderr", encoding="utf-8")
+
+    # 2. Fallback stdout/stderr paths inside ./artifacts/run_fallback/
+    fallback_dir = Path("./artifacts") / "run_fallback"
+    fallback_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (fallback_dir / "stdout.log").write_text("fallback stdout", encoding="utf-8")
+        (fallback_dir / "stderr.log").write_text("fallback stderr", encoding="utf-8")
+
+        app = create_app(container)
+        with TestClient(app) as client:
+            # Test standard run logs retrieval
+            resp_std = client.get("/runs/run_standard")
+            assert resp_std.status_code == 200
+            assert resp_std.json()["stdout"] == "standard stdout"
+            assert resp_std.json()["stderr"] == "standard stderr"
+
+            # Test fallback run logs retrieval
+            resp_fall = client.get("/runs/run_fallback")
+            assert resp_fall.status_code == 200
+            assert resp_fall.json()["stdout"] == "fallback stdout"
+            assert resp_fall.json()["stderr"] == "fallback stderr"
+    finally:
+        import shutil
+        shutil.rmtree("./artifacts", ignore_errors=True)
+
+    # 3. Test exception handling during log reading
+    exception_dir = tmp_path / "run_exception"
+    exception_dir.mkdir()
+    (exception_dir / "stdout.log").write_text("will trigger exception", encoding="utf-8")
+    (exception_dir / "stderr.log").write_text("will trigger exception", encoding="utf-8")
+
+    original_read_text = Path.read_text
+    def mock_read_text(self: Path, *args, **kwargs):
+        if self.name in ("stdout.log", "stderr.log") and "run_exception" in str(self):
+            raise OSError("Inaccessible file")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", mock_read_text)
+
+    with TestClient(app) as client:
+        resp_exc = client.get("/runs/run_exception")
+        assert resp_exc.status_code == 200
+        # Exception caught, should return None instead of propagating exception
+        assert resp_exc.json()["stdout"] is None
+        assert resp_exc.json()["stderr"] is None
+
+
+def test_stream_run_logs_missing_and_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+
+    # Mock asyncio.sleep to return immediately so tests finish instantly
+    import asyncio
+    async def mock_sleep(delay):
+        return
+    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
+
+    # A. Stream missing run from HTTP level (before starting generator)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp_missing = client.get("/runs/missing_run_id/stream")
+        assert resp_missing.status_code == 404
+
+    # B. Event generator: file doesn't exist and run is already completed/failed/timeout
+    # So it should return "Log file not found" immediately.
+    _make_run_in_store(container.store, id="run_no_log", status=RunStatus.COMPLETED)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_no_log/stream")
+        assert resp.status_code == 200
+        assert "[System] Log file not found." in resp.text
+
+    # C. Event generator: file exists, read to the end, then status becomes completed and remaining content is flushed
+    run = _make_run_in_store(container.store, id="run_flush", status=RunStatus.RUNNING)
+    run_dir = tmp_path / "run_flush"
+    run_dir.mkdir()
+    log_file = run_dir / "stdout.log"
+    log_file.write_text("line1\n", encoding="utf-8")
+
+    # We will simulate a background task or mock store.get to update status to COMPLETED and append to log file
+    call_count = 0
+    original_get = container.store.get
+    async def mock_get(run_id: str):
+        nonlocal call_count
+        run_obj = await original_get(run_id)
+        if run_id == "run_flush":
+            call_count += 1
+            if call_count == 2:
+                # Still running, this triggers the sleep(0.2) branch on line 455 of routes.py!
+                return run_obj.model_copy(update={"status": RunStatus.RUNNING})
+            elif call_count >= 3:
+                # Append a final line and change status to completed
+                log_file.write_text("line1\nline_final\n", encoding="utf-8")
+                return run_obj.model_copy(update={"status": RunStatus.COMPLETED})
+        return run_obj
+
+    monkeypatch.setattr(container.store, "get", mock_get)
+
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_flush/stream")
+        assert resp.status_code == 200
+        assert "data: line1" in resp.text
+        assert "data: line_final" in resp.text
+
+    # D. Event generator: exception during store.get inside the loop
+    _make_run_in_store(container.store, id="run_loop_exc", status=RunStatus.RUNNING)
+    loop_exc_dir = tmp_path / "run_loop_exc"
+    loop_exc_dir.mkdir()
+    (loop_exc_dir / "stdout.log").write_text("line1\n", encoding="utf-8")
+
+    call_get_count = 0
+    async def mock_get_exc(run_id: str):
+        nonlocal call_get_count
+        if run_id == "run_loop_exc":
+            call_get_count += 1
+            if call_get_count > 1:
+                raise ValueError("Store failure")
+        return await original_get(run_id)
+
+    monkeypatch.setattr(container.store, "get", mock_get_exc)
+
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_loop_exc/stream")
+        assert resp.status_code == 200
+        # Should stream the first line and then terminate gracefully upon exception
+        assert "data: line1" in resp.text
+
+    # E. Event generator: file doesn't exist, run is RUNNING, wait loop runs all 50 iterations and exits
+    _make_run_in_store(container.store, id="run_timeout_loop", status=RunStatus.RUNNING)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_timeout_loop/stream")
+        assert resp.status_code == 200
+        assert "[System] Log file not found." in resp.text
+
+    # F. Event generator: RunNotFound exception during store.get inside the initial wait loop
+    _make_run_in_store(container.store, id="run_not_found_loop", status=RunStatus.RUNNING)
+    original_get_fn = container.store.get
+    get_count = 0
+    async def mock_get_not_found(run_id: str):
+        nonlocal get_count
+        if run_id == "run_not_found_loop":
+            get_count += 1
+            if get_count > 1:
+                raise RunNotFound(run_id)
+        return await original_get_fn(run_id)
+    monkeypatch.setattr(container.store, "get", mock_get_not_found)
+
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_not_found_loop/stream")
+        assert resp.status_code == 200
+        assert "[System] Log file not found." in resp.text
+
+
+def test_lock_run_nonexistent() -> None:
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.put("/runs/ghost_run/lock", json={"locked": True})
+        assert resp.status_code == 404
+
+
+def test_cleanup_runs_rmtree_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+
+    from datetime import UTC, timedelta
+    old_date = datetime.now(UTC) - timedelta(days=40)
+
+    # 1. Old unlocked run that we'll attempt to delete, which raises exception
+    run_old = Run(
+        id="run-old-exc",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="test_user",
+        tests_path="tests/",
+        created_at=old_date,
+        finished_at=old_date,
+        locked=False,
+    )
+
+    # 2. Old unlocked run whose directory does NOT exist on disk (covers 505->503 branch!)
+    run_no_dir = Run(
+        id="run-no-dir-on-disk",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="test_user",
+        tests_path="tests/",
+        created_at=old_date,
+        finished_at=old_date,
+        locked=False,
+    )
+
+    # Create directory on disk ONLY for the first run
+    dir_old = tmp_path / "run-old-exc"
+    dir_old.mkdir()
+    (dir_old / "stdout.log").write_text("logs")
+
+    import asyncio
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(container.store.save(run_old))
+    loop.run_until_complete(container.store.save(run_no_dir))
+    loop.close()
+
+    # Mock shutil.rmtree to raise an exception
+    import shutil
+    def mock_rmtree(path, *args, **kwargs):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(shutil, "rmtree", mock_rmtree)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/runs/cleanup?retention_days=30")
+        assert resp.status_code == 200
+        # Exception is caught and ignored, cleaned count should be 0 because it failed
+        assert resp.json()["cleaned_runs"] == 0
+        assert dir_old.exists()
+
+
+def test_preview_schedule_detailed() -> None:
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        # A. Invalid timezone
+        resp_tz = client.get("/schedules/preview?expression=*/5 * * * *&timezone=Invalid/TZ")
+        assert resp_tz.status_code == 400
+        assert "Invalid timezone" in resp_tz.json()["detail"]
+
+        # B. Invalid cron syntax (raises ValueError/Exception in parser)
+        resp_cron = client.get("/schedules/preview?expression=five_minutes&timezone=UTC")
+        assert resp_cron.status_code == 400
+        assert "Invalid cron expression" in resp_cron.json()["detail"]
+
+
+def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _make_container()
+    
+    # Save a valid profile for validation checks
+    profile = TestProfile(
+        id="profile-valid",
+        name="Valid Profile",
+        tests_path="tests/",
+        created_by="test_user",
+        created_at=NOW,
+    )
+    import asyncio
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(container.store.save_profile(profile))
+    loop.close()
+
+    # Mock croniter preview calculation to throw exception on specific cron expression "0 9 * * *"
+    from croniter import croniter
+    original_init = croniter.__init__
+    def mock_init(self, expr, *args, **kwargs):
+        self._is_mock_exc = (expr == "0 9 * * *")
+        original_init(self, expr, *args, **kwargs)
+
+    original_get_next = croniter.get_next
+    def mock_get_next(self, *args, **kwargs):
+        if getattr(self, "_is_mock_exc", False):
+            raise ValueError("Simulated error")
+        return original_get_next(self, *args, **kwargs)
+
+    monkeypatch.setattr(croniter, "__init__", mock_init)
+    monkeypatch.setattr(croniter, "get_next", mock_get_next)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        # 1. Create schedule - missing profile (400)
+        payload = {
+            "name": "Sched 1",
+            "profile_id": "profile-ghost",
+            "cron_expression": "0 2 * * *",
+            "enabled": True,
+            "timezone": "UTC"
+        }
+        resp = client.post("/schedules", json=payload)
+        assert resp.status_code == 400
+        assert "Profile profile-ghost not found" in resp.json()["detail"]
+
+        # 2. Create schedule - invalid timezone (400)
+        payload["profile_id"] = "profile-valid"
+        payload["timezone"] = "Invalid/TZ"
+        resp = client.post("/schedules", json=payload)
+        assert resp.status_code == 400
+        assert "Invalid timezone" in resp.json()["detail"]
+
+        # 3. Create schedule - invalid cron expression (400)
+        payload["timezone"] = "UTC"
+        payload["cron_expression"] = "invalid_cron"
+        resp = client.post("/schedules", json=payload)
+        assert resp.status_code == 400
+        assert "Invalid cron expression" in resp.json()["detail"]
+
+        # 4. Create disabled schedule (tests disabled flow where next_run_at is None)
+        payload["cron_expression"] = "0 2 * * *"
+        payload["enabled"] = False
+        resp = client.post("/schedules", json=payload)
+        assert resp.status_code == 201
+        assert resp.json()["next_run_at"] is None
+
+        # 4b. Create schedule with exception on next_run_at calculation (covers 582-583 exception catch!)
+        payload["cron_expression"] = "0 9 * * *"
+        payload["enabled"] = True
+        resp_preview_exc = client.post("/schedules", json=payload)
+        assert resp_preview_exc.status_code == 201
+        assert resp_preview_exc.json()["next_run_at"] is None
+
+        # Create a valid active schedule to test PUT routes on
+        payload["cron_expression"] = "0 2 * * *"
+        payload["enabled"] = True
+        resp_active = client.post("/schedules", json=payload)
+        assert resp_active.status_code == 201
+        sched_id = resp_active.json()["id"]
+
+        # 5. Update nonexistent schedule (404)
+        update_payload = {
+            "name": "Sched Updated",
+            "profile_id": "profile-valid",
+            "cron_expression": "0 3 * * *",
+            "enabled": True,
+            "timezone": "UTC"
+        }
+        resp = client.put("/schedules/ghost-sched-id", json=update_payload)
+        assert resp.status_code == 404
+
+        # 6. Update schedule - nonexistent profile (400)
+        update_payload["profile_id"] = "profile-ghost"
+        resp = client.put(f"/schedules/{sched_id}", json=update_payload)
+        assert resp.status_code == 400
+
+        # 7. Update schedule - invalid timezone (400)
+        update_payload["profile_id"] = "profile-valid"
+        update_payload["timezone"] = "Invalid/TZ"
+        resp = client.put(f"/schedules/{sched_id}", json=update_payload)
+        assert resp.status_code == 400
+
+        # 8. Update schedule - invalid cron (400)
+        update_payload["timezone"] = "UTC"
+        update_payload["cron_expression"] = "invalid_cron"
+        resp = client.put(f"/schedules/{sched_id}", json=update_payload)
+        assert resp.status_code == 400
+
+        # 9. Update schedule - set enabled=False (removes from apscheduler)
+        update_payload["cron_expression"] = "0 3 * * *"
+        update_payload["enabled"] = False
+        resp = client.put(f"/schedules/{sched_id}", json=update_payload)
+        assert resp.status_code == 200
+        assert resp.json()["enabled"] is False
+
+        # 9b. Update schedule - set enabled=True (calls add_or_update_schedule_job - covers 691!)
+        update_payload["enabled"] = True
+        resp = client.put(f"/schedules/{sched_id}", json=update_payload)
+        assert resp.status_code == 200
+        assert resp.json()["enabled"] is True
+
+        # 9c. Update schedule with exception on next_run_at calculation (covers 668-672 exception catch!)
+        update_payload["cron_expression"] = "0 9 * * *"
+        resp = client.put(f"/schedules/{sched_id}", json=update_payload)
+        assert resp.status_code == 200
+        assert resp.json()["next_run_at"] is None
+
+        # 10. Delete nonexistent schedule (404)
+        resp = client.delete("/schedules/ghost-sched-id")
+        assert resp.status_code == 404
+
 
 

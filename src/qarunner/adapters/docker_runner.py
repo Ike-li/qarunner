@@ -167,12 +167,12 @@ class DockerRunner:
                     logger.warning("Failed to kill container: %s", kill_exc)
                 exit_code = 137  # Standard SIGKILL exit code
             finally:
-                if log_task:
-                    log_task.cancel()
-                    try:
-                        await log_task
-                    except asyncio.CancelledError:
-                        pass
+                log_task.cancel()
+                try:
+                    await log_task
+                except asyncio.CancelledError:
+                    pass
+
 
             # 6. Gather logs
             def _get_logs():

@@ -509,3 +509,133 @@ class TestWorkspaceJail:
         from qarunner.core.paths import safe_subpath
         expected_fallback = safe_subpath(str(tests_root), "some_suite")
         assert captured_cwd[0] == expected_fallback
+
+
+    @pytest.mark.asyncio
+    async def test_create_with_all_compilations(self):
+        # Covers lines 83-90 (markers, extra_args, selected_files)
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="sample",
+            selected_markers=["smoke", "regression"],
+            extra_args="--tb=short --maxfail=2",
+            selected_files=["test_a.py", "test_b.py"],
+        )
+        run = await orch.create(req)
+        assert "-m" in run.args
+        assert "smoke or regression" in run.args
+        assert "--tb=short" in run.args
+        assert "--maxfail=2" in run.args
+        assert "test_a.py" in run.args
+        assert "test_b.py" in run.args
+
+
+    @pytest.mark.asyncio
+    async def test_docker_executor_mode_routing(self):
+        # Covers line 201
+        orch = _make_orchestrator()
+        # Mock self._process_docker
+        mock_docker = FakeProcessRunner(
+            handler=lambda cmd, cwd, env, timeout: ProcessResult(
+                exit_code=0, stdout="docker-ok", stderr="", duration_ms=5
+            )
+        )
+        orch._process_docker = mock_docker
+        
+        req = RunRequest(tests_path="sample", executor_mode="docker")
+        run = await orch.create(req)
+        await orch.execute(run.id)
+        
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.FAILED  # FAILED because no collector results preset
+
+    @pytest.mark.asyncio
+    async def test_workspace_jail_copytree_exception(self, tmp_path):
+        # Covers lines 181-182
+        from unittest.mock import patch
+        tests_root = tmp_path / "tests_root"
+        tests_root.mkdir()
+        suite_dir = tests_root / "suite_abc"
+        suite_dir.mkdir()
+        
+        artifacts_root = tmp_path / "artifacts"
+        artifacts_root.mkdir()
+        
+        orch = _make_orchestrator(tests_root=str(tests_root))
+        orch._artifacts_root = str(artifacts_root)
+        
+        req = RunRequest(tests_path="suite_abc")
+        run = await orch.create(req)
+        
+        with patch("shutil.copytree", side_effect=Exception("Copy failed")):
+            await orch.execute(run.id)
+            
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.FAILED  # falls back and still completes execution flow
+
+    @pytest.mark.asyncio
+    async def test_workspace_jail_rmtree_exception(self, tmp_path):
+        # Covers lines 266-267
+        from unittest.mock import patch
+        tests_root = tmp_path / "tests_root"
+        tests_root.mkdir()
+        suite_dir = tests_root / "suite_abc"
+        suite_dir.mkdir()
+        (suite_dir / "test_x.py").write_text("def test_x(): pass")
+        
+        artifacts_root = tmp_path / "artifacts"
+        artifacts_root.mkdir()
+        
+        orch = _make_orchestrator(tests_root=str(tests_root))
+        orch._artifacts_root = str(artifacts_root)
+        
+        req = RunRequest(tests_path="suite_abc")
+        run = await orch.create(req)
+        
+        with patch("shutil.rmtree", side_effect=Exception("Remove failed")):
+            await orch.execute(run.id)
+            
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.FAILED  # still passes gracefully through rmtree except block!
+
+    @pytest.mark.asyncio
+    async def test_workspace_jail_ignore_artifacts_root(self, tmp_path):
+        # Covers line 160
+        tests_root = tmp_path / "tests_root"
+        tests_root.mkdir()
+        
+        # Put artifacts_root inside tests_root
+        artifacts_root = tests_root / "runs"
+        artifacts_root.mkdir()
+        
+        orch = _make_orchestrator(tests_root=str(tests_root))
+        orch._artifacts_root = str(artifacts_root)
+        
+        req = RunRequest(tests_path="")
+        run = await orch.create(req)
+        
+        await orch.execute(run.id)
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_workspace_jail_ignore_run_dir(self, tmp_path):
+        # Covers line 162
+        tests_root = tmp_path / "tests_root"
+        tests_root.mkdir()
+        
+        # We configure artifacts_root of the orchestrator to be tests_root
+        # so that run_dir is tests_root / run_id
+        orch = _make_orchestrator(tests_root=str(tests_root))
+        orch._artifacts_root = str(tests_root)
+        
+        # Create the fake run_id folder inside tests_root
+        fake_run_dir = tests_root / "id-001"
+        fake_run_dir.mkdir()
+        
+        req = RunRequest(tests_path="")
+        run = await orch.create(req)
+        
+        await orch.execute(run.id)
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.FAILED
