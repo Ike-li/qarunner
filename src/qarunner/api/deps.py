@@ -77,6 +77,8 @@ async def get_current_user(request: Request, token: str | None = Depends(oauth2_
     # If not in headers, fall back to query parameter (helps with direct browser report downloads)
     if not token:
         token = request.query_params.get("token")
+    if not token:
+        token = request.cookies.get("token")
 
     if not token:
         raise HTTPException(

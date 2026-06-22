@@ -247,6 +247,7 @@ async def create_profile(
         timeout=req.timeout,
         created_by=current_user.username,
         created_at=datetime.now(UTC),
+        env=req.env,
     )
     await container.store.save_profile(profile)
     return profile_to_response(profile)
@@ -289,6 +290,7 @@ async def update_profile(
         timeout=req.timeout,
         created_by=existing.created_by,
         created_at=existing.created_at,
+        env=req.env,
     )
     await container.store.save_profile(updated)
     return profile_to_response(updated)
@@ -396,6 +398,35 @@ async def get_report(
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
     return FileResponse(run.report.allure_report_file, media_type="text/html")
+
+
+@router.get("/runs/{run_id}/report/{path:path}")
+async def get_report_assets(
+    run_id: str,
+    path: str,
+    request: Request,
+    _current_user: User = Depends(get_current_user),
+) -> FileResponse:
+    """Serve Allure report static assets (JS, CSS, data files) securely."""
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    if not run.report or not run.report.html_generated or not run.report.allure_report_file:
+        raise HTTPException(status_code=404, detail="Report not available")
+
+    allure_report_dir = Path(run.report.allure_report_file).parent
+    asset_file = (allure_report_dir / path).resolve()
+
+    # Directory traversal safety check
+    if allure_report_dir.resolve() not in asset_file.parents:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not asset_file.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(asset_file)
 
 
 @router.get("/runs/{run_id}/stream")

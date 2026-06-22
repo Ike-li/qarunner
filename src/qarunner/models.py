@@ -54,6 +54,8 @@ class RunRequest(BaseModel):
 class TestProfile(BaseModel):
     """Execution profile template."""
 
+    __test__ = False
+
     id: str
     name: str
     description: str | None = None
@@ -71,6 +73,8 @@ class TestProfile(BaseModel):
 
 class TestSchedule(BaseModel):
     """Configuration for automated test runs on cron schedule."""
+
+    __test__ = False
 
     id: str
     name: str

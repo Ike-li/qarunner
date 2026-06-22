@@ -169,3 +169,15 @@ class TestReportRef:
         )
         assert ref.html_generated is False
         assert ref.allure_report_file is None
+
+
+class TestPytestWarningSuppression:
+    """Verifies that model classes starting with 'Test' have __test__ = False to avoid Pytest collection warnings."""
+
+    def test_pytest_collection_suppressed(self):
+        from qarunner.models import TestProfile, TestSchedule, TestSummary
+
+        assert getattr(TestProfile, "__test__", None) is False
+        assert getattr(TestSchedule, "__test__", None) is False
+        assert getattr(TestSummary, "__test__", None) is False
+
