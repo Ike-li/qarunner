@@ -23,3 +23,19 @@ class UnsafeArguments(UnsafePath):
 
 class RunnerError(RuntimeError):
     """Raised when a runner fails to build a command or execute."""
+
+
+class ScheduleNotFound(KeyError):
+    """Raised when a schedule ID does not exist in the store."""
+
+
+class ProfileNotFound(KeyError):
+    """Raised when a profile ID does not exist in the store."""
+
+
+class InvalidScheduleRequest(ValueError):
+    """Raised when a schedule create/update request fails validation.
+
+    Covers an unknown profile reference, an invalid timezone, or an invalid
+    cron expression. The message is suitable for surfacing as an HTTP 400.
+    """

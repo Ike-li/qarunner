@@ -21,8 +21,10 @@ from qarunner.adapters.uuid_ids import UuidIds
 from qarunner.config import Settings
 from qarunner.core.auth import decode_access_token
 from qarunner.core.orchestrator import RunOrchestrator
+from qarunner.core.profile_service import ProfileService
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
+from qarunner.core.schedule_service import ScheduleService
 from qarunner.models import User, UserRole
 from qarunner.ports.schedule import SchedulePort
 
@@ -34,6 +36,8 @@ class Container:
     orchestrator: RunOrchestrator
     store: SqliteStore
     scheduler: SchedulePort
+    schedule_service: ScheduleService
+    profile_service: ProfileService
 
 
 def create_container(settings: Settings | None = None) -> Container:
@@ -70,8 +74,16 @@ def create_container(settings: Settings | None = None) -> Container:
     )
 
     schedule_port = ApschedulerSchedulePort(store=store, orchestrator=orchestrator)
+    schedule_service = ScheduleService(store=store, scheduler=schedule_port)
+    profile_service = ProfileService(store=store)
 
-    return Container(orchestrator=orchestrator, store=store, scheduler=schedule_port)
+    return Container(
+        orchestrator=orchestrator,
+        store=store,
+        scheduler=schedule_port,
+        schedule_service=schedule_service,
+        profile_service=profile_service,
+    )
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)

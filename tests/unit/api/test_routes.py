@@ -12,6 +12,8 @@ from starlette.testclient import TestClient
 
 from qarunner.api.app import create_app as _real_create_app
 from qarunner.api.deps import Container, get_current_admin, get_current_user
+from qarunner.core.profile_service import ProfileService
+from qarunner.core.schedule_service import ScheduleService
 from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
 from qarunner.models import (
     ReportRef,
@@ -199,10 +201,13 @@ class FakeOrchestrator:
 def _make_container(**orch_kwargs: object) -> Container:
     store = FakeStore()
     orchestrator = FakeOrchestrator(store=store, **orch_kwargs)  # type: ignore[arg-type]
+    scheduler = FakeSchedulePort()
     return Container(
         orchestrator=orchestrator,  # type: ignore[arg-type]
         store=store,  # type: ignore[arg-type]
-        scheduler=FakeSchedulePort(),
+        scheduler=scheduler,
+        schedule_service=ScheduleService(store=store, scheduler=scheduler),  # type: ignore[arg-type]
+        profile_service=ProfileService(store=store),  # type: ignore[arg-type]
     )
 
 

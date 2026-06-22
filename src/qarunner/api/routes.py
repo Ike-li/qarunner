@@ -30,8 +30,15 @@ from qarunner.api.schemas import (
 )
 from qarunner.config import Settings
 from qarunner.core.auth import create_access_token, hash_password, verify_password
-from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
-from qarunner.models import Run, RunRequest, TestProfile, TestSchedule, User, UserRole
+from qarunner.errors import (
+    InvalidScheduleRequest,
+    ProfileNotFound,
+    RunNotFound,
+    ScheduleNotFound,
+    UnknownRunner,
+    UnsafePath,
+)
+from qarunner.models import Run, RunRequest, User, UserRole
 
 router = APIRouter()
 
@@ -240,25 +247,7 @@ async def create_profile(
 ) -> TestProfileResponse:
     """Create and persist a new named execution profile."""
     container = request.app.state.container
-    import uuid
-    from datetime import UTC, datetime
-
-    profile_id = str(uuid.uuid4())
-    profile = TestProfile(
-        id=profile_id,
-        name=req.name,
-        description=req.description,
-        tests_path=req.tests_path,
-        selected_files=req.selected_files,
-        selected_markers=req.selected_markers,
-        extra_args=req.extra_args,
-        executor_mode=req.executor_mode,
-        timeout=req.timeout,
-        created_by=current_user.username,
-        created_at=datetime.now(UTC),
-        env=req.env,
-    )
-    await container.store.save_profile(profile)
+    profile = await container.profile_service.create(req, created_by=current_user.username)
     return profile_to_response(profile)
 
 
@@ -283,25 +272,10 @@ async def update_profile(
 ) -> TestProfileResponse:
     """Update an existing execution profile."""
     container = request.app.state.container
-    existing = await container.store.get_profile(profile_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail=f"Profile {profile_id} not found")
-
-    updated = TestProfile(
-        id=existing.id,
-        name=req.name,
-        description=req.description,
-        tests_path=req.tests_path,
-        selected_files=req.selected_files,
-        selected_markers=req.selected_markers,
-        extra_args=req.extra_args,
-        executor_mode=req.executor_mode,
-        timeout=req.timeout,
-        created_by=existing.created_by,
-        created_at=existing.created_at,
-        env=req.env,
-    )
-    await container.store.save_profile(updated)
+    try:
+        updated = await container.profile_service.update(profile_id, req)
+    except ProfileNotFound:
+        raise HTTPException(status_code=404, detail=f"Profile {profile_id} not found") from None
     return profile_to_response(updated)
 
 
@@ -313,9 +287,10 @@ async def delete_profile(
 ) -> dict:
     """Delete an execution profile."""
     container = request.app.state.container
-    deleted = await container.store.delete_profile(profile_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Profile {profile_id} not found")
+    try:
+        await container.profile_service.delete(profile_id)
+    except ProfileNotFound:
+        raise HTTPException(status_code=404, detail=f"Profile {profile_id} not found") from None
     return {"status": "success", "message": f"Profile {profile_id} deleted"}
 
 
@@ -636,49 +611,10 @@ async def create_schedule(
 ) -> TestScheduleResponse:
     """Create and persist a new test schedule."""
     container = request.app.state.container
-    import contextlib
-    import uuid
-    from datetime import UTC, datetime
-
-    from qarunner.core import cron
-
-    # Validate profile exists
-    profile = await container.store.get_profile(req.profile_id)
-    if not profile:
-        raise HTTPException(status_code=400, detail=f"Profile {req.profile_id} not found")
-
-    # Validate timezone
-    if not cron.is_valid_timezone(req.timezone):
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}")
-
-    # Validate cron expression
-    if not cron.is_valid_cron(req.cron_expression):
-        raise HTTPException(status_code=400, detail="Invalid cron expression")
-
-    # Compute static next_run_at preview
-    next_run_at = None
-    if req.enabled:
-        with contextlib.suppress(Exception):
-            next_run_at = cron.next_run(req.cron_expression, req.timezone)
-
-    schedule_id = str(uuid.uuid4())
-    schedule = TestSchedule(
-        id=schedule_id,
-        name=req.name,
-        profile_id=req.profile_id,
-        cron_expression=req.cron_expression,
-        enabled=req.enabled,
-        timezone=req.timezone,
-        last_run_at=None,
-        next_run_at=next_run_at,
-        created_by=current_user.username,
-        created_at=datetime.now(UTC),
-    )
-    await container.store.save_schedule(schedule)
-
-    # Register in in-process scheduler
-    container.scheduler.upsert(schedule)
-
+    try:
+        schedule = await container.schedule_service.create(req, created_by=current_user.username)
+    except InvalidScheduleRequest as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return schedule_to_response(schedule)
 
 
@@ -717,53 +653,12 @@ async def update_schedule(
 ) -> TestScheduleResponse:
     """Update an existing test schedule."""
     container = request.app.state.container
-    import contextlib
-
-    from qarunner.core import cron
-
-    existing = await container.store.get_schedule(schedule_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found")
-
-    # Validate profile exists
-    profile = await container.store.get_profile(req.profile_id)
-    if not profile:
-        raise HTTPException(status_code=400, detail=f"Profile {req.profile_id} not found")
-
-    # Validate timezone
-    if not cron.is_valid_timezone(req.timezone):
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}")
-
-    # Validate cron expression
-    if not cron.is_valid_cron(req.cron_expression):
-        raise HTTPException(status_code=400, detail="Invalid cron expression")
-
-    # Compute static next_run_at preview
-    next_run_at = None
-    if req.enabled:
-        with contextlib.suppress(Exception):
-            next_run_at = cron.next_run(req.cron_expression, req.timezone)
-
-    updated = TestSchedule(
-        id=existing.id,
-        name=req.name,
-        profile_id=req.profile_id,
-        cron_expression=req.cron_expression,
-        enabled=req.enabled,
-        timezone=req.timezone,
-        last_run_at=existing.last_run_at,
-        next_run_at=next_run_at,
-        created_by=existing.created_by,
-        created_at=existing.created_at,
-    )
-    await container.store.save_schedule(updated)
-
-    # Sync with in-process scheduler
-    if updated.enabled:
-        container.scheduler.upsert(updated)
-    else:
-        container.scheduler.remove(updated.id)
-
+    try:
+        updated = await container.schedule_service.update(schedule_id, req)
+    except ScheduleNotFound:
+        raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found") from None
+    except InvalidScheduleRequest as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return schedule_to_response(updated)
 
 
@@ -775,12 +670,9 @@ async def delete_schedule(
 ) -> dict:
     """Delete a test schedule."""
     container = request.app.state.container
-    deleted = await container.store.delete_schedule(schedule_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found")
-
-    # Remove from in-process scheduler
-    container.scheduler.remove(schedule_id)
-
+    try:
+        await container.schedule_service.delete(schedule_id)
+    except ScheduleNotFound:
+        raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found") from None
     return {"status": "success", "message": f"Schedule {schedule_id} deleted"}
 
