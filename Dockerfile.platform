@@ -1,0 +1,46 @@
+# Stage 1: Build the React Frontend
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Final Runtime Platform Image
+FROM python:3.12-slim
+WORKDIR /app
+
+# Install system dependencies (Java JRE for Allure CLI, curl/wget, unzip, git, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jre-headless \
+    wget \
+    unzip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install Allure Commandline CLI (2.24.0)
+RUN wget -q https://github.com/allure-framework/allure2/releases/download/2.24.0/allure-2.24.0.zip \
+    && unzip -q allure-2.24.0.zip -d /opt/ \
+    && ln -s /opt/allure-2.24.0/bin/allure /usr/bin/allure \
+    && rm allure-2.24.0.zip
+
+# Copy backend files and pyproject.toml
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+# Install the Python package and all required dependencies
+RUN pip install --no-cache-dir .
+
+# Copy built frontend assets
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+
+# Expose FastAPI server port
+EXPOSE 8000
+
+# Set environment variables for runtime
+ENV PORT=8000
+ENV HOST=0.0.0.0
+ENV QARUNNER_STATIC_ROOT=/app/frontend/dist
+
+# Command to run uvicorn server
+CMD ["uvicorn", "qarunner.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

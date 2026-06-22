@@ -1,0 +1,21 @@
+services:
+  platform:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform
+    image: qarunner-platform:latest
+    container_name: qarunner-platform
+    ports:
+      - "8000:8000"
+    environment:
+      - QARUNNER_TESTS_ROOT=/app/external_tests
+      - QARUNNER_ARTIFACTS_ROOT=/app/artifacts
+      - QARUNNER_DB_PATH=/app/artifacts/qarunner.db
+      - QARUNNER_SECRET_KEY=production-secret-jwt-signing-key-change-me
+      - QARUNNER_ADMIN_PASSWORD=admin123
+    volumes:
+      - platform-artifacts:/app/artifacts
+      - ./external_tests:/app/external_tests:ro # Read-only mount of local test files if present
+
+volumes:
+  platform-artifacts:
