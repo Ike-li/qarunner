@@ -866,7 +866,12 @@
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), width 0.3s cubic-bezier(0.16, 1, 0.3, 1), max-width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drawerExpanded {
+  width: 1050px;
+  max-width: 95vw;
 }
 
 .drawerOpen .drawer {
@@ -909,6 +914,31 @@
 }
 
 .drawerCloseButton:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+}
+
+.drawerHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.drawerExpandButton {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.drawerExpandButton:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-main);
 }
@@ -1216,6 +1246,139 @@
   color: #06b6d4;
 }
 
+.terminalHeaderControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Search Box */
+.terminalSearchWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 0 0.5rem;
+  height: 24px;
+  width: 140px;
+  transition: all 0.2s ease;
+}
+
+.terminalSearchWrapper:focus-within {
+  border-color: rgba(6, 182, 212, 0.4);
+  width: 180px;
+  background: rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.15);
+}
+
+.terminalSearchIcon {
+  color: var(--text-dim);
+  margin-right: 0.35rem;
+  flex-shrink: 0;
+}
+
+.terminalSearchInput {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-main);
+  font-size: 0.75rem;
+  width: 100%;
+  padding: 0;
+}
+
+.terminalSearchInput::placeholder {
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.terminalSearchClear {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.25rem;
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+}
+
+.terminalSearchClear:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+}
+
+/* Font Sizer Controls */
+.fontSizeControls {
+  display: flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 1px;
+  height: 24px;
+}
+
+.fontSizeBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.fontSizeBtn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+}
+
+.fontSizeValue {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+  padding: 0 0.35rem;
+  min-width: 32px;
+  text-align: center;
+}
+
+/* Height Toggle Button */
+.terminalHeightBtn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.terminalHeightBtn:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-main);
+}
+
+.terminalBlockExpanded {
+  height: 600px !important;
+}
+
 .terminalActionsGroup {
   display: flex;
   align-items: center;
@@ -1295,6 +1458,7 @@
   box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.8);
   display: flex;
   flex-direction: column;
+  transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1), font-size 0.2s ease;
 }
 
 .terminalBlock::-webkit-scrollbar {
@@ -1315,7 +1479,7 @@
 }
 
 .stdoutPre {
-  color: #34d399;
+  color: #cbd5e1; /* Comfortable soft off-white default */
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1323,11 +1487,33 @@
 }
 
 .stderrPre {
-  color: #f87171;
+  color: #f87171; /* Soft coral red for stderr */
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
   font-family: var(--font-mono);
+}
+
+.logLine {
+  line-height: 1.6;
+  min-height: 1.4em;
+}
+
+.logHeaderLine {
+  color: #38bdf8; /* Sky-blue for session headers */
+  font-weight: 500;
+}
+
+.logSuccessLine {
+  color: #34d399; /* Soft green for success indicators */
+}
+
+.logErrorLine {
+  color: #fca5a5; /* Soft red for failures & exceptions */
+}
+
+.logWarningLine {
+  color: #fde047; /* Soft amber/yellow for warnings */
 }
 
 .terminalPlaceholder {
@@ -2269,15 +2455,124 @@
 
 .nestedProfileItem {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.4rem 0.75rem;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-light);
   font-size: 0.8rem;
   color: var(--text-muted);
   transition: all 0.15s ease;
+}
+
+.nestedProfileMainRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.nestedProfileStatsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 0.15rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.05);
+}
+
+.profilePassRateBadge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.badgeHighPass {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.badgeMediumPass {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.badgeLowPass {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.profileNoRunsBadge {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.profileHistoryDots {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.historyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.historyDot:hover {
+  transform: scale(1.3);
+}
+
+.dotPass {
+  background: #10b981;
+  box-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+}
+
+.dotFail {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);
+}
+
+.dotRunning {
+  background: #3b82f6;
+  box-shadow: 0 0 4px rgba(59, 130, 246, 0.6);
+  animation: pulseRunning 1.2s infinite;
+}
+
+.dotEmpty {
+  background: rgba(255, 255, 255, 0.15);
+  cursor: default;
+}
+
+.dotEmpty:hover {
+  transform: none;
+}
+
+@keyframes pulseRunning {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
 }
 
 .nestedProfileItem:hover {
@@ -3039,6 +3334,488 @@
   margin-bottom: 1rem;
   line-height: 1.4;
 }
+
+/* Fullscreen Terminal Overlay */
+.fullscreenTerminalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(4, 7, 13, 0.75);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fullscreenTerminal {
+  width: 100vw;
+  height: 100vh;
+  background: #050814;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes scaleUp {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.fullscreenTerminalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: rgba(13, 18, 30, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  flex-shrink: 0;
+}
+
+.fullscreenTerminalTitle {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fullscreenTerminalSub {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  margin-left: 0.75rem;
+  font-weight: 500;
+}
+
+.fullscreenTerminalControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.terminalToolbarBtn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-title);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 24px;
+}
+
+.terminalToolbarBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: var(--text-main);
+}
+
+.terminalToolbarBtnActive {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.4);
+  color: #22d3ee;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);
+}
+
+.terminalToolbarBtnActive:hover {
+  background: rgba(6, 182, 212, 0.22);
+  border-color: rgba(6, 182, 212, 0.5);
+  color: #38bdf8;
+}
+
+.fullscreenTerminalCloseBtn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.fullscreenTerminalCloseBtn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  transform: rotate(90deg);
+}
+
+.fullscreenTerminalBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  background: #03050c;
+  display: flex;
+  flex-direction: column;
+  box-shadow: inset 0 4px 20px rgba(0, 0, 0, 0.8);
+  transition: font-size 0.2s ease;
+}
+
+/* Custom Scrollbar for Fullscreen Terminal Body */
+.fullscreenTerminalBody::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.fullscreenTerminalBody::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.fullscreenTerminalBody::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.fullscreenTerminalBody::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Row-by-row structure with line numbers */
+.terminalLineRow {
+  display: flex;
+  align-items: flex-start;
+  padding: 0.1rem 0;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.terminalLineRow:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.terminalLineNumber {
+  display: inline-block;
+  width: 48px;
+  min-width: 48px;
+  text-align: right;
+  padding-right: 1.25rem;
+  color: rgba(255, 255, 255, 0.15);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  margin-right: 1.25rem;
+  user-select: none; /* Selection prevention hack */
+}
+
+.terminalLineContent {
+  flex: 1;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #cbd5e1;
+}
+
+.noWrapPre {
+  overflow-x: auto !important;
+}
+
+.noWrapPre .terminalLineContent {
+  white-space: pre !important;
+  word-break: normal !important;
+}
+
+.noWrapPre .stdoutPre, .noWrapPre .stderrPre {
+  white-space: pre !important;
+  word-break: normal !important;
+}
+
+/* Log Level Fast Filters */
+.logLevelCapsules {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 0.15rem;
+  height: 24px;
+}
+
+.capsuleBtn {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.capsuleBtn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.capsuleActive {
+  color: #fff !important;
+}
+
+.capsuleActive.capsule_ALL {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-main) !important;
+}
+
+.capsuleActive.capsule_ERROR {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444 !important;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+}
+
+.capsuleActive.capsule_WARNING {
+  background: rgba(245, 158, 11, 0.25);
+  color: #f59e0b !important;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.3);
+}
+
+.capsuleActive.capsule_SUCCESS {
+  background: rgba(16, 185, 129, 0.25);
+  color: #10b981 !important;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.3);
+}
+
+/* Allure Inline Report */
+.reportIframeContainer {
+  margin-top: 1.5rem;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #030712;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.reportIframeHeader {
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.65rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reportIframeTitle {
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.reportIframeHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.reportIframe {
+  width: 100%;
+  height: 520px;
+  border: none;
+  background: #ffffff;
+}
+
+.reportIframeLoading {
+  position: absolute;
+  top: 50px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #030712;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  z-index: 10;
+}
+
+/* Profiles CRUD Forms */
+.profileFormGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 1.1rem;
+}
+
+.profileFormGroup label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.15rem;
+}
+
+.profileFormRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.profileEnvHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 1rem 0 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 0.35rem;
+}
+
+.profileEnvHeader span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.profileEnvGrid {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-right: 0.25rem;
+}
+
+.profileEnvRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.profileEnvInput {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 6px !important;
+  color: var(--text-main) !important;
+  font-size: 0.8rem !important;
+  padding: 0.4rem 0.6rem !important;
+  font-family: var(--font-mono) !important;
+}
+
+.profileEnvRemoveBtn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profileEnvRemoveBtn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  transform: scale(1.05);
+}
+
+.profileAddEnvBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profileAddEnvBtn:hover {
+  border-color: #06b6d4;
+  color: #06b6d4;
+  background: rgba(6, 182, 212, 0.02);
+}
+
+/* Sidebar Actions Hover Buttons */
+.profileActionContainer {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  margin-left: auto;
+}
+
+.profileSidebarBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.profileSidebarBtn:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.profileSidebarBtnEdit:hover {
+  color: #06b6d4;
+}
+
+.profileSidebarBtnDelete:hover {
+  color: #ef4444;
+}
+
+
 
 
 

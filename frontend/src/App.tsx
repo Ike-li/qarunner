@@ -15,6 +15,7 @@ import {
   X, 
   Copy, 
   Check,
+  Download,
   BarChart3,
   Sparkles,
   Users,
@@ -28,7 +29,15 @@ import {
   Sun,
   Moon,
   Pencil,
-  Trash2
+  Trash2,
+  Maximize2,
+  ChevronsLeft,
+  ChevronsRight,
+  Search,
+  ZoomIn,
+  ZoomOut,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react'
 import styles from './App.module.css'
 
@@ -149,6 +158,7 @@ const translations = {
     streaming: "Streaming",
     copied: "Copied",
     copy: "Copy",
+    download: "Download",
     waitingLogs: "Waiting for test execution logs...",
     noLogsAvailable: "No console logs available for this execution.",
     pytestArguments: "Pytest Arguments",
@@ -296,6 +306,7 @@ const translations = {
     streaming: "实时传输中",
     copied: "已复制",
     copy: "复制",
+    download: "下载",
     waitingLogs: "等待测试执行日志...",
     noLogsAvailable: "此运行没有可用的控制台日志。",
     pytestArguments: "Pytest 执行参数",
@@ -379,11 +390,13 @@ export default function App() {
   const [tests, setTests] = useState<string[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRunDetails, setSelectedRunDetails] = useState<Run | null>(null)
+  const [detailsLoading, setDetailsLoading] = useState<boolean>(false)
   const [drawerTab, setDrawerTab] = useState<'logs' | 'report'>('logs')
   const terminalRef = useRef<HTMLDivElement>(null)
   const [isTriggerModalOpen, setIsTriggerModalOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [copySuccess, setCopySuccess] = useState(false)
+  const [logLevelFilter, setLogLevelFilter] = useState<'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS'>('ALL')
 
   // Localization & Theme states
   const [lang, setLang] = useState<'en' | 'zh'>(() => (localStorage.getItem('qarunner_lang') as 'en' | 'zh') || 'en')
@@ -453,6 +466,19 @@ export default function App() {
   const [streamedStdout, setStreamedStdout] = useState<string>('')
   const [isStreaming, setIsStreaming] = useState<boolean>(false)
 
+  // New Log & Drawer controls to resolve "logs are too small" issue
+  const [isDrawerExpanded, setIsDrawerExpanded] = useState<boolean>(false)
+  const [isTerminalHeightExpanded, setIsTerminalHeightExpanded] = useState<boolean>(false)
+  const [terminalFontSize, setTerminalFontSize] = useState<number>(13)
+  const [logSearchQuery, setLogSearchQuery] = useState<string>('')
+
+  // Fullscreen terminal features (Word Wrap, Auto Scroll lock, and element Ref)
+  const [isTerminalFullscreen, setIsTerminalFullscreen] = useState<boolean>(false)
+  const [isWordWrapEnabled, setIsWordWrapEnabled] = useState<boolean>(true)
+  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState<boolean>(true)
+  const fullscreenTerminalRef = useRef<HTMLDivElement>(null)
+  const [isIframeLoading, setIsIframeLoading] = useState<boolean>(true)
+
   // Reset profile editing states when modal is closed
   useEffect(() => {
     if (!isTriggerModalOpen) {
@@ -479,6 +505,7 @@ export default function App() {
   // Logout handler
   const handleLogout = useCallback(() => {
     localStorage.removeItem('qarunner_token')
+    document.cookie = "token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict"
     setToken(null)
     setCurrentUser(null)
     setSelectedRunId(null)
@@ -543,6 +570,7 @@ export default function App() {
   // Fetch a single run details (with stdout/stderr)
   const fetchSelectedRunDetails = useCallback(async (runId: string) => {
     if (!token) return
+    setDetailsLoading(true)
     try {
       const resp = await fetch(`/runs/${runId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -557,6 +585,8 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error fetching run details:', err)
+    } finally {
+      setDetailsLoading(false)
     }
   }, [token, handleLogout])  // Fetch saved test profiles
   const fetchProfiles = useCallback(async () => {
@@ -904,6 +934,7 @@ export default function App() {
       if (resp.ok) {
         const data = await resp.json()
         localStorage.setItem('qarunner_token', data.access_token)
+        document.cookie = `token=${data.access_token}; path=/; max-age=86400; SameSite=Strict`
         setToken(data.access_token)
         setLoginUsername('')
         setLoginPassword('')
@@ -1226,6 +1257,7 @@ export default function App() {
   // Initial loads on auth state changes
   useEffect(() => {
     if (token) {
+      document.cookie = `token=${token}; path=/; max-age=86400; SameSite=Strict`
       fetchProfile(token)
       fetchRuns()
       fetchTests()
@@ -1263,12 +1295,34 @@ export default function App() {
 
   // Fetch full details whenever a run is selected
   useEffect(() => {
+    setLogLevelFilter('ALL')
+    setStreamedStdout('') // Clear streamed logs when selecting a different run
     if (selectedRunId) {
       fetchSelectedRunDetails(selectedRunId)
     } else {
       setSelectedRunDetails(null)
     }
   }, [selectedRunId, fetchSelectedRunDetails])
+
+  // When selected run transitions from active to inactive, fetch details once to get the completed logs
+  const lastStatusRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedRunId) {
+      lastStatusRef.current = null
+      return
+    }
+    // Listen to shallow list status first to break circular deadlock in case of interval starvation
+    const shallowRun = runs.find(r => r.id === selectedRunId)
+    const currentStatus = shallowRun?.status || selectedRunDetails?.status || null
+    const wasActive = lastStatusRef.current === 'running' || lastStatusRef.current === 'queued'
+    const isInactive = currentStatus && currentStatus !== 'running' && currentStatus !== 'queued'
+
+    if (wasActive && isInactive) {
+      fetchSelectedRunDetails(selectedRunId)
+      fetchRuns()
+    }
+    lastStatusRef.current = currentStatus
+  }, [selectedRunId, runs, selectedRunDetails?.status, fetchSelectedRunDetails, fetchRuns])
 
   // Connect to EventSource for SSE live log streaming when a run is active
   useEffect(() => {
@@ -1283,7 +1337,8 @@ export default function App() {
 
     const isActive = run.status === 'running' || run.status === 'queued'
     if (!isActive) {
-      setStreamedStdout('')
+      // Don't clear streamedStdout immediately so we don't flash a blank screen
+      // while we fetch the completed logs from the backend.
       setIsStreaming(false)
       return
     }
@@ -1313,39 +1368,72 @@ export default function App() {
 
   // Scroll terminal logs to bottom on changes
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    if (isAutoScrollEnabled) {
+      if (terminalRef.current) {
+        terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+      }
+      if (fullscreenTerminalRef.current) {
+        fullscreenTerminalRef.current.scrollTop = fullscreenTerminalRef.current.scrollHeight
+      }
     }
-  }, [selectedRun?.stdout, selectedRun?.stderr, streamedStdout, isStreaming, drawerTab])
+  }, [selectedRun?.stdout, selectedRun?.stderr, streamedStdout, isStreaming, drawerTab, logSearchQuery, isAutoScrollEnabled, isTerminalFullscreen])
 
-  // Reset drawer tab to 'logs' when selected run changes
+  // Reset drawer tab, logs search query, and fullscreen status when selected run changes
   useEffect(() => {
     if (selectedRunId) {
       setDrawerTab('logs')
+      setLogSearchQuery('')
+      setIsTerminalFullscreen(false)
+      setIsIframeLoading(true)
     }
   }, [selectedRunId])
+
+  // Reset iframe loading state when drawer tab changes to ensure smooth loading transitions
+  useEffect(() => {
+    setIsIframeLoading(true)
+  }, [drawerTab])
+
+  // Create refs to capture latest state values for starvation-free polling
+  const runsRef = useRef(runs)
+  const selectedRunIdRef = useRef(selectedRunId)
+  const selectedRunDetailsRef = useRef(selectedRunDetails)
+
+  // Keep refs synchronized with the latest state
+  useEffect(() => {
+    runsRef.current = runs
+  }, [runs])
+
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId
+  }, [selectedRunId])
+
+  useEffect(() => {
+    selectedRunDetailsRef.current = selectedRunDetails
+  }, [selectedRunDetails])
 
   // Automated real-time polling
   useEffect(() => {
     if (!token) return
 
-    // Check if there are any active runs
-    const hasActiveRuns = runs.some(r => r.status === 'queued' || r.status === 'running')
-    const isSelectedActive = selectedRun && (selectedRun.status === 'queued' || selectedRun.status === 'running')
-
-    if (!hasActiveRuns && !isSelectedActive) {
-      return
-    }
-
     const interval = setInterval(() => {
-      fetchRuns()
-      if (selectedRunId && isSelectedActive) {
-        fetchSelectedRunDetails(selectedRunId)
+      const currentRuns = runsRef.current
+      const currentSelectedId = selectedRunIdRef.current
+      const currentDetails = selectedRunDetailsRef.current
+
+      const hasActiveRuns = currentRuns.some(r => r.status === 'queued' || r.status === 'running')
+      const activeSelectedRun = currentDetails || currentRuns.find(r => r.id === currentSelectedId) || null
+      const isSelectedActive = activeSelectedRun && (activeSelectedRun.status === 'queued' || activeSelectedRun.status === 'running')
+
+      if (hasActiveRuns || isSelectedActive) {
+        fetchRuns()
+        if (currentSelectedId && isSelectedActive) {
+          fetchSelectedRunDetails(currentSelectedId)
+        }
       }
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [token, runs, selectedRunId, selectedRun, fetchRuns, fetchSelectedRunDetails])
+  }, [token, fetchRuns, fetchSelectedRunDetails])
 
 
   // Utility formatting helpers
@@ -1582,6 +1670,120 @@ export default function App() {
     return true
   })
 
+  // Log downloading helper
+  const downloadLogs = (runId: string) => {
+    const logText = isStreaming 
+      ? streamedStdout 
+      : (selectedRun?.stdout || '') + '\n' + (selectedRun?.stderr || '');
+    const blob = new Blob([logText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `run_${runId}_execution.log`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Log level filtering helper
+  const matchesLogLevel = (line: string, filter: 'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS') => {
+    if (filter === 'ALL') return true;
+    const lowerLine = line.toLowerCase();
+    if (filter === 'ERROR') {
+      return (
+        lowerLine.includes('failed') ||
+        lowerLine.includes('error') ||
+        lowerLine.includes('exception') ||
+        lowerLine.includes('traceback') ||
+        line.startsWith('E   ') ||
+        line.startsWith('>   ')
+      );
+    }
+    if (filter === 'WARNING') {
+      return lowerLine.includes('warning') || lowerLine.includes('userwarning') || lowerLine.includes('deprecationwarning');
+    }
+    if (filter === 'SUCCESS') {
+      return lowerLine.includes('passed');
+    }
+    return true;
+  };
+
+  // Log filtering helper
+  const getFilteredLogs = (text: string) => {
+    if (!text) return '';
+    let lines = text.split('\n');
+
+    // First stage: Filter by log level
+    if (logLevelFilter !== 'ALL') {
+      lines = lines.filter(line => matchesLogLevel(line, logLevelFilter));
+    }
+
+    // Second stage: Filter by search query
+    if (logSearchQuery) {
+      const query = logSearchQuery.toLowerCase();
+      lines = lines.filter(line => line.toLowerCase().includes(query));
+    }
+
+    return lines.join('\n');
+  };
+
+  const filteredStdout = selectedRun?.stdout ? getFilteredLogs(selectedRun.stdout) : ''
+  const filteredStderr = selectedRun?.stderr ? getFilteredLogs(selectedRun.stderr) : ''
+  const filteredStreamed = streamedStdout ? getFilteredLogs(streamedStdout) : ''
+
+  // Aggregation helper for saved profiles statistics in the sidebar
+  const getProfileRunStats = (profile: any) => {
+    // Find all completed/failed/timeout/running runs matching this profile's tests_path
+    const profileRuns = runs.filter(r => r.tests_path === profile.tests_path)
+
+    // Finished runs for pass rate calculation (completed, failed, timeout)
+    const finishedRuns = profileRuns.filter(r => r.status === 'completed' || r.status === 'failed' || r.status === 'timeout')
+
+    let passRate = 0
+    if (finishedRuns.length > 0) {
+      const passedCount = finishedRuns.filter(r => r.status === 'completed' && r.passed === true).length
+      passRate = Math.round((passedCount / finishedRuns.length) * 100)
+    }
+
+    // Last 5 runs chronologically from left to right (oldest to newest)
+    const last5 = profileRuns.slice(0, 5).reverse()
+
+    return {
+      passRate,
+      hasRuns: finishedRuns.length > 0,
+      last5
+    };
+  };
+
+  // Regex syntax highlighter for comfortable reading
+  const formatLogLine = (line: string) => {
+    if (line.startsWith('====') || line.startsWith('----') || line.includes('test session starts')) {
+      return <span className={styles.logHeaderLine}>{line}</span>
+    }
+    if (line.includes('PASSED') || line.includes('passed') && (line.includes('in ') || line.includes('==='))) {
+      return <span className={styles.logSuccessLine}>{line}</span>
+    }
+    if (line.includes('FAILED') || line.includes('failed') || line.includes('AssertionError') || line.includes('ValueError') || line.startsWith('E   ') || line.startsWith('>   ')) {
+      return <span className={styles.logErrorLine}>{line}</span>
+    }
+    if (line.includes('WARNING') || line.includes('warning') || line.includes('UserWarning')) {
+      return <span className={styles.logWarningLine}>{line}</span>
+    }
+    return <span>{line}</span>
+  }
+
+  const renderFormattedLogs = (text: string) => {
+    if (!text) return null
+    const lines = text.split('\n')
+    return lines.map((line, idx) => (
+      <div key={idx} className={styles.terminalLineRow}>
+        <span className={styles.terminalLineNumber}>{idx + 1}</span>
+        <span className={styles.terminalLineContent}>{formatLogLine(line)}</span>
+      </div>
+    ))
+  }
+
   // Rendering 2: Full Dashboard View for Authenticated Users
   return (
     <div className={styles.appContainer}>
@@ -1785,44 +1987,108 @@ export default function App() {
                         {suiteProfiles.map(profile => {
                           const existingSched = schedules.find(s => s.profile_id === profile.id);
                           const isSchedActive = existingSched?.enabled;
+
+                          // Compute dynamic run statistics
+                          const stats = getProfileRunStats(profile);
+                          const dots: React.ReactNode[] = [];
+
+                          // Pad with empty dots to keep layout consistent at 5 dots
+                          for (let i = 0; i < 5 - stats.last5.length; i++) {
+                            dots.push(
+                              <span 
+                                key={`empty-${i}`} 
+                                className={`${styles.historyDot} ${styles.dotEmpty}`} 
+                                title={lang === 'zh' ? '无执行记录' : 'No execution'} 
+                              />
+                            );
+                          }
+
+                          // Fill with recent execution colored dots
+                          stats.last5.forEach(run => {
+                            let dotClass = styles.dotEmpty;
+                            let tooltip = '';
+                            if (run.status === 'running' || run.status === 'queued') {
+                              dotClass = styles.dotRunning;
+                              tooltip = lang === 'zh' ? '运行中...' : 'Running...';
+                            } else if (run.status === 'completed' && run.passed) {
+                              dotClass = styles.dotPass;
+                              tooltip = lang === 'zh' 
+                                ? `已通过 (耗时: ${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}秒)\n${new Date(run.created_at).toLocaleString()}` 
+                                : `Passed (${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}s)\n${new Date(run.created_at).toLocaleString()}`;
+                            } else {
+                              dotClass = styles.dotFail;
+                              tooltip = lang === 'zh' 
+                                ? `未通过\n${new Date(run.created_at).toLocaleString()}` 
+                                : `Failed\n${new Date(run.created_at).toLocaleString()}`;
+                            }
+
+                            dots.push(
+                              <span 
+                                key={run.id} 
+                                className={`${styles.historyDot} ${dotClass}`} 
+                                title={tooltip}
+                                onClick={() => setSelectedRunId(run.id)}
+                              />
+                            );
+                          });
+
                           return (
                             <div key={profile.id} className={styles.nestedProfileItem} title={profile.description || ''}>
-                              <div className={styles.nestedProfileInfo}>
-                                <SlidersHorizontal size={11} className={styles.nestedProfileIcon} />
-                                <span className={styles.nestedProfileName}>{profile.name}</span>
-                                {isSchedActive && (
-                                  <span className={styles.activeScheduleIndicator} title={lang === 'zh' ? `定时已启用: ${existingSched.cron_expression}` : `Schedule active: ${existingSched.cron_expression}`} />
-                                )}
+                              {/* Row 1: Profile Main Info and Actions */}
+                              <div className={styles.nestedProfileMainRow}>
+                                <div className={styles.nestedProfileInfo}>
+                                  <SlidersHorizontal size={11} className={styles.nestedProfileIcon} />
+                                  <span className={styles.nestedProfileName}>{profile.name}</span>
+                                  {isSchedActive && (
+                                    <span className={styles.activeScheduleIndicator} title={lang === 'zh' ? `定时已启用: ${existingSched.cron_expression}` : `Schedule active: ${existingSched.cron_expression}`} />
+                                  )}
+                                </div>
+                                <div className={styles.nestedProfileActions}>
+                                  <button 
+                                    className={styles.nestedProfilePlayButton}
+                                    title={lang === 'zh' ? '立即执行' : 'Instant Run'}
+                                    onClick={() => handleTriggerProfile(profile)}
+                                  >
+                                    <Play size={8} fill="currentColor" />
+                                  </button>
+                                  <button 
+                                    className={styles.nestedProfileEditButton}
+                                    title={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
+                                    onClick={() => handleOpenEditProfile(profile)}
+                                  >
+                                    <Pencil size={8} />
+                                  </button>
+                                  <button 
+                                    className={`${styles.nestedProfileClockButton} ${isSchedActive ? styles.nestedProfileClockButtonActive : ''}`}
+                                    title={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
+                                    onClick={() => handleOpenScheduleModal(profile)}
+                                  >
+                                    <Clock size={8} />
+                                  </button>
+                                  <button 
+                                    className={styles.nestedProfileDeleteButton}
+                                    title={lang === 'zh' ? '删除方案' : 'Delete Profile'}
+                                    onClick={(e) => handleDeleteProfile(profile.id, e)}
+                                  >
+                                    <X size={8} />
+                                  </button>
+                                </div>
                               </div>
-                              <div className={styles.nestedProfileActions}>
-                                <button 
-                                  className={styles.nestedProfilePlayButton}
-                                  title={lang === 'zh' ? '立即执行' : 'Instant Run'}
-                                  onClick={() => handleTriggerProfile(profile)}
-                                >
-                                  <Play size={8} fill="currentColor" />
-                                </button>
-                                <button 
-                                  className={styles.nestedProfileEditButton}
-                                  title={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
-                                  onClick={() => handleOpenEditProfile(profile)}
-                                >
-                                  <Pencil size={8} />
-                                </button>
-                                <button 
-                                  className={`${styles.nestedProfileClockButton} ${isSchedActive ? styles.nestedProfileClockButtonActive : ''}`}
-                                  title={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
-                                  onClick={() => handleOpenScheduleModal(profile)}
-                                >
-                                  <Clock size={8} />
-                                </button>
-                                <button 
-                                  className={styles.nestedProfileDeleteButton}
-                                  title={lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                                  onClick={(e) => handleDeleteProfile(profile.id, e)}
-                                >
-                                  <X size={8} />
-                                </button>
+
+                              {/* Row 2: Performance metrics and historical circles */}
+                              <div className={styles.nestedProfileStatsRow}>
+                                {stats.hasRuns ? (
+                                  <span className={`${styles.profilePassRateBadge} ${stats.passRate >= 80 ? styles.badgeHighPass : stats.passRate >= 50 ? styles.badgeMediumPass : styles.badgeLowPass}`}>
+                                    {stats.passRate}% {lang === 'zh' ? '通过率' : 'Pass'}
+                                  </span>
+                                ) : (
+                                  <span className={styles.profileNoRunsBadge}>
+                                    {lang === 'zh' ? '暂无记录' : 'No runs'}
+                                  </span>
+                                )}
+                                <div className={styles.profileHistoryDots} title={lang === 'zh' ? '最近 5 次执行历史 (从左至右: 较早 -> 最新，点击圆点可载入日志)' : 'Last 5 runs (left to right: older -> newest, click to load logs)'}>
+                                  {dots}
+                                </div>
                               </div>
                             </div>
                           );
@@ -1850,21 +2116,21 @@ export default function App() {
                 onClick={() => setLogFilterTab('All')}
               >
                 <Activity size={12} />
-                <span>{lang === 'zh' ? '全部记录' : 'All Executions'}</span>
+                <span>{lang === 'zh' ? '全部记录' : 'All Runs'}</span>
               </button>
               <button 
                 className={`${styles.logFilterButton} ${logFilterTab === 'Manual' ? styles.logFilterButtonActive : ''}`}
                 onClick={() => setLogFilterTab('Manual')}
               >
                 <Users size={12} />
-                <span>{lang === 'zh' ? '手动调试' : 'Manual Debugging'}</span>
+                <span>{lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
               </button>
               <button 
                 className={`${styles.logFilterButton} ${logFilterTab === 'Scheduled' ? styles.logFilterButtonActive : ''}`}
                 onClick={() => setLogFilterTab('Scheduled')}
               >
                 <Clock size={12} />
-                <span>{lang === 'zh' ? '定时任务' : 'Automated Runs'}</span>
+                <span>{lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
               </button>
             </div>
 
@@ -2024,16 +2290,31 @@ export default function App() {
       </main>
 
       {/* Drawer: Detailed Run Information */}
-      <div className={`${styles.drawerOverlay} ${selectedRun ? styles.drawerOpen : ''}`} onClick={() => setSelectedRunId(null)}>
-        <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
+      <div className={`${styles.drawerOverlay} ${selectedRun ? styles.drawerOpen : ''}`} onClick={() => {
+        setSelectedRunId(null)
+        setIsDrawerExpanded(false)
+      }}>
+        <div className={`${styles.drawer} ${isDrawerExpanded ? styles.drawerExpanded : ''}`} onClick={(e) => e.stopPropagation()}>
           <div className={styles.drawerHeader}>
             <div className={styles.drawerTitleGroup}>
               <h3>{t('executionDetails')}</h3>
               <code>{t('id')}: {selectedRun?.id}</code>
             </div>
-            <button className={styles.drawerCloseButton} onClick={() => setSelectedRunId(null)}>
-              <X size={20} />
-            </button>
+            <div className={styles.drawerHeaderActions}>
+              <button 
+                className={styles.drawerExpandButton} 
+                onClick={() => setIsDrawerExpanded(!isDrawerExpanded)}
+                title={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
+              >
+                {isDrawerExpanded ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+              </button>
+              <button className={styles.drawerCloseButton} onClick={() => {
+                setSelectedRunId(null)
+                setIsDrawerExpanded(false)
+              }}>
+                <X size={20} />
+              </button>
+            </div>
           </div>
 
           {selectedRun && (
@@ -2123,13 +2404,97 @@ export default function App() {
                         <Terminal size={14} className={styles.terminalHeaderIcon} />
                         <h4>{t('consoleLogs')}</h4>
                       </div>
-                      <div className={styles.terminalActionsGroup}>
+                      
+                      <div className={styles.terminalHeaderControls}>
+                        {/* Search Input Box */}
+                        <div className={styles.terminalSearchWrapper}>
+                          <Search size={12} className={styles.terminalSearchIcon} />
+                          <input 
+                            type="text" 
+                            className={styles.terminalSearchInput}
+                            placeholder={lang === 'zh' ? "搜索日志..." : "Search logs..."}
+                            value={logSearchQuery}
+                            onChange={(e) => setLogSearchQuery(e.target.value)}
+                          />
+                          {logSearchQuery && (
+                            <button 
+                              className={styles.terminalSearchClear} 
+                              onClick={() => setLogSearchQuery('')}
+                              title={lang === 'zh' ? "清除搜索" : "Clear search"}
+                            >
+                              <X size={10} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Log Level Capsule Filters */}
+                        <div className={styles.logLevelCapsules}>
+                          {(['ALL', 'ERROR', 'WARNING', 'SUCCESS'] as const).map(level => {
+                            let levelLabel: string = level;
+                            if (lang === 'zh') {
+                              levelLabel = level === 'ALL' ? '全部' : level === 'ERROR' ? '异常' : level === 'WARNING' ? '警告' : '成功';
+                            } else {
+                              levelLabel = level === 'ALL' ? 'ALL' : level === 'ERROR' ? 'ERR' : level === 'WARNING' ? 'WARN' : 'OK';
+                            }
+                            return (
+                              <button
+                                key={level}
+                                className={`${styles.capsuleBtn} ${styles[`capsule_${level}`]} ${logLevelFilter === level ? styles.capsuleActive : ''}`}
+                                onClick={() => setLogLevelFilter(level)}
+                              >
+                                {levelLabel}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Font Sizer Controls */}
+                        <div className={styles.fontSizeControls}>
+                          <button 
+                            className={styles.fontSizeBtn}
+                            onClick={() => setTerminalFontSize(prev => Math.max(10, prev - 1))}
+                            title={lang === 'zh' ? "减小字号" : "Decrease Font Size"}
+                          >
+                            <ZoomOut size={12} />
+                          </button>
+                          <span className={styles.fontSizeValue}>{terminalFontSize}px</span>
+                          <button 
+                            className={styles.fontSizeBtn}
+                            onClick={() => setTerminalFontSize(prev => Math.min(20, prev + 1))}
+                            title={lang === 'zh' ? "增大字号" : "Increase Font Size"}
+                          >
+                            <ZoomIn size={12} />
+                          </button>
+                        </div>
+
+                        {/* Height toggle button */}
+                        <button 
+                          className={styles.terminalHeightBtn}
+                          onClick={() => setIsTerminalHeightExpanded(!isTerminalHeightExpanded)}
+                          title={isTerminalHeightExpanded ? (lang === 'zh' ? "折叠控制台高度" : "Minimize height") : (lang === 'zh' ? "展开控制台高度" : "Maximize height")}
+                        >
+                          {isTerminalHeightExpanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                        </button>
+
+                        {/* Fullscreen toggle button */}
+                        <button 
+                          className={styles.terminalCopyButton}
+                          onClick={() => setIsTerminalFullscreen(true)}
+                          title={lang === 'zh' ? "全屏终端" : "Fullscreen Terminal"}
+                        >
+                          <Maximize2 size={12} />
+                          <span>{lang === 'zh' ? "全屏终端" : "Fullscreen"}</span>
+                        </button>
+
+                        {/* Live Streaming indicator */}
                         {(selectedRun.status === 'running' || selectedRun.status === 'queued') && (
                           <span className={isStreaming ? styles.livePulse : styles.streamingIndicator}>
                             {!isStreaming && <span className={styles.streamingDot}></span>}
-                            {isStreaming ? (lang === 'zh' ? '实时流式传输' : 'LIVE STREAMING') : t('streaming')}
+                            {isStreaming ? (lang === 'zh' ? '实时' : 'LIVE') : t('streaming')}
                           </span>
                         )}
+
+                        {/* Copy Button */}
                         <button 
                           className={styles.terminalCopyButton}
                           onClick={() => {
@@ -2142,12 +2507,30 @@ export default function App() {
                           {copySuccess ? <Check size={12} style={{ color: '#10b981' }} /> : <Copy size={12} />}
                           <span>{copySuccess ? t('copied') : t('copy')}</span>
                         </button>
+
+                        {/* Download Button */}
+                        <button 
+                          className={styles.terminalCopyButton}
+                          onClick={() => downloadLogs(selectedRun.id)}
+                          title={lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
+                        >
+                          <Download size={12} />
+                          <span>{t('download')}</span>
+                        </button>
                       </div>
                     </div>
-                    <div className={styles.terminalBlock} ref={terminalRef}>
+                    <div 
+                      className={`${styles.terminalBlock} ${isTerminalHeightExpanded ? styles.terminalBlockExpanded : ''}`} 
+                      ref={terminalRef}
+                      style={{ fontSize: `${terminalFontSize}px` }}
+                    >
                       {isStreaming ? (
-                        streamedStdout ? (
-                          <pre className={styles.stdoutPre}>{streamedStdout}</pre>
+                        filteredStreamed ? (
+                          <pre className={styles.stdoutPre}>{renderFormattedLogs(filteredStreamed)}</pre>
+                        ) : streamedStdout ? (
+                          <span className={styles.terminalPlaceholder}>
+                            {lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+                          </span>
                         ) : (
                           <span className={styles.terminalPlaceholder}>
                             <span className={styles.waitingLogs}>
@@ -2155,11 +2538,27 @@ export default function App() {
                             </span>
                           </span>
                         )
-                      ) : (selectedRun.stdout || selectedRun.stderr) ? (
-                        <>
-                          {selectedRun.stdout && <pre className={styles.stdoutPre}>{selectedRun.stdout}</pre>}
-                          {selectedRun.stderr && <pre className={styles.stderrPre}>{selectedRun.stderr}</pre>}
-                        </>
+                      ) : (selectedRun.stdout || selectedRun.stderr || streamedStdout) ? (
+                        (filteredStdout || filteredStderr || filteredStreamed) ? (
+                          <>
+                            {(filteredStdout || (selectedRunDetails ? null : filteredStreamed)) && (
+                              <pre className={styles.stdoutPre}>
+                                {renderFormattedLogs(filteredStdout || filteredStreamed)}
+                              </pre>
+                            )}
+                            {filteredStderr && <pre className={styles.stderrPre}>{renderFormattedLogs(filteredStderr)}</pre>}
+                          </>
+                        ) : (
+                          <span className={styles.terminalPlaceholder}>
+                            {lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+                          </span>
+                        )
+                      ) : detailsLoading ? (
+                        <span className={styles.terminalPlaceholder}>
+                          <span className={styles.waitingLogs}>
+                            <span className={styles.pulsingText}>{lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
+                          </span>
+                        </span>
                       ) : (
                         <span className={styles.terminalPlaceholder}>
                           {t('noLogsAvailable')}
@@ -2278,21 +2677,42 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Action: Open Allure Report */}
+                  {/* Action: Open Allure Report (Inline Iframe Integration) */}
                   {selectedRun.report?.html_generated && selectedRun.report?.allure_report_file ? (
-                    <div className={styles.reportCtaWrapper}>
-                      <a 
-                        href={`/runs/${selectedRun.id}/report?token=${token}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={styles.reportCtaButton}
-                      >
-                        <span>{t('openAllureReport')}</span>
-                        <ExternalLink size={16} />
-                      </a>
-                      <p className={styles.reportHint}>
-                        {t('allureReportDesc')}
-                      </p>
+                    <div className={styles.reportIframeContainer}>
+                      <div className={styles.reportIframeHeader}>
+                        <div className={styles.reportIframeTitle}>
+                          <BarChart3 size={14} style={{ color: '#a855f7' }} />
+                          <span>{lang === 'zh' ? 'Allure 交互式测试报告' : 'Allure Interactive Test Report'}</span>
+                        </div>
+                        <div className={styles.reportIframeHeaderActions}>
+                          <a 
+                            href={`/runs/${selectedRun.id}/report?token=${token}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={styles.terminalCopyButton}
+                            style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem' }}
+                            title={lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
+                          >
+                            <ExternalLink size={10} />
+                            <span>{lang === 'zh' ? '新窗口打开' : 'New Window'}</span>
+                          </a>
+                        </div>
+                      </div>
+
+                      {isIframeLoading && (
+                        <div className={styles.reportIframeLoading}>
+                          <RotateCw size={24} className={styles.spinIcon} style={{ color: '#06b6d4' }} />
+                          <span>{lang === 'zh' ? '正在载入测试报告资源...' : 'Loading Allure report resources...'}</span>
+                        </div>
+                      )}
+
+                      <iframe
+                        src={`/runs/${selectedRun.id}/report?token=${token}`}
+                        className={styles.reportIframe}
+                        onLoad={() => setIsIframeLoading(false)}
+                        title="Allure Report"
+                      />
                     </div>
                   ) : (
                     <div className={styles.reportPlaceholder}>
@@ -2317,6 +2737,194 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* Fullscreen Terminal Overlay */}
+      {isTerminalFullscreen && selectedRun && (
+        <div 
+          className={styles.fullscreenTerminalOverlay} 
+          onClick={() => setIsTerminalFullscreen(false)}
+        >
+          <div 
+            className={styles.fullscreenTerminal} 
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header Controls */}
+            <div className={styles.fullscreenTerminalHeader}>
+              <div className={styles.terminalTitleGroup}>
+                <Terminal size={16} className={styles.terminalHeaderIcon} />
+                <h3 className={styles.fullscreenTerminalTitle}>
+                  {lang === 'zh' ? '只读控制台终端' : 'Read-only Console Terminal'}
+                  <span className={styles.fullscreenTerminalSub}>
+                    #{selectedRun.id}
+                  </span>
+                </h3>
+              </div>
+              
+              <div className={styles.fullscreenTerminalControls}>
+                {/* Search Box */}
+                <div className={styles.terminalSearchWrapper}>
+                  <Search size={12} className={styles.terminalSearchIcon} />
+                  <input 
+                    type="text" 
+                    className={styles.terminalSearchInput}
+                    placeholder={lang === 'zh' ? "搜索日志..." : "Search logs..."}
+                    value={logSearchQuery}
+                    onChange={(e) => setLogSearchQuery(e.target.value)}
+                  />
+                  {logSearchQuery && (
+                    <button 
+                      className={styles.terminalSearchClear} 
+                      onClick={() => setLogSearchQuery('')}
+                      title={lang === 'zh' ? "清除搜索" : "Clear search"}
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Log Level Capsule Filters */}
+                <div className={styles.logLevelCapsules}>
+                  {(['ALL', 'ERROR', 'WARNING', 'SUCCESS'] as const).map(level => {
+                    let levelLabel: string = level;
+                    if (lang === 'zh') {
+                      levelLabel = level === 'ALL' ? '全部' : level === 'ERROR' ? '异常' : level === 'WARNING' ? '警告' : '成功';
+                    } else {
+                      levelLabel = level === 'ALL' ? 'ALL' : level === 'ERROR' ? 'ERR' : level === 'WARNING' ? 'WARN' : 'OK';
+                    }
+                    return (
+                      <button
+                        key={level}
+                        className={`${styles.capsuleBtn} ${styles[`capsule_${level}`]} ${logLevelFilter === level ? styles.capsuleActive : ''}`}
+                        onClick={() => setLogLevelFilter(level)}
+                      >
+                        {levelLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Font Sizer Controls */}
+                <div className={styles.fontSizeControls}>
+                  <button 
+                    className={styles.fontSizeBtn}
+                    onClick={() => setTerminalFontSize(prev => Math.max(10, prev - 1))}
+                    title={lang === 'zh' ? "减小字号" : "Decrease Font Size"}
+                  >
+                    <ZoomOut size={12} />
+                  </button>
+                  <span className={styles.fontSizeValue}>{terminalFontSize}px</span>
+                  <button 
+                    className={styles.fontSizeBtn}
+                    onClick={() => setTerminalFontSize(prev => Math.min(24, prev + 1))}
+                    title={lang === 'zh' ? "增大字号" : "Increase Font Size"}
+                  >
+                    <ZoomIn size={12} />
+                  </button>
+                </div>
+
+                {/* Word Wrap Toggle */}
+                <button 
+                  className={`${styles.terminalToolbarBtn} ${isWordWrapEnabled ? styles.terminalToolbarBtnActive : ''}`}
+                  onClick={() => setIsWordWrapEnabled(!isWordWrapEnabled)}
+                  title={isWordWrapEnabled ? (lang === 'zh' ? "禁用自动换行" : "Disable word wrap") : (lang === 'zh' ? "启用自动换行" : "Enable word wrap")}
+                >
+                  {lang === 'zh' ? '自动换行' : 'Word Wrap'}
+                </button>
+
+                {/* Auto Scroll Toggle */}
+                <button 
+                  className={`${styles.terminalToolbarBtn} ${isAutoScrollEnabled ? styles.terminalToolbarBtnActive : ''}`}
+                  onClick={() => setIsAutoScrollEnabled(!isAutoScrollEnabled)}
+                  title={isAutoScrollEnabled ? (lang === 'zh' ? "锁定滚动" : "Freeze scrolling") : (lang === 'zh' ? "自动滚动" : "Auto scroll")}
+                >
+                  {lang === 'zh' ? '滚动锁定' : 'Scroll Lock'}
+                </button>
+
+                {/* Copy Button */}
+                <button 
+                  className={styles.terminalCopyButton}
+                  onClick={() => {
+                    const logsText = isStreaming 
+                      ? streamedStdout 
+                      : (selectedRun.stdout || '') + '\n' + (selectedRun.stderr || '');
+                    copyToClipboard(logsText);
+                  }}
+                >
+                  {copySuccess ? <Check size={12} style={{ color: '#10b981' }} /> : <Copy size={12} />}
+                  <span>{copySuccess ? t('copied') : t('copy')}</span>
+                </button>
+
+                {/* Download Button */}
+                <button 
+                  className={styles.terminalCopyButton}
+                  onClick={() => downloadLogs(selectedRun.id)}
+                  title={lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
+                >
+                  <Download size={12} />
+                  <span>{t('download')}</span>
+                </button>
+
+                {/* Close Button */}
+                <button 
+                  className={styles.fullscreenTerminalCloseBtn}
+                  onClick={() => setIsTerminalFullscreen(false)}
+                  title={lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Terminal Content Body */}
+            <div 
+              className={`${styles.fullscreenTerminalBody} ${!isWordWrapEnabled ? styles.noWrapPre : ''}`}
+              ref={fullscreenTerminalRef}
+              style={{ fontSize: `${terminalFontSize}px` }}
+            >
+              {isStreaming ? (
+                filteredStreamed ? (
+                  <pre className={styles.stdoutPre}>{renderFormattedLogs(filteredStreamed)}</pre>
+                ) : streamedStdout ? (
+                  <span className={styles.terminalPlaceholder}>
+                    {lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+                  </span>
+                ) : (
+                  <span className={styles.terminalPlaceholder}>
+                    <span className={styles.waitingLogs}>
+                      <span className={styles.pulsingText}>{t('waitingLogs')}</span>
+                    </span>
+                  </span>
+                )
+              ) : (selectedRun.stdout || selectedRun.stderr || streamedStdout) ? (
+                (filteredStdout || filteredStderr || filteredStreamed) ? (
+                  <>
+                    {(filteredStdout || (selectedRunDetails ? null : filteredStreamed)) && (
+                      <pre className={styles.stdoutPre}>
+                        {renderFormattedLogs(filteredStdout || filteredStreamed)}
+                      </pre>
+                    )}
+                    {filteredStderr && <pre className={styles.stderrPre}>{renderFormattedLogs(filteredStderr)}</pre>}
+                  </>
+                ) : (
+                  <span className={styles.terminalPlaceholder}>
+                    {lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+                  </span>
+                )
+              ) : detailsLoading ? (
+                <span className={styles.terminalPlaceholder}>
+                  <span className={styles.waitingLogs}>
+                    <span className={styles.pulsingText}>{lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
+                  </span>
+                </span>
+              ) : (
+                <span className={styles.terminalPlaceholder}>
+                  {t('noLogsAvailable')}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Trigger Run */}
       {isTriggerModalOpen && (
