@@ -164,6 +164,7 @@ P0 阻断（上线前必须）   ──►  P1 正确性   ──►  P2 架构/
 - **改法**：触发时 DB 条件更新做 leader 去重：`UPDATE test_schedules SET last_run_at=? WHERE id=? AND (last_run_at IS NULL OR last_run_at < ?)`，靠 `rowcount==1` 决定是否执行；或将调度拆为独立单实例进程。seed 改 `INSERT OR IGNORE`，`ALTER` 包 `OperationalError` 容错。
 - **验收**：模拟双 worker 同一 cron 点仅一个 run 被创建；空库双进程首启不崩。
 - **依赖**：DATA-1。**估时**：M
+- ⚠️ **关联缺陷（DATA-3 已落地代码引入，self-review 发现）**：启动时的孤儿恢复 `SqliteStore.mark_interrupted_runs()`（由 `api/app.py` lifespan 调用）无条件把所有 `QUEUED/RUNNING` 置 FAILED，**隐含"单实例"假设**。多 worker 下，后启动的 worker 会把其它 worker 此刻正在执行的 RUNNING run 误杀为 FAILED。当前单 worker 部署不触发；放开多 worker 前必须连同本项一并解决——要么把恢复/调度限定在单实例进程，要么按 `started_at` + 进程心跳/租约只回收真正的孤儿，而非全量。
 
 ### SEC-6 🟠 token 不再进 URL
 - **问题**：`?token=<JWT>` 进访问日志 / 历史 / Referer；前端 SSE/iframe/下载链接都拼了长效 JWT。
