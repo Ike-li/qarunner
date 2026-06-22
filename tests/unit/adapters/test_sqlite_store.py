@@ -190,10 +190,9 @@ async def test_schema_migration_adds_created_by(tmp_path) -> None:
     store = SqliteStore(db_path)
     await store.initialize()
 
-    assert store._db is not None
-    async with store._db.execute("PRAGMA table_info(runs)") as cursor:
+    async with store._connect() as db, db.execute("PRAGMA table_info(runs)") as cursor:
         columns = [row[1] for row in await cursor.fetchall()]
-        assert "created_by" in columns
+    assert "created_by" in columns
 
     await store.close()
 
