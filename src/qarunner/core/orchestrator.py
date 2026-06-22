@@ -90,6 +90,38 @@ def _compile_args(req: RunRequest, tests_dir: str) -> list[str]:
     return compiled
 
 
+# Environment-variable names (exact) and prefixes that let a child process
+# hijack dynamic-library loading, the Python import path, or command
+# resolution — classic sandbox-escape / code-injection vectors. Rejected from
+# caller-supplied ``env`` so untrusted test code can't, for example, set
+# LD_PRELOAD to load arbitrary native code into the runner (FUNC-1 + SEC-3 H-3).
+_DANGEROUS_ENV_PREFIXES = ("LD_", "DYLD_", "PYTHON")
+_DANGEROUS_ENV_NAMES = frozenset({"PATH", "BASH_ENV"})
+
+
+def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
+    """Validate a caller-supplied environment mapping (FUNC-1).
+
+    Rejects names that could alter dynamic-linker / interpreter behaviour or
+    command resolution (``LD_*``/``DYLD_*``/``PYTHON*``/``PATH``/``BASH_ENV``,
+    matched case-insensitively), plus malformed entries (empty name, ``=`` or
+    NUL in a name, NUL in a value) that would otherwise fail at the subprocess
+    boundary. Raises ``UnsafeArguments`` (→ HTTP 400) on violation; returns a
+    shallow copy when safe.
+    """
+    for key, value in env.items():
+        if not key or "=" in key or "\x00" in key:
+            raise UnsafeArguments(f"invalid environment variable name {key!r}")
+        if "\x00" in value:
+            raise UnsafeArguments(f"invalid value for environment variable {key!r}")
+        upper = key.upper()
+        if upper in _DANGEROUS_ENV_NAMES or upper.startswith(_DANGEROUS_ENV_PREFIXES):
+            raise UnsafeArguments(
+                f"environment variable {key!r} is not allowed (injection vector)"
+            )
+    return dict(env)
+
+
 class RunOrchestrator:
     """Coordinates run creation and execution through pure port interactions."""
 
@@ -139,6 +171,7 @@ class RunOrchestrator:
         now = self._clock.now()
 
         compiled_args = _compile_args(req, tests_dir)
+        safe_env = _sanitize_env(req.env)
 
         run = Run(
             id=run_id,
@@ -151,6 +184,7 @@ class RunOrchestrator:
             timeout=req.timeout,
             executor_mode=req.executor_mode,
             created_at=now,
+            env=safe_env,
         )
         await self._store.save(run)
 
@@ -255,6 +289,7 @@ class RunOrchestrator:
             proc: ProcessResult = await runner_to_use.run(
                 cmd,
                 cwd=exec_cwd,
+                env=run.env,
                 timeout=timeout,
                 stdout_file=stdout_file,
                 stderr_file=stderr_file,

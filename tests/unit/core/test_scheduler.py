@@ -75,6 +75,39 @@ async def test_trigger_schedule_run_success(mock_app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_trigger_schedule_run_passes_profile_env(mock_app: FastAPI) -> None:
+    """FUNC-1: a profile's env is forwarded into the scheduled RunRequest."""
+    container = mock_app.state.container
+    schedule = TestSchedule(
+        id="sched-1",
+        name="Test Sched",
+        profile_id="prof-1",
+        cron_expression="*/5 * * * *",
+        enabled=True,
+        timezone="UTC",
+        created_by="user",
+        created_at=datetime.now(UTC),
+    )
+    profile = TestProfile(
+        id="prof-1",
+        name="Test Profile",
+        tests_path="sample",
+        created_by="user",
+        created_at=datetime.now(UTC),
+        env={"PROFILE_VAR": "from-profile"},
+    )
+    container.store.get_schedule = AsyncMock(return_value=schedule)
+    container.store.get_profile = AsyncMock(return_value=profile)
+    container.store.save_schedule = AsyncMock()
+    container.orchestrator.create = AsyncMock()
+
+    await trigger_schedule_run(mock_app, "sched-1")
+
+    run_req: RunRequest = container.orchestrator.create.call_args[0][0]
+    assert run_req.env == {"PROFILE_VAR": "from-profile"}
+
+
+@pytest.mark.asyncio
 async def test_trigger_schedule_run_missing_or_disabled(mock_app: FastAPI) -> None:
     container = mock_app.state.container
     

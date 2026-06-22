@@ -195,6 +195,79 @@ class TestCreateArgValidation:
         assert run.status == RunStatus.QUEUED
 
 
+class TestEnvHandling:
+    """FUNC-1: env reaches the runner; injection-vector keys are rejected."""
+
+    @pytest.mark.asyncio
+    async def test_create_stores_sanitized_env(self):
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="sample",
+            env={"API_BASE_URL": "https://x", "TOKEN": "t"},
+        )
+        run = await orch.create(req)
+        assert run.env == {"API_BASE_URL": "https://x", "TOKEN": "t"}
+
+    @pytest.mark.asyncio
+    async def test_execute_passes_env_to_runner(self):
+        captured = {}
+
+        def handler(cmd, cwd, env, timeout):
+            captured["env"] = env
+            return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=10)
+
+        orch = _make_orchestrator(
+            process_handler=handler,
+            collector_preset=CollectResult(
+                summary=TestSummary(
+                    total=0, passed=0, failed=0, skipped=0, error=0, duration_ms=0
+                ),
+                cases=[],
+            ),
+        )
+        req = RunRequest(tests_path="sample", env={"CUSTOM_VAR": "value-42"})
+        run = await orch.create(req)
+        await orch.execute(run.id)
+
+        assert captured["env"] == {"CUSTOM_VAR": "value-42"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            "PATH",
+            "BASH_ENV",
+            "ld_preload",  # matched case-insensitively
+            "Path",
+        ],
+    )
+    async def test_create_rejects_injection_env_keys(self, bad_key):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", env={bad_key: "x"})
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_key", ["", "A=B", "A\x00B"])
+    async def test_create_rejects_malformed_env_name(self, bad_key):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", env={bad_key: "x"})
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_env_value_with_nul(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", env={"GOOD": "bad\x00value"})
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+
 class TestExecute:
     """RunOrchestrator.execute() runs the full lifecycle."""
 

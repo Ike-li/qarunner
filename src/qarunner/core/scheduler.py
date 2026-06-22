@@ -44,6 +44,7 @@ async def trigger_schedule_run(app: FastAPI, schedule_id: str) -> None:
         selected_files=profile.selected_files,
         selected_markers=profile.selected_markers,
         extra_args=profile.extra_args,
+        env=profile.env,
     )
 
     try:
