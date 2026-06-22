@@ -7,7 +7,7 @@ import pytest
 from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
-from qarunner.errors import UnknownRunner, UnsafePath
+from qarunner.errors import UnknownRunner, UnsafeArguments, UnsafePath
 from qarunner.models import (
     CollectResult,
     ProcessResult,
@@ -120,6 +120,79 @@ class TestCreate:
         req = RunRequest(tests_path="../../etc")
         with pytest.raises(UnsafePath):
             await orch.create(req)
+
+
+class TestCreateArgValidation:
+    """create() rejects argv-injection vectors (SEC-1)."""
+
+    @pytest.mark.asyncio
+    async def test_extra_args_plugin_flag_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", extra_args="-p evil_plugin")
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_extra_args_override_ini_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", extra_args="-o addopts=-pevil")
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_extra_args_rootdir_equals_form_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", extra_args="--rootdir=/etc")
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_args_pyargs_flag_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", args=["--pyargs", "os"])
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_selected_file_dash_prefix_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", selected_files=["-p"])
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_selected_file_traversal_rejected(self):
+        orch = _make_orchestrator(tests_root="/work/tests")
+        req = RunRequest(tests_path="sample", selected_files=["../../../etc/passwd"])
+        with pytest.raises(UnsafePath):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_selected_file_non_py_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", selected_files=["conftest.ini"])
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_legitimate_args_and_files_compile(self):
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="sample",
+            args=["-k", "test_x"],
+            extra_args="--tb=short --maxfail=2",
+            selected_markers=["smoke"],
+            selected_files=["test_a.py", "sub/test_b.py::test_case"],
+        )
+        run = await orch.create(req)
+        assert run.args[:2] == ["-k", "test_x"]
+        assert "-m" in run.args
+        assert "smoke" in run.args
+        assert "--tb=short" in run.args
+        assert "--maxfail=2" in run.args
+        assert "test_a.py" in run.args
+        assert "sub/test_b.py::test_case" in run.args
+        assert run.status == RunStatus.QUEUED
 
 
 class TestExecute:
@@ -410,20 +483,20 @@ class TestWorkspaceJail:
         # 1. Create real tests directory and artifact directories using tmp_path
         tests_root = tmp_path / "tests_root"
         tests_root.mkdir()
-        
+
         # Create a sample test file inside the test suite path
         suite_path = "suite_abc"
         suite_dir = tests_root / suite_path
         suite_dir.mkdir()
-        
+
         test_file = suite_dir / "test_dummy.py"
         test_file.write_text("def test_dummy(): pass")
-        
+
         # Create a subdirectory that we expect to be ignored, e.g., .git or .venv
         git_dir = suite_dir / ".git"
         git_dir.mkdir()
         (git_dir / "config").write_text("dummy")
-        
+
         artifacts_root = tmp_path / "artifacts_root"
         artifacts_root.mkdir()
 
@@ -454,7 +527,7 @@ class TestWorkspaceJail:
         # 3. Create and execute the run
         req = RunRequest(tests_path=suite_path)
         run = await orch.create(req)
-        
+
         # Verify initial state of jail directory
         jail_dir = artifacts_root / run.id / "workspace"
         assert not jail_dir.exists()
@@ -541,11 +614,11 @@ class TestWorkspaceJail:
             )
         )
         orch._process_docker = mock_docker
-        
+
         req = RunRequest(tests_path="sample", executor_mode="docker")
         run = await orch.create(req)
         await orch.execute(run.id)
-        
+
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.FAILED  # FAILED because no collector results preset
 
@@ -557,19 +630,19 @@ class TestWorkspaceJail:
         tests_root.mkdir()
         suite_dir = tests_root / "suite_abc"
         suite_dir.mkdir()
-        
+
         artifacts_root = tmp_path / "artifacts"
         artifacts_root.mkdir()
-        
+
         orch = _make_orchestrator(tests_root=str(tests_root))
         orch._artifacts_root = str(artifacts_root)
-        
+
         req = RunRequest(tests_path="suite_abc")
         run = await orch.create(req)
-        
+
         with patch("shutil.copytree", side_effect=Exception("Copy failed")):
             await orch.execute(run.id)
-            
+
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.FAILED  # falls back and still completes execution flow
 
@@ -582,38 +655,38 @@ class TestWorkspaceJail:
         suite_dir = tests_root / "suite_abc"
         suite_dir.mkdir()
         (suite_dir / "test_x.py").write_text("def test_x(): pass")
-        
+
         artifacts_root = tmp_path / "artifacts"
         artifacts_root.mkdir()
-        
+
         orch = _make_orchestrator(tests_root=str(tests_root))
         orch._artifacts_root = str(artifacts_root)
-        
+
         req = RunRequest(tests_path="suite_abc")
         run = await orch.create(req)
-        
+
         with patch("shutil.rmtree", side_effect=Exception("Remove failed")):
             await orch.execute(run.id)
-            
+
         stored = await orch._store.get(run.id)
-        assert stored.status == RunStatus.FAILED  # still passes gracefully through rmtree except block!
+        assert stored.status == RunStatus.FAILED  # rmtree failure handled gracefully
 
     @pytest.mark.asyncio
     async def test_workspace_jail_ignore_artifacts_root(self, tmp_path):
         # Covers line 160
         tests_root = tmp_path / "tests_root"
         tests_root.mkdir()
-        
+
         # Put artifacts_root inside tests_root
         artifacts_root = tests_root / "runs"
         artifacts_root.mkdir()
-        
+
         orch = _make_orchestrator(tests_root=str(tests_root))
         orch._artifacts_root = str(artifacts_root)
-        
+
         req = RunRequest(tests_path="")
         run = await orch.create(req)
-        
+
         await orch.execute(run.id)
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.FAILED
@@ -623,19 +696,19 @@ class TestWorkspaceJail:
         # Covers line 162
         tests_root = tmp_path / "tests_root"
         tests_root.mkdir()
-        
+
         # We configure artifacts_root of the orchestrator to be tests_root
         # so that run_dir is tests_root / run_id
         orch = _make_orchestrator(tests_root=str(tests_root))
         orch._artifacts_root = str(tests_root)
-        
+
         # Create the fake run_id folder inside tests_root
         fake_run_dir = tests_root / "id-001"
         fake_run_dir.mkdir()
-        
+
         req = RunRequest(tests_path="")
         run = await orch.create(req)
-        
+
         await orch.execute(run.id)
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.FAILED

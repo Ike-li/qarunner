@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import sys
 from typing import TYPE_CHECKING
 
+from qarunner.core.paths import safe_subpath
 from qarunner.core.runners.base import BuildContext
+from qarunner.errors import UnsafeArguments
 from qarunner.models import (
     CollectResult,
     ProcessResult,
@@ -27,6 +30,64 @@ if TYPE_CHECKING:
     from qarunner.ports.store import RunStore
 
 logger = logging.getLogger(__name__)
+
+
+# Pytest flags that can load arbitrary code / plugins / config files and must
+# therefore never be accepted from untrusted run requests (argv-injection / RCE).
+_DANGEROUS_PYTEST_FLAGS = frozenset(
+    {
+        "-p",
+        "--plugins",
+        "-c",
+        "--config-file",
+        "--pyargs",
+        "--rootdir",
+        "--import-mode",
+        "-o",
+        "--override-ini",
+        "--confcutdir",
+        "--pythonpath",
+    }
+)
+
+
+# Directory entries never copied into the workspace jail.
+_JAIL_IGNORE_NAMES = frozenset(
+    {".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"}
+)
+
+
+def _compile_args(req: RunRequest, tests_dir: str) -> list[str]:
+    """Compile a validated pytest argv list from *req*.
+
+    Rejects argv-injection vectors: dangerous flags supplied via ``args`` or
+    ``extra_args``, and ``selected_files`` that escape the suite directory,
+    start with ``-``, or are not ``.py`` files. Raises ``UnsafeArguments``
+    (a ``UnsafePath`` subclass) on violation.
+    """
+    extra_tokens = shlex.split(req.extra_args) if req.extra_args.strip() else []
+
+    for token in list(req.args) + extra_tokens:
+        # Normalise "--rootdir=/x" / "-o key=val" to the bare flag before matching.
+        flag = token.split("=", 1)[0]
+        if flag in _DANGEROUS_PYTEST_FLAGS:
+            raise UnsafeArguments(f"pytest flag {flag!r} is not allowed in run arguments")
+
+    compiled: list[str] = list(req.args)
+    if req.selected_markers:
+        marker_expr = " or ".join(req.selected_markers)
+        compiled.extend(["-m", marker_expr])
+    compiled.extend(extra_tokens)
+    for selected in req.selected_files:
+        if selected.startswith("-"):
+            raise UnsafeArguments(f"selected file {selected!r} must not start with '-'")
+        # Allow pytest node ids ("file.py::test_x"); validate only the path part.
+        path_part = selected.split("::", 1)[0]
+        safe_subpath(tests_dir, path_part)  # raises UnsafePath if it escapes the suite
+        if not path_part.endswith(".py"):
+            raise UnsafeArguments(f"selected file {selected!r} must be a .py file")
+        compiled.append(selected)
+    return compiled
 
 
 class RunOrchestrator:
@@ -71,23 +132,13 @@ class RunOrchestrator:
         runner = self._registry.get(req.runner)  # raises UnknownRunner
 
         # 2. Validate path
-        from qarunner.core.paths import safe_subpath
+        tests_dir = safe_subpath(self._tests_root, req.tests_path)  # raises UnsafePath
 
-        safe_subpath(self._tests_root, req.tests_path)  # raises UnsafePath
-
-        # 3. Build and persist Run
+        # 3. Build and persist Run (args validated against argv-injection)
         run_id = self._ids.new_id()
         now = self._clock.now()
 
-        compiled_args = list(req.args)
-        if req.selected_markers:
-            marker_expr = " or ".join(req.selected_markers)
-            compiled_args.extend(["-m", marker_expr])
-        if req.extra_args and req.extra_args.strip():
-            import shlex
-            compiled_args.extend(shlex.split(req.extra_args))
-        if req.selected_files:
-            compiled_args.extend(req.selected_files)
+        compiled_args = _compile_args(req, tests_dir)
 
         run = Run(
             id=run_id,
@@ -130,8 +181,6 @@ class RunOrchestrator:
             results_dir = str(
                 (Path(self._artifacts_root) / run.id / "results").resolve()
             )
-            from qarunner.core.paths import safe_subpath
-
             tests_dir = safe_subpath(self._tests_root, run.tests_path)
 
             run_dir = Path(self._artifacts_root) / run.id
@@ -152,15 +201,16 @@ class RunOrchestrator:
                 import shutil
 
                 def ignore_patterns(dirpath: str, contents: list[str]) -> list[str]:
-                    to_ignore = []
                     resolved_dir = Path(dirpath).resolve()
+                    artifacts = Path(self._artifacts_root).resolve()
+                    run_resolved = run_dir.resolve()
+                    to_ignore = []
                     for name in contents:
                         resolved_child = (resolved_dir / name).resolve()
-                        if resolved_child == Path(self._artifacts_root).resolve():
-                            to_ignore.append(name)
-                        elif resolved_child == run_dir.resolve():
-                            to_ignore.append(name)
-                        elif name in {".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"}:
+                        if (
+                            resolved_child in (artifacts, run_resolved)
+                            or name in _JAIL_IGNORE_NAMES
+                        ):
                             to_ignore.append(name)
                     return to_ignore
 
@@ -177,10 +227,12 @@ class RunOrchestrator:
                     jail_created = True
                     logger.info("Workspace Jail successfully created at %s", exec_cwd)
                 else:
-                    logger.warning("Source tests_dir %s does not exist. Falling back without Workspace Jail.", tests_dir)
+                    logger.warning(
+                        "Source tests_dir %s does not exist; running without jail.", tests_dir
+                    )
             except Exception as e:
                 logger.warning(
-                    "Failed to create Workspace Jail at %s (error: %r). Falling back to direct execution in %s.",
+                    "Failed to create Workspace Jail at %s (%r); running directly in %s.",
                     jail_dir,
                     e,
                     tests_dir,
@@ -264,7 +316,9 @@ class RunOrchestrator:
                     shutil.rmtree(jail_dir, ignore_errors=True)
                     logger.info("Workspace Jail cleaned up at %s", jail_dir)
                 except Exception as clean_exc:
-                    logger.warning("Failed to cleanup Workspace Jail at %s: %r", jail_dir, clean_exc)
+                    logger.warning(
+                        "Failed to cleanup Workspace Jail at %s: %r", jail_dir, clean_exc
+                    )
 
 
 def _replace(run: Run, **kwargs: object) -> Run:
