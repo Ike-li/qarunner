@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,6 +14,8 @@ import aiosqlite
 
 from qarunner.errors import RunNotFound
 from qarunner.models import ReportRef, Run, RunStatus, TestProfile, TestSchedule, TestSummary
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -109,7 +112,15 @@ class SqliteStore:
             await db.close()
 
     async def initialize(self) -> None:
-        """Create schema, run migrations, enable WAL, and seed the admin user."""
+        """Create schema, run migrations, enable WAL, and seed the admin user.
+
+        The whole setup runs inside one ``BEGIN IMMEDIATE`` transaction so that
+        concurrent first-starts (CONC-2) serialise on the write lock via
+        busy_timeout instead of dead-locking on a read→write upgrade (which SQLite
+        surfaces as "database is locked" without honouring the timeout). Every
+        step is idempotent: ``CREATE ... IF NOT EXISTS``, tolerated ALTERs, and an
+        ``INSERT OR IGNORE`` seed.
+        """
         from qarunner.config import Settings
         from qarunner.core.auth import hash_password
 
@@ -120,9 +131,12 @@ class SqliteStore:
             self._keepalive = await aiosqlite.connect(self._db_path, uri=self._uri)
 
         async with self._connect() as db:
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.executescript(_SCHEMA)
-            await db.commit()
+            await self._enable_wal(db)
+            await db.execute("BEGIN IMMEDIATE")
+            for raw_statement in _SCHEMA.split(";"):
+                statement = raw_statement.strip()
+                if statement:
+                    await db.execute(statement)
             await self._migrate(db)
 
             async with db.execute("SELECT COUNT(*) FROM users") as cursor:
@@ -130,7 +144,7 @@ class SqliteStore:
             if row and row[0] == 0:
                 settings = Settings()
                 await db.execute(
-                    "INSERT INTO users (username, password_hash, role, created_at) "
+                    "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) "
                     "VALUES (?, ?, ?, ?)",
                     (
                         settings.admin_user,
@@ -139,11 +153,14 @@ class SqliteStore:
                         datetime.now(UTC).isoformat(),
                     ),
                 )
-                await db.commit()
+            await db.commit()
 
     @staticmethod
     async def _migrate(db: aiosqlite.Connection) -> None:
-        """Apply idempotent ALTER migrations so legacy databases gain new columns."""
+        """Apply idempotent ALTER migrations so legacy databases gain new columns.
+
+        Runs inside ``initialize``'s transaction; the caller commits.
+        """
         async with db.execute("PRAGMA table_info(runs)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
         run_migrations = [
@@ -160,15 +177,52 @@ class SqliteStore:
         ]
         for column, ddl in run_migrations:
             if column not in columns:
-                await db.execute(ddl)
+                await SqliteStore._safe_alter(db, "runs", column, ddl)
 
         async with db.execute("PRAGMA table_info(test_profiles)") as cursor:
             profile_columns = [row[1] for row in await cursor.fetchall()]
         if "env_json" not in profile_columns:
-            await db.execute(
-                "ALTER TABLE test_profiles ADD COLUMN env_json TEXT NOT NULL DEFAULT '{}'"
+            await SqliteStore._safe_alter(
+                db,
+                "test_profiles",
+                "env_json",
+                "ALTER TABLE test_profiles ADD COLUMN env_json TEXT NOT NULL DEFAULT '{}'",
             )
-        await db.commit()
+
+    @staticmethod
+    async def _enable_wal(db: aiosqlite.Connection) -> None:
+        """Switch to WAL mode, tolerating a concurrent first-start race (CONC-2).
+
+        Converting the journal mode needs an exclusive lock and — unlike ordinary
+        writes — does not honour busy_timeout, so two processes initialising a
+        fresh DB at once can collide. journal_mode is a persistent file-level
+        property, so once any initializer wins the conversion the DB is in WAL and
+        the loser may safely proceed (its later writes busy-wait normally).
+        """
+        try:
+            await db.execute("PRAGMA journal_mode=WAL")
+        except aiosqlite.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            logger.debug("WAL conversion contended by a concurrent initializer; tolerating")
+
+    @staticmethod
+    async def _safe_alter(db: aiosqlite.Connection, table: str, column: str, ddl: str) -> None:
+        """Run an ADD COLUMN migration, tolerating a concurrent first-start race.
+
+        With several processes initialising an empty DB at once (CONC-2), two may
+        both observe the column missing and both issue the ALTER; the loser raises
+        an OperationalError. That is benign as long as the column ends up present,
+        so re-check before swallowing and re-raise any genuine failure.
+        """
+        try:
+            await db.execute(ddl)
+        except aiosqlite.OperationalError:
+            async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+            if column not in columns:
+                raise
+            logger.debug("Column %s.%s added concurrently; tolerating ALTER race", table, column)
 
     async def get_user(self, username: str) -> dict | None:
         """Retrieve a user and their password hash from the database."""
@@ -400,6 +454,26 @@ class SqliteStore:
                 ),
             )
             await db.commit()
+
+    async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool:
+        """Atomically claim a cron fire for leader election across replicas (CONC-2).
+
+        Every replica runs its own in-process scheduler, so a single cron tick
+        fires the job once per replica. ``fire_time`` is that tick's scheduled
+        time (identical across replicas), so the conditional update advances
+        ``last_run_at`` to it only for the first caller; later callers see
+        ``last_run_at`` already at/after the tick and lose. Returns True iff this
+        caller won and should create the run.
+        """
+        fire_iso = fire_time.astimezone(UTC).isoformat()
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE test_schedules SET last_run_at = ? "
+                "WHERE id = ? AND (last_run_at IS NULL OR last_run_at < ?)",
+                (fire_iso, schedule_id, fire_iso),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def get_schedule(self, schedule_id: str) -> TestSchedule | None:
         async with self._connect() as db:

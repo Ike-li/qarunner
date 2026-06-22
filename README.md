@@ -74,6 +74,7 @@ All settings are read from environment variables with `QARUNNER_` prefix:
 | `QARUNNER_MAX_CONCURRENCY` | `4` | Maximum concurrent test runs |
 | `QARUNNER_ADMIN_USER` | `admin` | Initial default administrator username |
 | `QARUNNER_ADMIN_PASSWORD` | `admin123` | Initial default administrator password |
+| `QARUNNER_CRASH_RECOVERY_ON_STARTUP` | `true` | Fail QUEUED/RUNNING runs left by a previous process on startup. Assumes a single instance owns the DB — set `false` on all but one replica when scaling out, or sibling runs in flight will be wrongly failed |
 
 ## Architecture
 

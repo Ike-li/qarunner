@@ -496,6 +496,119 @@ async def test_mark_interrupted_runs_returns_zero_when_none(store: SqliteStore) 
     assert await store.mark_interrupted_runs() == 0
 
 
+async def test_claim_schedule_run_leader_election(store: SqliteStore) -> None:
+    """CONC-2: only the first caller for a given cron tick wins the claim."""
+    from datetime import timedelta
+
+    profile = TestProfile(
+        id="p-claim",
+        name="P",
+        tests_path="tests/",
+        created_by="u",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    schedule = TestSchedule(
+        id="s-claim",
+        name="S",
+        profile_id="p-claim",
+        cron_expression="*/5 * * * *",
+        enabled=True,
+        timezone="UTC",
+        created_by="u",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_schedule(schedule)
+
+    tick = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    # First replica wins this tick; a second firing for the same tick loses.
+    assert await store.claim_schedule_run("s-claim", tick) is True
+    assert await store.claim_schedule_run("s-claim", tick) is False
+    # An earlier tick (e.g. backward clock skew) also loses.
+    assert await store.claim_schedule_run("s-claim", tick - timedelta(minutes=5)) is False
+    # The next tick wins again.
+    assert await store.claim_schedule_run("s-claim", tick + timedelta(minutes=5)) is True
+
+    # last_run_at reflects the latest claimed tick, normalised to UTC.
+    reloaded = await store.get_schedule("s-claim")
+    assert reloaded is not None
+    assert reloaded.last_run_at == tick + timedelta(minutes=5)
+
+
+async def test_claim_schedule_run_unknown_schedule(store: SqliteStore) -> None:
+    """CONC-2: claiming a schedule that does not exist updates nothing and loses."""
+    tick = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    assert await store.claim_schedule_run("does-not-exist", tick) is False
+
+
+async def test_enable_wal_tolerates_concurrent_lock() -> None:
+    """CONC-2: a 'database is locked' during WAL conversion is tolerated, not raised."""
+    from sqlite3 import OperationalError
+    from unittest.mock import AsyncMock, MagicMock
+
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=OperationalError("database is locked"))
+    await SqliteStore._enable_wal(db)  # another initializer is converting; must not raise
+    db.execute.assert_awaited_once()
+
+
+async def test_enable_wal_reraises_non_lock_error() -> None:
+    """CONC-2: a genuine (non-lock) failure during WAL conversion is re-raised."""
+    from sqlite3 import OperationalError
+    from unittest.mock import AsyncMock, MagicMock
+
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=OperationalError("disk I/O error"))
+    with pytest.raises(OperationalError):
+        await SqliteStore._enable_wal(db)
+
+
+async def test_safe_alter_tolerates_existing_column(tmp_path) -> None:
+    """CONC-2: a concurrent first-start ALTER race is benign when the column exists."""
+    import aiosqlite
+
+    db_path = str(tmp_path / "race.db")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("CREATE TABLE t (id TEXT, foo TEXT)")
+        await db.commit()
+        # ALTER fails (duplicate column) but "foo" already exists -> tolerated.
+        await SqliteStore._safe_alter(db, "t", "foo", "ALTER TABLE t ADD COLUMN foo TEXT")
+        async with db.execute("PRAGMA table_info(t)") as cursor:
+            cols = [row[1] for row in await cursor.fetchall()]
+    assert "foo" in cols
+
+
+async def test_safe_alter_reraises_genuine_failure(tmp_path) -> None:
+    """CONC-2: a failure that does not yield the target column is re-raised."""
+    import aiosqlite
+
+    db_path = str(tmp_path / "race2.db")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("CREATE TABLE t (id TEXT)")
+        await db.commit()
+        # ALTER errors (duplicate "id"), and the claimed column "bar" never appears.
+        with pytest.raises(aiosqlite.OperationalError):
+            await SqliteStore._safe_alter(db, "t", "bar", "ALTER TABLE t ADD COLUMN id TEXT")
+
+
+async def test_concurrent_initialize_seeds_one_admin(tmp_path) -> None:
+    """CONC-2: two processes initialising the same empty DB at once do not crash."""
+    import asyncio
+
+    db_path = str(tmp_path / "concurrent.db")
+    s1 = SqliteStore(db_path)
+    s2 = SqliteStore(db_path)
+    # INSERT OR IGNORE + ALTER-race tolerance keep the concurrent first-start safe.
+    await asyncio.gather(s1.initialize(), s2.initialize())
+    try:
+        users = await s1.list_users()
+        admins = [u for u in users if u["username"] == "admin"]
+        assert len(admins) == 1
+    finally:
+        await s1.close()
+        await s2.close()
+
+
 
 
 

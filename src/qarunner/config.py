@@ -22,3 +22,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
     admin_user: str = "admin"
     admin_password: str = "admin123"
+    # Crash recovery (mark_interrupted_runs) assumes a single instance owns the
+    # DB: on startup it fails *all* QUEUED/RUNNING runs as interrupted. Under
+    # multiple replicas a late-starting worker would wrongly fail runs still
+    # executing in its siblings, so disable this on all but one instance (or use
+    # an external recovery story) before scaling out. See CONC-2.
+    crash_recovery_on_startup: bool = True

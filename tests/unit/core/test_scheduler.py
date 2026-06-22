@@ -54,13 +54,16 @@ async def test_trigger_schedule_run_success(mock_app: FastAPI) -> None:
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
     container.store.save_schedule = AsyncMock()
+    container.store.claim_schedule_run = AsyncMock(return_value=True)
     container.orchestrator.create = AsyncMock()
-    
+
     await trigger_schedule_run(mock_app, "sched-1")
-    
+
     container.store.get_schedule.assert_called_once_with("sched-1")
     container.store.get_profile.assert_called_once_with("prof-1")
-    
+    # The cron tick is claimed for leader election before the run is created.
+    container.store.claim_schedule_run.assert_called_once()
+
     # Verify orchestrator was called with a matching RunRequest
     container.orchestrator.create.assert_called_once()
     run_req: RunRequest = container.orchestrator.create.call_args[0][0]
@@ -99,6 +102,7 @@ async def test_trigger_schedule_run_passes_profile_env(mock_app: FastAPI) -> Non
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
     container.store.save_schedule = AsyncMock()
+    container.store.claim_schedule_run = AsyncMock(return_value=True)
     container.orchestrator.create = AsyncMock()
 
     await trigger_schedule_run(mock_app, "sched-1")
@@ -153,6 +157,40 @@ async def test_trigger_schedule_run_missing_profile(mock_app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_trigger_schedule_run_skips_when_already_claimed(mock_app: FastAPI) -> None:
+    """CONC-2: when another replica already claimed this cron tick, no run is created."""
+    container = mock_app.state.container
+    schedule = TestSchedule(
+        id="sched-1",
+        name="Test Sched",
+        profile_id="prof-1",
+        cron_expression="*/5 * * * *",
+        enabled=True,
+        timezone="UTC",
+        created_by="user",
+        created_at=datetime.now(UTC),
+    )
+    profile = TestProfile(
+        id="prof-1",
+        name="Test Profile",
+        tests_path="sample",
+        created_by="user",
+        created_at=datetime.now(UTC),
+    )
+    container.store.get_schedule = AsyncMock(return_value=schedule)
+    container.store.get_profile = AsyncMock(return_value=profile)
+    container.store.claim_schedule_run = AsyncMock(return_value=False)
+    container.store.save_schedule = AsyncMock()
+    container.orchestrator.create = AsyncMock()
+
+    await trigger_schedule_run(mock_app, "sched-1")
+
+    container.store.claim_schedule_run.assert_called_once()
+    container.orchestrator.create.assert_not_called()
+    container.store.save_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_trigger_schedule_run_exceptions(mock_app: FastAPI) -> None:
     container = mock_app.state.container
     schedule = TestSchedule(
@@ -175,8 +213,9 @@ async def test_trigger_schedule_run_exceptions(mock_app: FastAPI) -> None:
     
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
+    container.store.claim_schedule_run = AsyncMock(return_value=True)
     container.orchestrator.create = AsyncMock(side_effect=Exception("Execution failed"))
-    
+
     # Verify that the exception inside orchestrator is handled and doesn't crash the trigger
     await trigger_schedule_run(mock_app, "sched-1")
     container.orchestrator.create.assert_called_once()
@@ -205,10 +244,12 @@ async def test_trigger_schedule_run_next_run_calc_failure(mock_app: FastAPI) -> 
     
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
+    container.store.claim_schedule_run = AsyncMock(return_value=True)
     container.orchestrator.create = AsyncMock()
     container.store.save_schedule = AsyncMock()
-    
-    # Mock croniter inside trigger_schedule_run to fail
+
+    # Mock croniter inside trigger_schedule_run to fail (both the tick claim and
+    # the next_run_at computation fall through to safe fallbacks).
     with patch("croniter.croniter", side_effect=ValueError("Invalid timezone/cron")):
         await trigger_schedule_run(mock_app, "sched-1")
         # Should still save the schedule with updated last_run_at

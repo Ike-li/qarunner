@@ -31,6 +31,22 @@ async def trigger_schedule_run(app: FastAPI, schedule_id: str) -> None:
         logger.error("Profile %s bound to schedule %s not found. Cannot run.", schedule.profile_id, schedule_id)
         return
 
+    # Leader election for multi-replica deployments (CONC-2): every replica runs
+    # its own in-process scheduler and fires this job at the same cron tick. Claim
+    # the tick in the DB so only the winning replica creates a run; the rest skip.
+    try:
+        from croniter import croniter
+        tz = zoneinfo.ZoneInfo(schedule.timezone)
+        fire_time = croniter(schedule.cron_expression, datetime.now(tz)).get_prev(datetime)
+    except Exception:
+        fire_time = datetime.now(UTC)
+    if not await container.store.claim_schedule_run(schedule_id, fire_time):
+        logger.info(
+            "Schedule %s already claimed for this tick by another replica; skipping",
+            schedule_id,
+        )
+        return
+
     logger.info("Executing scheduled test run for schedule '%s' (profile: '%s')", schedule.name, profile.name)
 
     # Map profile to run request

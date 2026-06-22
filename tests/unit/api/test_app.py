@@ -202,3 +202,57 @@ def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
         assert recovered.error == "interrupted by server restart"
         assert recovered.finished_at is not None
 
+
+def test_lifespan_skips_recovery_when_disabled(monkeypatch) -> None:
+    """CONC-2: with crash_recovery_on_startup off, startup leaves in-flight runs alone.
+
+    A late-starting replica must not fail runs still executing in its siblings, so
+    the single-instance recovery is gated behind a setting that multi-replica
+    deployments disable.
+    """
+    import asyncio
+    import tempfile
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from qarunner.adapters.sqlite_store import SqliteStore
+    from qarunner.models import Run, RunStatus
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "test.db")
+        monkeypatch.setenv("QARUNNER_DB_PATH", db_path)
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(Path(td) / "tests"))
+        monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
+        monkeypatch.setenv("QARUNNER_CRASH_RECOVERY_ON_STARTUP", "false")
+
+        async def seed() -> None:
+            store = SqliteStore(db_path)
+            await store.initialize()
+            await store.save(
+                Run(
+                    id="orphan-1",
+                    status=RunStatus.RUNNING,
+                    runner="pytest",
+                    created_by="system",
+                    tests_path="x",
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await store.close()
+
+        asyncio.run(seed())
+
+        app = create_app()
+        with TestClient(app):
+            pass
+
+        async def fetch() -> Run:
+            store = SqliteStore(db_path)
+            await store.initialize()
+            run = await store.get("orphan-1")
+            await store.close()
+            return run
+
+        result = asyncio.run(fetch())
+        assert result.status == RunStatus.RUNNING
+

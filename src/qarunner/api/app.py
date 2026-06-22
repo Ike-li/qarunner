@@ -23,8 +23,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialize SQLite store
     await app.state.container.store.initialize()
     # Crash recovery: fail any run left QUEUED/RUNNING by a previous process.
+    # This assumes a single instance owns the DB (CONC-2) — it fails *all* such
+    # runs, so it must be disabled on all but one replica to avoid a late-starting
+    # worker killing runs still executing in its siblings.
+    from qarunner.config import Settings
     recover = getattr(app.state.container.store, "mark_interrupted_runs", None)
-    if recover is not None:
+    if Settings().crash_recovery_on_startup and recover is not None:
         interrupted = await recover()
         if interrupted:
             logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
