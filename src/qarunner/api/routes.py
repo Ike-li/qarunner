@@ -442,6 +442,13 @@ async def get_report_assets(
     return FileResponse(asset_file)
 
 
+# CONC-1: bound the SSE log-follow loop so an abandoned or slow client cannot
+# pin a worker forever, and cap the final flush so a multi-GB log can't be read
+# into memory all at once.
+_SSE_MAX_FOLLOW_SECONDS = 3600.0
+_SSE_MAX_TAIL_BYTES = 256 * 1024
+
+
 @router.get("/runs/{run_id}/stream")
 async def stream_run_logs(
     run_id: str,
@@ -461,15 +468,20 @@ async def stream_run_logs(
 
     cfg = Settings()
     stdout_file = Path(cfg.artifacts_root) / run_id / "stdout.log"
+    terminal_states = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT)
 
     async def event_generator():
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _SSE_MAX_FOLLOW_SECONDS
         # Wait up to 5 seconds for the file to be created initially
         for _ in range(50):
+            if await request.is_disconnected():
+                return
             if stdout_file.exists():
                 break
             try:
                 run = await container.store.get(run_id)
-                if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT):
+                if run.status in terminal_states:
                     break
             except RunNotFound:
                 break
@@ -479,25 +491,39 @@ async def stream_run_logs(
             yield "data: [System] Log file not found.\n\n"
             return
 
-        with open(stdout_file, "r", encoding="utf-8", errors="replace") as f:
+        # Non-blocking IO + bounded lifetime: file ops run off the event loop so
+        # a slow disk or huge file can't stall it, and we stop following once the
+        # client disconnects or the max duration is reached (CONC-1).
+        f = await asyncio.to_thread(
+            open, stdout_file, "r", encoding="utf-8", errors="replace"
+        )
+        try:
             while True:
-                line = f.readline()
+                if await request.is_disconnected():
+                    break
+                if loop.time() > deadline:
+                    yield "data: [System] Log stream closed (max duration reached).\n\n"
+                    break
+                line = await asyncio.to_thread(f.readline)
                 if line:
                     yield f"data: {line.rstrip('\r\n')}\n\n"
                     await asyncio.sleep(0.01)
                 else:
                     try:
                         run = await container.store.get(run_id)
-                        if run.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT):
-                            # Final read to flush any last log lines
-                            remaining = f.read()
+                        if run.status in terminal_states:
+                            # Flush remaining lines, bounded so a multi-GB tail
+                            # is never read into memory in one shot.
+                            remaining = await asyncio.to_thread(f.read, _SSE_MAX_TAIL_BYTES)
                             if remaining:
-                                for l in remaining.splitlines():
-                                    yield f"data: {l}\n\n"
+                                for log_line in remaining.splitlines():
+                                    yield f"data: {log_line}\n\n"
                             break
                     except Exception:
                         break
                     await asyncio.sleep(0.2)
+        finally:
+            await asyncio.to_thread(f.close)
 
     return StreamingResponse(
         event_generator(),

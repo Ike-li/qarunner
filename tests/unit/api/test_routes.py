@@ -1110,6 +1110,112 @@ def test_stream_run_logs_missing_and_exception(tmp_path: Path, monkeypatch: pyte
         assert "[System] Log file not found." in resp.text
 
 
+def test_stream_disconnect_initial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONC-1: a client disconnect during the initial wait aborts the generator."""
+    from unittest.mock import AsyncMock
+
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    _make_run_in_store(container.store, id="run_disc_init", status=RunStatus.RUNNING)
+    # No log file exists; without the disconnect check the initial loop would spin.
+    monkeypatch.setattr(
+        "starlette.requests.Request.is_disconnected", AsyncMock(return_value=True)
+    )
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_disc_init/stream")
+        assert resp.status_code == 200
+        # Generator returned immediately; the "not found" message was never reached.
+        assert "[System] Log file not found." not in resp.text
+
+
+def test_stream_disconnect_midstream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONC-1: a disconnect during follow breaks the read loop (no orphaned handle)."""
+    from unittest.mock import AsyncMock
+
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    _make_run_in_store(container.store, id="run_disc_mid", status=RunStatus.RUNNING)
+    run_dir = tmp_path / "run_disc_mid"
+    run_dir.mkdir()
+    (run_dir / "stdout.log").write_text("line1\nline2\n", encoding="utf-8")
+    # First check (initial loop) passes; second (read loop) reports a disconnect.
+    monkeypatch.setattr(
+        "starlette.requests.Request.is_disconnected",
+        AsyncMock(side_effect=[False, True]),
+    )
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_disc_mid/stream")
+        assert resp.status_code == 200
+        # Broke out before emitting any log line.
+        assert "data: line1" not in resp.text
+
+
+def test_stream_max_duration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONC-1: the follow loop stops once the max-duration cap is exceeded."""
+    from qarunner.api import routes
+
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    monkeypatch.setattr(routes, "_SSE_MAX_FOLLOW_SECONDS", -1.0)
+    _make_run_in_store(container.store, id="run_maxdur", status=RunStatus.RUNNING)
+    run_dir = tmp_path / "run_maxdur"
+    run_dir.mkdir()
+    (run_dir / "stdout.log").write_text("line1\n", encoding="utf-8")
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_maxdur/stream")
+        assert resp.status_code == 200
+        assert "max duration reached" in resp.text
+
+
+def test_stream_tail_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONC-1: the final flush is byte-bounded so a huge tail isn't read at once."""
+    import asyncio
+
+    from qarunner.api import routes
+
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    monkeypatch.setattr(routes, "_SSE_MAX_TAIL_BYTES", 4)
+
+    async def _instant(delay):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", _instant)
+    _make_run_in_store(container.store, id="run_tail", status=RunStatus.RUNNING)
+    run_dir = tmp_path / "run_tail"
+    run_dir.mkdir()
+    log_file = run_dir / "stdout.log"
+    log_file.write_text("seed\n", encoding="utf-8")
+
+    call_count = 0
+    original_get = container.store.get
+
+    async def mock_get(run_id: str):
+        # call #1 is the route-level access check; keep it RUNNING and unchanged.
+        # On the follow loop's status check (#2) go terminal, leaving a long tail
+        # so the byte-bounded final flush reads only its first 4 bytes.
+        nonlocal call_count
+        run_obj = await original_get(run_id)
+        if run_id == "run_tail":
+            call_count += 1
+            if call_count >= 2:
+                log_file.write_text("seed\nABCDEFGHIJKLMNOP\n", encoding="utf-8")
+                return run_obj.model_copy(update={"status": RunStatus.COMPLETED})
+        return run_obj
+
+    monkeypatch.setattr(container.store, "get", mock_get)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_tail/stream")
+        assert resp.status_code == 200
+        assert "data: seed" in resp.text
+        assert "ABCD" in resp.text  # only the first 4 bytes of the tail
+        assert "EFGH" not in resp.text
+
+
 def test_lock_run_nonexistent() -> None:
     container = _make_container()
     app = create_app(container)
