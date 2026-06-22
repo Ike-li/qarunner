@@ -66,6 +66,16 @@ def _make_orchestrator(
     )
 
 
+class TestDrain:
+    """RunOrchestrator.drain() delegates graceful shutdown to the scheduler."""
+
+    @pytest.mark.asyncio
+    async def test_drain_delegates_to_scheduler(self):
+        orch = _make_orchestrator()
+        await orch.drain(timeout=2.0)
+        assert orch._scheduler.drained == 1
+
+
 class TestCreate:
     """RunOrchestrator.create() validates, persists, and schedules."""
 

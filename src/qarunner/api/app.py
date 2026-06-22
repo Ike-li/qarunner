@@ -34,8 +34,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
     await app.state.container.scheduler.start()
     yield
-    # Cleanup
+    # Cleanup — stop new triggers, let in-flight runs settle, then close the DB.
     await app.state.container.scheduler.shutdown()
+    await app.state.container.orchestrator.drain(
+        timeout=Settings().shutdown_drain_timeout_seconds
+    )
     await app.state.container.store.close()
 
 

@@ -197,6 +197,9 @@ class FakeOrchestrator:
         await self.store.save(run)
         return run
 
+    async def drain(self, timeout: float | None = None) -> None:
+        return None
+
 
 def _make_container(**orch_kwargs: object) -> Container:
     store = FakeStore()

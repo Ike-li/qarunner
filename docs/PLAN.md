@@ -48,7 +48,7 @@
 | `Clock` | `now()` | `system_clock` | `FakeClock` |
 | `IdGenerator` | `new_id()` | `uuid_ids` | `FakeIdGenerator`(确定序列) |
 | `RunStore` | `save / get / list` | `sqlite_store`（单连接+WAL+busy_timeout） | `InMemoryRunStore` |
-| `TaskScheduler` | `schedule(coro)` | `asyncio_scheduler`（semaphore=max_concurrency + create_task） | `FakeScheduler`(内联执行) |
+| `TaskScheduler` | `schedule(coro)` / `drain(timeout)` | `asyncio_scheduler`（semaphore=max_concurrency + create_task；drain 排空在途任务，超时则 cancel） | `FakeScheduler`(内联执行) |
 | `ResultCollector` | `collect(run_dir) -> CollectResult \| None` | `junit_collector`（调 core/junit） | `FakeResultCollector` |
 | `AllureReporter` | `generate(run_dir, enabled) -> ReportRef` | `allure_cli_reporter`（**内部依赖 ProcessRunner**） | `FakeAllureReporter` |
 

@@ -53,6 +53,9 @@ class _FakeStore:
 class _FakeOrch:
     store: _FakeStore
 
+    async def drain(self, timeout: float | None = None) -> None:
+        return None
+
 
 def test_create_app_returns_fastapi() -> None:
     app = create_app()
@@ -280,4 +283,66 @@ def test_lifespan_skips_recovery_when_disabled(monkeypatch) -> None:
 
         result = asyncio.run(fetch())
         assert result.status == RunStatus.RUNNING
+
+
+async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
+    """DATA-4: shutdown waits for in-flight executions to persist before close.
+
+    Drives the real lifespan with a task that saves *after* shutdown begins; the
+    drain step must let that save land against an open store, so the recorded
+    order is save-then-close (not close-then-AssertionError).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
+    from qarunner.api.app import lifespan
+    from qarunner.models import Run, RunStatus
+
+    events: list[str] = []
+
+    class _OrderStore(_FakeStore):
+        async def save(self, run: Run) -> None:
+            events.append("save")
+
+        async def close(self) -> None:
+            events.append("close")
+
+    @dataclass
+    class _DrainOrch:
+        store: _OrderStore
+        scheduler: AsyncioScheduler
+
+        async def drain(self, timeout: float | None = None) -> None:
+            await self.scheduler.drain(timeout)
+
+    sched = AsyncioScheduler()
+    store = _OrderStore()
+    container = Container(
+        orchestrator=_DrainOrch(store=store, scheduler=sched),
+        store=store,
+        scheduler=FakeSchedulePort(),
+        schedule_service=None,
+        profile_service=None,
+    )  # type: ignore[arg-type]
+    app = FastAPI()
+    app.state.container = container
+
+    async def slow_save() -> None:
+        await asyncio.sleep(0.05)  # still in flight when shutdown begins
+        await store.save(
+            Run(
+                id="x",
+                status=RunStatus.RUNNING,
+                runner="pytest",
+                created_by="system",
+                tests_path="x",
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    async with lifespan(app):
+        sched.schedule(slow_save())
+    # Context exit ran shutdown: drain awaited the in-flight save, then closed.
+    assert events == ["save", "close"]
 

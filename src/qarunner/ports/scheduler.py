@@ -11,3 +11,11 @@ class TaskScheduler(Protocol):
     """Port for scheduling background coroutines."""
 
     def schedule(self, coro: Coroutine[Any, Any, None]) -> None: ...
+
+    async def drain(self, timeout: float | None = None) -> None:
+        """Wait for in-flight scheduled tasks to finish (graceful shutdown).
+
+        Tasks still running after *timeout* seconds are cancelled; ``None``
+        waits indefinitely.
+        """
+        ...

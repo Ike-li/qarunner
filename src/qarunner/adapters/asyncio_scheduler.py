@@ -38,3 +38,23 @@ class AsyncioScheduler:
     async def _run(self, coro: Coroutine[Any, Any, None]) -> None:
         async with self._semaphore:
             await coro
+
+    async def drain(self, timeout: float | None = None) -> None:
+        """Wait for in-flight scheduled tasks to finish before shutdown (DATA-4).
+
+        Lets each running execution persist its terminal state while the store
+        is still open. Any task still pending after *timeout* seconds is
+        cancelled and awaited, so none is left to ``save`` against a closed
+        connection. ``timeout=None`` waits indefinitely.
+        """
+        pending = [t for t in self._tasks if not t.done()]
+        if not pending:
+            return
+        _, still_pending = await asyncio.wait(pending, timeout=timeout)
+        if still_pending:
+            logger.warning(
+                "drain timed out; cancelling %d in-flight task(s)", len(still_pending)
+            )
+            for task in still_pending:
+                task.cancel()
+            await asyncio.gather(*still_pending, return_exceptions=True)

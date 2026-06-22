@@ -355,6 +355,16 @@ class RunOrchestrator:
                         "Failed to cleanup Workspace Jail at %s: %r", jail_dir, clean_exc
                     )
 
+    # ── lifecycle ─────────────────────────────────────────────────────────
+
+    async def drain(self, timeout: float | None = None) -> None:
+        """Wait for in-flight background executions to settle (DATA-4).
+
+        Delegates to the task scheduler so a graceful shutdown lets running
+        executions persist their terminal state before the store closes.
+        """
+        await self._scheduler.drain(timeout)
+
 
 def _replace(run: Run, **kwargs: object) -> Run:
     """Return a copy of *run* with fields replaced (frozen model)."""

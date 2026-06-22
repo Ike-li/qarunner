@@ -12,6 +12,7 @@ class FakeScheduler:
     """Scheduler that runs coroutines inline and tracks the count."""
 
     scheduled: int = 0
+    drained: int = 0
 
     def schedule(self, coro: Any) -> None:
         self.scheduled += 1
@@ -25,3 +26,7 @@ class FakeScheduler:
             loop.create_task(coro)
         else:
             asyncio.run(coro)
+
+    async def drain(self, timeout: float | None = None) -> None:
+        """Record a drain request; inline execution leaves nothing in flight."""
+        self.drained += 1

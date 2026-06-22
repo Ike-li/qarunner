@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # executing in its siblings, so disable this on all but one instance (or use
     # an external recovery story) before scaling out. See CONC-2.
     crash_recovery_on_startup: bool = True
+    # Graceful-shutdown grace period (DATA-4): how long to wait for in-flight
+    # runs to persist their terminal state before the DB connection closes. Runs
+    # still executing after this are cancelled (and recovered as FAILED on the
+    # next start by crash_recovery_on_startup), so the process can exit promptly.
+    shutdown_drain_timeout_seconds: float = 30.0
 
     @field_validator("secret_key")
     @classmethod
