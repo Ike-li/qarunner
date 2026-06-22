@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Supersede in-flight runs for the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: Lint & test (ruff + 100% coverage gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync dependencies (frozen lockfile)
+        run: uv sync --frozen --all-extras
+
+      - name: Ruff lint gate
+        run: uv run ruff check .
+
+      # pytest's addopts enforce --cov-fail-under=100 and exclude e2e tests.
+      - name: Pytest + coverage gate
+        run: uv run pytest
+
+  # Docker image build + vulnerability scan (trivy/grype) land with DEP-2
+  # (uv.lock-frozen build) and DEP-5 (executor image prebuild), so the images
+  # are reproducible and scannable before being gated here.
