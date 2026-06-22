@@ -11,6 +11,7 @@ from qarunner.api.app import create_app
 from qarunner.api.deps import Container
 from qarunner.errors import RunNotFound
 from qarunner.models import Run
+from tests.fakes.fake_schedule_port import FakeSchedulePort
 
 
 @dataclass
@@ -60,7 +61,7 @@ def test_create_app_returns_fastapi() -> None:
 
 
 def test_create_app_with_container_injects_it() -> None:
-    container = Container(orchestrator=None, store=None)  # type: ignore[arg-type]
+    container = Container(orchestrator=None, store=None, scheduler=None)  # type: ignore[arg-type]
     app = create_app(container)
     assert app.state.container is container
 
@@ -81,7 +82,7 @@ def test_lifespan_runs_without_error() -> None:
 
     store = _FakeStore()
     orch = _FakeOrch(store=store)
-    container = Container(orchestrator=orch, store=store)  # type: ignore[arg-type]
+    container = Container(orchestrator=orch, store=store, scheduler=FakeSchedulePort())  # type: ignore[arg-type]
     app = create_app(container)
     app.dependency_overrides[get_current_user] = mock_get_current_user
     with TestClient(app) as client:
@@ -128,7 +129,7 @@ def test_static_files_mounting(tmp_path, monkeypatch) -> None:
     # Provide a mock store so create_app's lifespan doesn't try to open real sqlite
     store = _FakeStore()
     orch = _FakeOrch(store=store)
-    container = Container(orchestrator=orch, store=store)  # type: ignore[arg-type]
+    container = Container(orchestrator=orch, store=store, scheduler=FakeSchedulePort())  # type: ignore[arg-type]
 
     app = create_app(container)
     with TestClient(app) as client:
@@ -143,7 +144,7 @@ def test_static_files_not_mounted_if_no_dir(monkeypatch) -> None:
 
     store = _FakeStore()
     orch = _FakeOrch(store=store)
-    container = Container(orchestrator=orch, store=store)  # type: ignore[arg-type]
+    container = Container(orchestrator=orch, store=store, scheduler=FakeSchedulePort())  # type: ignore[arg-type]
 
     app = create_app(container)
     with TestClient(app) as client:

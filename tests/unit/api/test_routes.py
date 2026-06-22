@@ -23,6 +23,7 @@ from qarunner.models import (
     User,
     UserRole,
 )
+from tests.fakes.fake_schedule_port import FakeSchedulePort
 
 NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -198,7 +199,11 @@ class FakeOrchestrator:
 def _make_container(**orch_kwargs: object) -> Container:
     store = FakeStore()
     orchestrator = FakeOrchestrator(store=store, **orch_kwargs)  # type: ignore[arg-type]
-    return Container(orchestrator=orchestrator, store=store)  # type: ignore[arg-type]
+    return Container(
+        orchestrator=orchestrator,  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
+        scheduler=FakeSchedulePort(),
+    )
 
 
 def _make_run_in_store(store: FakeStore, **overrides: object) -> Run:
@@ -547,6 +552,8 @@ def test_schedule_crud_and_preview_endpoints() -> None:
         sched_id = resp_create.json()["id"]
         assert resp_create.json()["name"] == "Nightly Regression"
         assert resp_create.json()["timezone"] == "America/New_York"
+        # ARCH-1: the route drives the injected SchedulePort (not app.state).
+        assert container.scheduler.upserted == [sched_id]
 
         # D. Get schedule
         resp_get = client.get(f"/schedules/{sched_id}")
@@ -573,11 +580,15 @@ def test_schedule_crud_and_preview_endpoints() -> None:
         assert resp_update.json()["cron_expression"] == "0 3 * * *"
         assert resp_update.json()["enabled"] is False
         assert resp_update.json()["timezone"] == "America/Los_Angeles"
+        # Disabling routes through SchedulePort.remove.
+        assert container.scheduler.removed == [sched_id]
 
         # G. Delete schedule
         resp_del = client.delete(f"/schedules/{sched_id}")
         assert resp_del.status_code == 200
         assert resp_del.json()["status"] == "success"
+        # Deletion routes through SchedulePort.remove again.
+        assert container.scheduler.removed == [sched_id, sched_id]
 
         # H. Get deleted schedule (should be 404)
         resp_get_deleted = client.get(f"/schedules/{sched_id}")
@@ -1440,7 +1451,7 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
         assert resp.status_code == 200
         assert resp.json()["enabled"] is False
 
-        # 9b. Update schedule - set enabled=True (calls add_or_update_schedule_job - covers 691!)
+        # 9b. Update schedule - set enabled=True (calls container.scheduler.upsert)
         update_payload["enabled"] = True
         resp = client.put(f"/schedules/{sched_id}", json=update_payload)
         assert resp.status_code == 200

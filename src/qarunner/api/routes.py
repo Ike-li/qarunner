@@ -693,8 +693,7 @@ async def create_schedule(
     await container.store.save_schedule(schedule)
 
     # Register in in-process scheduler
-    from qarunner.core.scheduler import add_or_update_schedule_job
-    add_or_update_schedule_job(request.app, schedule)
+    container.scheduler.upsert(schedule)
 
     return schedule_to_response(schedule)
 
@@ -782,11 +781,10 @@ async def update_schedule(
     await container.store.save_schedule(updated)
 
     # Sync with in-process scheduler
-    from qarunner.core.scheduler import add_or_update_schedule_job, remove_schedule_job
     if updated.enabled:
-        add_or_update_schedule_job(request.app, updated)
+        container.scheduler.upsert(updated)
     else:
-        remove_schedule_job(request.app, updated.id)
+        container.scheduler.remove(updated.id)
 
     return schedule_to_response(updated)
 
@@ -804,8 +802,7 @@ async def delete_schedule(
         raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found")
 
     # Remove from in-process scheduler
-    from qarunner.core.scheduler import remove_schedule_job
-    remove_schedule_job(request.app, schedule_id)
+    container.scheduler.remove(schedule_id)
 
     return {"status": "success", "message": f"Schedule {schedule_id} deleted"}
 

@@ -32,11 +32,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         interrupted = await recover()
         if interrupted:
             logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
-    from qarunner.core.scheduler import shutdown_scheduler, start_scheduler
-    await start_scheduler(app)
+    await app.state.container.scheduler.start()
     yield
     # Cleanup
-    await shutdown_scheduler(app)
+    await app.state.container.scheduler.shutdown()
     await app.state.container.store.close()
 
 

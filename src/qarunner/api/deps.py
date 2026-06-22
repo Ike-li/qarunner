@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from qarunner.adapters.allure_cli_reporter import AllureCliReporter
+from qarunner.adapters.apscheduler_schedule import ApschedulerSchedulePort
 from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
 from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.adapters.junit_collector import JunitCollector
@@ -23,6 +24,7 @@ from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.models import User, UserRole
+from qarunner.ports.schedule import SchedulePort
 
 
 @dataclass
@@ -31,6 +33,7 @@ class Container:
 
     orchestrator: RunOrchestrator
     store: SqliteStore
+    scheduler: SchedulePort
 
 
 def create_container(settings: Settings | None = None) -> Container:
@@ -66,7 +69,9 @@ def create_container(settings: Settings | None = None) -> Container:
         default_timeout=cfg.default_timeout_seconds,
     )
 
-    return Container(orchestrator=orchestrator, store=store)
+    schedule_port = ApschedulerSchedulePort(store=store, orchestrator=orchestrator)
+
+    return Container(orchestrator=orchestrator, store=store, scheduler=schedule_port)
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
