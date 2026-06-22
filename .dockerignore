@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+.mypy_cache
+
+# Node / frontend build (rebuilt inside the image)
+node_modules
+frontend/node_modules
+frontend/dist
+frontend/playwright-report
+frontend/test-results
+
+# Runtime data & secrets — must never enter the build context
+artifacts
+external_tests
+*.db
+*.db-*
+.env
+.env.*
+
+# Local tooling / editor state
+.claude
+.codegraph
+.reasonix
+docs
+
+# Docs / meta not needed at runtime
+*.md
+!README.md
