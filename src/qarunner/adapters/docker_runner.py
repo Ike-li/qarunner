@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -89,10 +90,7 @@ class DockerRunner:
         # 3. Mount definitions: Extract results_dir to mount
         results_dir = None
         for arg in cmd:
-            if arg.startswith("--junitxml="):
-                results_path = arg.split("=", 1)[1]
-                results_dir = os.path.dirname(results_path)
-            elif arg.startswith("--alluredir="):
+            if arg.startswith("--junitxml=") or arg.startswith("--alluredir="):
                 results_path = arg.split("=", 1)[1]
                 results_dir = os.path.dirname(results_path)
 
@@ -121,6 +119,15 @@ class DockerRunner:
                     detach=True,
                     stdout=True,
                     stderr=True,
+                    # SEC-3: execute untrusted test code with least privilege.
+                    # Run as the host caller (non-root unless the platform itself
+                    # is root) so files written to bind mounts stay owned by us.
+                    user=f"{os.getuid()}:{os.getgid()}",
+                    network_mode="none",
+                    cap_drop=["ALL"],
+                    security_opt=["no-new-privileges"],
+                    pids_limit=512,
+                    mem_limit="2g",
                 )
 
             container = await asyncio.to_thread(_start_container)
@@ -168,10 +175,8 @@ class DockerRunner:
                 exit_code = 137  # Standard SIGKILL exit code
             finally:
                 log_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await log_task
-                except asyncio.CancelledError:
-                    pass
 
 
             # 6. Gather logs
@@ -196,10 +201,8 @@ class DockerRunner:
                 raise RunnerError(f"Docker container execution failed: {exc}") from exc
         finally:
             if container:
-                try:
+                with contextlib.suppress(Exception):
                     await asyncio.to_thread(container.remove, force=True)
-                except Exception:
-                    pass
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 

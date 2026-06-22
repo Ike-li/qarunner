@@ -64,6 +64,16 @@ async def test_env_forwarded(runner: SubprocessRunner) -> None:
     assert "sentinel_value" in result.stdout
 
 
+async def test_platform_secrets_stripped(runner: SubprocessRunner, monkeypatch) -> None:
+    # SEC-3: QARUNNER_* secrets must not leak into the untrusted child process.
+    monkeypatch.setenv("QARUNNER_SECRET_KEY", "leaked-secret")
+    code = "import os; print(os.environ.get('QARUNNER_SECRET_KEY', 'ABSENT'))"
+    result = await runner.run([sys.executable, "-c", code], cwd=".")
+    assert result.exit_code == 0
+    assert "leaked-secret" not in result.stdout
+    assert "ABSENT" in result.stdout
+
+
 async def test_stderr_captured(runner: SubprocessRunner) -> None:
     result = await runner.run(
         [sys.executable, "-c", "import sys; sys.stderr.write('err_msg')"],
@@ -107,14 +117,14 @@ async def test_forceful_timeout_sigkill(runner: SubprocessRunner) -> None:
 async def test_stdout_stderr_files(runner: SubprocessRunner, tmp_path: Path) -> None:
     stdout_file = tmp_path / "logs" / "stdout.log"
     stderr_file = tmp_path / "logs" / "stderr.log"
-    
+
     result = await runner.run(
         [sys.executable, "-c", "import sys; print('hello file'); sys.stderr.write('error file')"],
         cwd=".",
         stdout_file=str(stdout_file),
         stderr_file=str(stderr_file),
     )
-    
+
     assert result.exit_code == 0
     assert result.stdout == "hello file\n"
     assert result.stderr == "error file"
@@ -127,7 +137,7 @@ async def test_stdout_stderr_files(runner: SubprocessRunner, tmp_path: Path) -> 
 async def test_timeout_with_files(runner: SubprocessRunner, tmp_path: Path) -> None:
     stdout_file = tmp_path / "stdout.log"
     stderr_file = tmp_path / "stderr.log"
-    
+
     result = await runner.run(
         [sys.executable, "-c", "import time; time.sleep(10)"],
         cwd=".",
@@ -135,26 +145,26 @@ async def test_timeout_with_files(runner: SubprocessRunner, tmp_path: Path) -> N
         stdout_file=str(stdout_file),
         stderr_file=str(stderr_file),
     )
-    
+
     assert result.timed_out is True
 
 
 @pytest.mark.asyncio
 async def test_subprocess_escalation_mocked() -> None:
     runner = SubprocessRunner()
-    
+
     mock_proc = MagicMock()
     mock_proc.returncode = -9
     mock_proc.send_signal.side_effect = AttributeError("No send_signal")
     mock_proc.wait = AsyncMock()
-    
+
     mock_proc.communicate = AsyncMock(side_effect=[
         TimeoutError(),  # first wait_for (outer)
         TimeoutError(),  # second wait_for (after SIGINT)
         TimeoutError(),  # third wait_for (after SIGTERM)
         (b"stdout final", b"stderr final")  # final communicate after kill
     ])
-    
+
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         result = await runner.run(
             ["some_cmd"],
@@ -173,7 +183,7 @@ async def test_subprocess_escalation_mocked() -> None:
 async def test_subprocess_file_escalation_mocked(tmp_path: Path) -> None:
     runner = SubprocessRunner()
     stdout_file = tmp_path / "stdout.log"
-    
+
     mock_proc = MagicMock()
     mock_proc.returncode = -15
     mock_proc.wait = AsyncMock(side_effect=[
@@ -182,7 +192,7 @@ async def test_subprocess_file_escalation_mocked(tmp_path: Path) -> None:
         TimeoutError(),  # third wait_for
         0  # wait after kill
     ])
-    
+
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         result = await runner.run(
             ["some_cmd"],

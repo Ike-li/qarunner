@@ -29,12 +29,15 @@ class SubprocessRunner:
         f_err = None
         if stdout_file:
             os.makedirs(os.path.dirname(stdout_file), exist_ok=True)
-            f_out = open(stdout_file, "wb")
+            f_out = open(stdout_file, "wb")  # noqa: SIM115 (handle outlives this scope)
         if stderr_file:
             os.makedirs(os.path.dirname(stderr_file), exist_ok=True)
-            f_err = open(stderr_file, "wb")
+            f_err = open(stderr_file, "wb")  # noqa: SIM115 (handle outlives this scope)
 
-        full_env = dict(os.environ)
+        # SEC-3: strip platform secrets (QARUNNER_*) from the child environment so
+        # untrusted test code can't read the JWT key, admin password, etc. System
+        # vars (PATH/HOME) are preserved; caller-supplied env still takes precedence.
+        full_env = {k: v for k, v in os.environ.items() if not k.startswith("QARUNNER_")}
         if env:
             full_env.update(env)
 
@@ -47,8 +50,8 @@ class SubprocessRunner:
                 stderr=f_err or asyncio.subprocess.PIPE,
             )
         except OSError as exc:
-            if f_out: f_out.close()
-            if f_err: f_err.close()
+            if f_out: f_out.close()  # noqa: E701
+            if f_err: f_err.close()  # noqa: E701
             raise RunnerError(str(exc)) from exc
 
         stdout_bytes = b""

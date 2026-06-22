@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -63,7 +62,7 @@ class MockContainer:
 
     def logs(self, stdout: bool = True, stderr: bool = True) -> bytes:
         if self.wait_status == "timeout":
-            # Force log retrieval to fail during timeout to hit the outer except block with timed_out = True
+            # Fail log retrieval during timeout to hit the outer except (timed_out=True)
             raise Exception("Logs failed during timeout")
         if stdout:
             return self.logs_stdout
@@ -136,16 +135,24 @@ async def test_docker_runner_success() -> None:
     assert "error" in result.stderr
     assert result.timed_out is False
     assert mock_client.run_called is True
-    assert mock_client.run_kwargs["command"] == ["python", "-m", "pytest", "--junitxml=/tmp/res/junit.xml"]
+    assert mock_client.run_kwargs["command"] == [
+        "python", "-m", "pytest", "--junitxml=/tmp/res/junit.xml",
+    ]
     assert mock_client.run_kwargs["volumes"] == {
         "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
         "/tmp/res": {"bind": "/tmp/res", "mode": "rw"},
     }
     assert mock_client.mock_container.remove_called is True
+    # SEC-3: container runs with least privilege.
+    assert mock_client.run_kwargs["network_mode"] == "none"
+    assert mock_client.run_kwargs["cap_drop"] == ["ALL"]
+    assert mock_client.run_kwargs["security_opt"] == ["no-new-privileges"]
+    assert mock_client.run_kwargs["pids_limit"] == 512
+    assert "user" in mock_client.run_kwargs
 
 
 async def test_docker_runner_falsy_container() -> None:
-    # Test successful run with a falsy container to cover the "if container:" falsy branch transitioning to normal end
+    # Falsy container covers the "if container:" false branch at the end
     mock_client = MockClient(images_exist=True, wait_status=0, is_container_falsy=True)
     runner = DockerRunner(client=mock_client)
 
@@ -153,7 +160,7 @@ async def test_docker_runner_falsy_container() -> None:
     result = await runner.run(cmd, cwd="/tmp/tests")
 
     assert result.exit_code == 0
-    assert mock_client.mock_container.remove_called is False  # bypassed because container evaluated to falsy
+    assert mock_client.mock_container.remove_called is False  # falsy container skips remove
 
 
 async def test_docker_runner_alternate_args_and_mapping() -> None:
@@ -166,8 +173,12 @@ async def test_docker_runner_alternate_args_and_mapping() -> None:
     assert mock_client.run_kwargs["command"] == []
 
     # 2. Test python3 mapping & --alluredir extraction with subfolder to match dirname
-    await runner.run(["python3", "-m", "pytest", "--alluredir=/tmp/allure/allure-results"], cwd="/tmp/tests")
-    assert mock_client.run_kwargs["command"] == ["python", "-m", "pytest", "--alluredir=/tmp/allure/allure-results"]
+    await runner.run(
+        ["python3", "-m", "pytest", "--alluredir=/tmp/allure/allure-results"], cwd="/tmp/tests"
+    )
+    assert mock_client.run_kwargs["command"] == [
+        "python", "-m", "pytest", "--alluredir=/tmp/allure/allure-results",
+    ]
     assert mock_client.run_kwargs["volumes"] == {
         "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
         "/tmp/allure": {"bind": "/tmp/allure", "mode": "rw"},
@@ -295,12 +306,12 @@ def test_docker_runner_find_project_root_with_temp_dir(tmp_path: Path) -> None:
 async def test_docker_runner_stdout_stderr_files(tmp_path: Path) -> None:
     stdout_file = tmp_path / "logs" / "stdout.log"
     stderr_file = tmp_path / "logs" / "stderr.log"
-    
+
     mock_client = MockClient(images_exist=True, wait_status=0)
     runner = DockerRunner(client=mock_client)
-    
+
     cmd = ["python", "-m", "pytest"]
-    
+
     with patch("asyncio.sleep", AsyncMock()):
         result = await runner.run(
             cmd,
@@ -308,7 +319,7 @@ async def test_docker_runner_stdout_stderr_files(tmp_path: Path) -> None:
             stdout_file=str(stdout_file),
             stderr_file=str(stderr_file),
         )
-        
+
     assert result.exit_code == 0
     assert stdout_file.exists()
     assert stderr_file.exists()
@@ -320,20 +331,20 @@ async def test_docker_runner_streamer_reload_exception() -> None:
     # Test when reload() raises an exception during streaming (streamer breaks)
     mock_client = MockClient(images_exist=True, wait_status=0)
     runner = DockerRunner(client=mock_client)
-    
+
     cmd = ["python", "-m", "pytest"]
-    
+
     original_run_container = mock_client._run_container
     def reload_failing_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
         container.reload = MagicMock(side_effect=Exception("Reload failed"))
         return container
-    
+
     mock_client.containers.run.side_effect = reload_failing_container
-    
+
     with patch("asyncio.sleep", AsyncMock()):
         result = await runner.run(cmd, cwd="/tmp/tests")
-        
+
     assert result.exit_code == 0
     assert result.stdout == "hello"
 
@@ -342,13 +353,13 @@ async def test_docker_runner_streamer_logs_exception() -> None:
     # Test when logs() raises an exception inside the streamer loop but succeeds later
     mock_client = MockClient(images_exist=True, wait_status=0)
     runner = DockerRunner(client=mock_client)
-    
+
     cmd = ["python", "-m", "pytest"]
-    
+
     original_run_container = mock_client._run_container
     def logs_failing_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
-        
+
         # We want logs to fail during streaming (status is 'running')
         # and succeed during final gather (or succeed after one failure)
         # To make it robust: raise Exception only if called when container.status is running,
@@ -360,15 +371,15 @@ async def test_docker_runner_streamer_logs_exception() -> None:
             if container.status == "running" and container_logs_called <= 2:
                 raise Exception("Logs failed during stream")
             return b"hello" if stdout else b"error"
-            
+
         container.logs = MagicMock(side_effect=logs_side_effect)
         return container
-        
+
     mock_client.containers.run.side_effect = logs_failing_container
-    
+
     with patch("asyncio.sleep", AsyncMock()):
         result = await runner.run(cmd, cwd="/tmp/tests")
-        
+
     assert result.exit_code == 0
     assert result.stdout == "hello"
 
@@ -379,34 +390,34 @@ async def test_docker_runner_streamer_cancellation_and_sleep() -> None:
     import time
     mock_client = MockClient(images_exist=True, wait_status=0)
     runner = DockerRunner(client=mock_client)
-    
+
     cmd = ["python", "-m", "pytest"]
-    
+
     original_run_container = mock_client._run_container
     def sleeping_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
-        
+
         # Override reload to be a no-op, status remains "running"
         container.reload = MagicMock()
         container.status = "running"
-        
+
         # Override wait to sleep in the background thread, allowing streamer to run
         def mock_wait(timeout=None):
             time.sleep(0.05)
             return {"StatusCode": 0}
         container.wait = MagicMock(side_effect=mock_wait)
         return container
-        
+
     mock_client.containers.run.side_effect = sleeping_container
-    
+
     original_sleep = asyncio.sleep
     # Mock asyncio.sleep to yield control immediately (0.001 seconds sleep)
     async def mock_async_sleep(delay):
         await original_sleep(0.001)
-        
+
     with patch("asyncio.sleep", side_effect=mock_async_sleep):
         result = await runner.run(cmd, cwd="/tmp/tests")
-        
+
     assert result.exit_code == 0
     assert result.stdout == "hello"
 
