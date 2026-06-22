@@ -191,6 +191,58 @@ async def test_trigger_schedule_run_skips_when_already_claimed(mock_app: FastAPI
 
 
 @pytest.mark.asyncio
+async def test_trigger_schedule_run_dedups_across_concurrent_replicas(tmp_path) -> None:
+    """CONC-2 end-to-end: two replicas firing the same tick against a shared DB
+    create exactly one run (the DB claim elects a single leader)."""
+    from qarunner.adapters.sqlite_store import SqliteStore
+
+    store = SqliteStore(":memory:")
+    await store.initialize()
+    await store.save_profile(
+        TestProfile(
+            id="prof-1",
+            name="P",
+            tests_path="sample",
+            created_by="u",
+            created_at=datetime.now(UTC),
+        )
+    )
+    await store.save_schedule(
+        TestSchedule(
+            id="sched-1",
+            name="S",
+            profile_id="prof-1",
+            cron_expression="*/5 * * * *",
+            enabled=True,
+            timezone="UTC",
+            created_by="u",
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    def make_replica() -> FastAPI:
+        # Each replica shares the DB but has its own app/orchestrator.
+        app = FastAPI()
+        app.state.container = MagicMock()
+        app.state.container.store = store
+        app.state.container.orchestrator.create = AsyncMock()
+        return app
+
+    replica_a, replica_b = make_replica(), make_replica()
+    await asyncio.gather(
+        trigger_schedule_run(replica_a, "sched-1"),
+        trigger_schedule_run(replica_b, "sched-1"),
+    )
+
+    total_created = (
+        replica_a.state.container.orchestrator.create.call_count
+        + replica_b.state.container.orchestrator.create.call_count
+    )
+    assert total_created == 1
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_trigger_schedule_run_exceptions(mock_app: FastAPI) -> None:
     container = mock_app.state.container
     schedule = TestSchedule(
