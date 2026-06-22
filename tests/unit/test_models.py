@@ -172,7 +172,8 @@ class TestReportRef:
 
 
 class TestPytestWarningSuppression:
-    """Verifies that model classes starting with 'Test' have __test__ = False to avoid Pytest collection warnings."""
+    """Model classes starting with 'Test' set __test__ = False to avoid Pytest
+    collection warnings."""
 
     def test_pytest_collection_suppressed(self):
         from qarunner.models import TestProfile, TestSchedule, TestSummary

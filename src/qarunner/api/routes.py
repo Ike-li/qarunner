@@ -9,24 +9,24 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import get_current_admin, get_current_user
 from qarunner.api.schemas import (
+    LockRunRequest,
     LoginRequest,
     RunListResponse,
     RunResponse,
+    TestProfileCreateRequest,
+    TestProfileResponse,
+    TestProfileUpdateRequest,
+    TestScheduleCreateRequest,
+    TestSchedulePreviewResponse,
+    TestScheduleResponse,
+    TestScheduleUpdateRequest,
     TokenResponse,
     UserCreateRequest,
     UserListResponse,
     UserResponse,
-    run_to_response,
-    TestProfileResponse,
-    TestProfileCreateRequest,
-    TestProfileUpdateRequest,
     profile_to_response,
-    TestScheduleResponse,
-    TestScheduleCreateRequest,
-    TestScheduleUpdateRequest,
-    TestSchedulePreviewResponse,
+    run_to_response,
     schedule_to_response,
-    LockRunRequest,
 )
 from qarunner.config import Settings
 from qarunner.core.auth import create_access_token, hash_password, verify_password
@@ -156,7 +156,10 @@ async def get_test_tree(
     def walk_dir(current_path: Path, base_dir: Path) -> list[dict]:
         nodes = []
         try:
-            entries = sorted(list(current_path.iterdir()), key=lambda x: (not x.is_dir(), x.name.lower()))
+            entries = sorted(
+                current_path.iterdir(),
+                key=lambda x: (not x.is_dir(), x.name.lower()),
+            )
             for entry in entries:
                 if entry.name.startswith(".") or entry.name.startswith("__"):
                     continue
@@ -216,7 +219,7 @@ async def get_test_markers(
                         dec_node = decorator
                         if isinstance(dec_node, ast.Call):
                             dec_node = dec_node.func
-                        
+
                         if isinstance(dec_node, ast.Attribute) and dec_node.attr != "mark":
                             inner = dec_node.value
                             if isinstance(inner, ast.Attribute) and inner.attr == "mark":
@@ -239,7 +242,7 @@ async def create_profile(
     container = request.app.state.container
     import uuid
     from datetime import UTC, datetime
-    
+
     profile_id = str(uuid.uuid4())
     profile = TestProfile(
         id=profile_id,
@@ -283,7 +286,7 @@ async def update_profile(
     existing = await container.store.get_profile(profile_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Profile {profile_id} not found")
-        
+
     updated = TestProfile(
         id=existing.id,
         name=req.name,
@@ -477,11 +480,12 @@ async def stream_run_logs(
     try:
         run = await container.store.get(run_id)
     except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(run, current_user)
 
-    from qarunner.models import RunStatus
     import asyncio
+
+    from qarunner.models import RunStatus
 
     cfg = Settings()
     stdout_file = Path(cfg.artifacts_root) / run_id / "stdout.log"
@@ -565,7 +569,7 @@ async def lock_run(
     try:
         run = await container.store.get(run_id)
     except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(run, current_user)
 
     await container.store.lock_run(run_id, req.locked)
@@ -583,8 +587,8 @@ async def cleanup_runs(
     container = request.app.state.container
     runs_to_cleanup = await container.store.get_old_unlocked_runs(retention_days)
 
-    import shutil
     import asyncio
+    import shutil
 
     cfg = Settings()
     cleaned_count = 0
@@ -613,25 +617,26 @@ async def preview_schedule(
     """Preview the next 5 occurrences of a cron expression."""
     import zoneinfo
     from datetime import datetime
+
     from croniter import croniter
 
     try:
         tz = zoneinfo.ZoneInfo(timezone)
     except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone}")
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone}") from None
 
     now = datetime.now(tz)
     try:
         if not croniter.is_valid(expression):
             raise ValueError("Invalid cron expression syntax")
-        
+
         iter = croniter(expression, now)
         next_runs = []
         for _ in range(5):
             next_runs.append(iter.get_next(datetime))
         return TestSchedulePreviewResponse(next_runs=next_runs)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {str(e)}") from e
 
 
 @router.post("/schedules", status_code=201, response_model=TestScheduleResponse)
@@ -645,6 +650,7 @@ async def create_schedule(
     import uuid
     import zoneinfo
     from datetime import UTC, datetime
+
     from croniter import croniter
 
     # Validate profile exists
@@ -656,7 +662,7 @@ async def create_schedule(
     try:
         tz = zoneinfo.ZoneInfo(req.timezone)
     except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}")
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}") from None
 
     # Validate cron expression
     if not croniter.is_valid(req.cron_expression):
@@ -730,6 +736,7 @@ async def update_schedule(
     container = request.app.state.container
     import zoneinfo
     from datetime import datetime
+
     from croniter import croniter
 
     existing = await container.store.get_schedule(schedule_id)
@@ -745,7 +752,7 @@ async def update_schedule(
     try:
         tz = zoneinfo.ZoneInfo(req.timezone)
     except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}")
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}") from None
 
     # Validate cron expression
     if not croniter.is_valid(req.cron_expression):

@@ -18,10 +18,10 @@ from qarunner.models import (
     Run,
     RunRequest,
     RunStatus,
-    User,
-    UserRole,
     TestProfile,
     TestSchedule,
+    User,
+    UserRole,
 )
 
 NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -109,9 +109,13 @@ class FakeStore:
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         res = []
         for r in self._runs.values():
-            if r.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT) and not r.locked:
-                if r.finished_at and r.finished_at <= cutoff:
-                    res.append(r)
+            if (
+                r.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT)
+                and not r.locked
+                and r.finished_at
+                and r.finished_at <= cutoff
+            ):
+                res.append(r)
         return res
 
     async def save_profile(self, profile: TestProfile) -> None:
@@ -702,7 +706,6 @@ def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_user_registration_and_login() -> None:
-    from qarunner.core.auth import hash_password
     container = _make_container()
     app = create_app(container)
 
@@ -730,16 +733,22 @@ def test_user_registration_and_login() -> None:
         assert "new_guy" in usernames
 
         # D. Login successfully
-        resp_login = client.post("/auth/login", json={"username": "new_guy", "password": "secret_password"})
+        resp_login = client.post(
+            "/auth/login", json={"username": "new_guy", "password": "secret_password"}
+        )
         assert resp_login.status_code == 200
         assert "access_token" in resp_login.json()
 
         # E. Login with incorrect password
-        resp_bad_pw = client.post("/auth/login", json={"username": "new_guy", "password": "wrong_password"})
+        resp_bad_pw = client.post(
+            "/auth/login", json={"username": "new_guy", "password": "wrong_password"}
+        )
         assert resp_bad_pw.status_code == 401
 
         # F. Login with nonexistent user
-        resp_bad_user = client.post("/auth/login", json={"username": "ghost", "password": "some_password"})
+        resp_bad_user = client.post(
+            "/auth/login", json={"username": "ghost", "password": "some_password"}
+        )
         assert resp_bad_user.status_code == 401
 
         # G. Get me
@@ -777,7 +786,7 @@ class TestClass:
     (suite_dir / "__pycache__").mkdir()
     (suite_dir / "empty_folder").mkdir()
     (suite_dir / "empty_folder" / "unused.py").touch()
-    
+
     # Create non-python and non-test python files to cover branch logic
     (suite_dir / "some_file.txt").touch()
     (suite_dir / ".hidden.py").touch()
@@ -831,12 +840,12 @@ def parse_error_here(
         resp_tree = client.get("/tests/suite_xyz/tree")
         assert resp_tree.status_code == 200
         tree = resp_tree.json()
-        
+
         # Verify node structures
         names = {n["name"] for n in tree}
         assert "test_active.py" in names
         assert "valid_sub_folder" in names
-        assert "sub_folder" not in names  # Because its iterdir raised an exception and was skipped!
+        assert "sub_folder" not in names  # its iterdir raised, so it was skipped
         # Hidden and pycache and bad parsing/empty should be handled or skipped
         assert "empty_folder" not in names
         assert ".hidden_folder" not in names
@@ -851,7 +860,7 @@ def parse_error_here(
         assert resp_unsafe.status_code == 400
 
         # C. GET test tree nonexistent suite (restore safe_subpath first)
-        monkeypatch.undo()  # Undo route-level subpath mocking to allow normal safe_subpath execution
+        monkeypatch.undo()  # restore the real safe_subpath for the calls below
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
         resp_missing = client.get("/tests/non_existent/tree")
         assert resp_missing.status_code == 404
@@ -1021,7 +1030,9 @@ def test_get_run_truncates_large_log(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert body["stderr"] == "small"  # small log: unchanged, no marker
 
 
-def test_stream_run_logs_missing_and_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_run_logs_missing_and_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
 
@@ -1045,14 +1056,14 @@ def test_stream_run_logs_missing_and_exception(tmp_path: Path, monkeypatch: pyte
         assert resp.status_code == 200
         assert "[System] Log file not found." in resp.text
 
-    # C. Event generator: file exists, read to the end, then status becomes completed and remaining content is flushed
-    run = _make_run_in_store(container.store, id="run_flush", status=RunStatus.RUNNING)
+    # C. File exists, read to end, then status flips to completed and the rest is flushed
+    _make_run_in_store(container.store, id="run_flush", status=RunStatus.RUNNING)
     run_dir = tmp_path / "run_flush"
     run_dir.mkdir()
     log_file = run_dir / "stdout.log"
     log_file.write_text("line1\n", encoding="utf-8")
 
-    # We will simulate a background task or mock store.get to update status to COMPLETED and append to log file
+    # Mock store.get to flip status to COMPLETED and append to the log mid-stream
     call_count = 0
     original_get = container.store.get
     async def mock_get(run_id: str):
@@ -1100,7 +1111,7 @@ def test_stream_run_logs_missing_and_exception(tmp_path: Path, monkeypatch: pyte
         # Should stream the first line and then terminate gracefully upon exception
         assert "data: line1" in resp.text
 
-    # E. Event generator: file doesn't exist, run is RUNNING, wait loop runs all 50 iterations and exits
+    # E. File missing, run RUNNING: the wait loop runs all 50 iterations and exits
     _make_run_in_store(container.store, id="run_timeout_loop", status=RunStatus.RUNNING)
     with TestClient(app) as client:
         resp = client.get("/runs/run_timeout_loop/stream")
@@ -1315,7 +1326,7 @@ def test_preview_schedule_detailed() -> None:
 
 def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _make_container()
-    
+
     # Save a valid profile for validation checks
     profile = TestProfile(
         id="profile-valid",
@@ -1380,7 +1391,7 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
         assert resp.status_code == 201
         assert resp.json()["next_run_at"] is None
 
-        # 4b. Create schedule with exception on next_run_at calculation (covers 582-583 exception catch!)
+        # 4b. Create schedule, exception on next_run_at calc (covers 582-583)
         payload["cron_expression"] = "0 9 * * *"
         payload["enabled"] = True
         resp_preview_exc = client.post("/schedules", json=payload)
@@ -1435,7 +1446,7 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
         assert resp.status_code == 200
         assert resp.json()["enabled"] is True
 
-        # 9c. Update schedule with exception on next_run_at calculation (covers 668-672 exception catch!)
+        # 9c. Update schedule, exception on next_run_at calc (covers 668-672)
         update_payload["cron_expression"] = "0 9 * * *"
         resp = client.put(f"/schedules/{sched_id}", json=update_payload)
         assert resp.status_code == 200

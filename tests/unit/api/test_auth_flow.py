@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.api.app import create_app
-from qarunner.api.deps import Container, create_container
+from qarunner.api.deps import create_container
 from qarunner.config import Settings
 from qarunner.core.auth import create_access_token
 
 
 @pytest.fixture
 async def auth_app() -> FastAPI:
-    """Create a real FastAPI application with an in-memory SqliteStore and no dependency overrides."""
+    """Create a real FastAPI application with an in-memory SqliteStore and no
+    dependency overrides."""
     settings = Settings()
     # Use in-memory SQLite for testing real database interactions
     settings.db_path = ":memory:"
     container = create_container(settings)
-    
+
     # Initialize the sqlite store
     await container.store.initialize()
-    
+
     app = create_app(container)
     return app
 
@@ -78,7 +76,8 @@ def test_get_me_success_header(client: TestClient) -> None:
 
 
 def test_get_me_success_query_param(client: TestClient) -> None:
-    """Test retrieving current user profile using the query parameter token fallback (e.g. for Allure reports)."""
+    """Test retrieving the current user profile via the query-parameter token
+    fallback (e.g. for Allure reports)."""
     login_resp = client.post(
         "/auth/login",
         json={"username": "admin", "password": "admin123"},
@@ -168,14 +167,15 @@ def test_user_creation_already_exists(client: TestClient) -> None:
 
 
 def test_non_admin_forbidden_actions(client: TestClient) -> None:
-    """Test that a standard USER is forbidden from creating users, listing users, or accessing admin endpoints."""
+    """Test that a standard USER is forbidden from creating users, listing users,
+    or accessing admin endpoints."""
     # 1. Login as admin to create a normal user "tester"
     login_resp = client.post(
         "/auth/login",
         json={"username": "admin", "password": "admin123"},
     )
     admin_token = login_resp.json()["access_token"]
-    
+
     client.post(
         "/users",
         json={"username": "tester", "password": "testerpassword", "role": "user"},

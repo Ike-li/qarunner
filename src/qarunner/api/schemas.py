@@ -6,7 +6,15 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from qarunner.models import ReportRef, Run, RunStatus, TestSummary, UserRole, TestProfile, TestSchedule
+from qarunner.models import (
+    ReportRef,
+    Run,
+    RunStatus,
+    TestProfile,
+    TestSchedule,
+    TestSummary,
+    UserRole,
+)
 
 
 class TestProfileResponse(BaseModel):

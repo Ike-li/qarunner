@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, UTC
 import zoneinfo
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -28,7 +28,11 @@ async def trigger_schedule_run(app: FastAPI, schedule_id: str) -> None:
 
     profile = await container.store.get_profile(schedule.profile_id)
     if not profile:
-        logger.error("Profile %s bound to schedule %s not found. Cannot run.", schedule.profile_id, schedule_id)
+        logger.error(
+            "Profile %s bound to schedule %s not found. Cannot run.",
+            schedule.profile_id,
+            schedule_id,
+        )
         return
 
     # Leader election for multi-replica deployments (CONC-2): every replica runs
@@ -47,7 +51,11 @@ async def trigger_schedule_run(app: FastAPI, schedule_id: str) -> None:
         )
         return
 
-    logger.info("Executing scheduled test run for schedule '%s' (profile: '%s')", schedule.name, profile.name)
+    logger.info(
+        "Executing scheduled test run for schedule '%s' (profile: '%s')",
+        schedule.name,
+        profile.name,
+    )
 
     # Map profile to run request
     run_req = RunRequest(
@@ -66,11 +74,11 @@ async def trigger_schedule_run(app: FastAPI, schedule_id: str) -> None:
     try:
         # Create and run
         await container.orchestrator.create(run_req, created_by="system:schedule")
-        
+
         # Update schedule execution times
         now = datetime.now(UTC)
         schedule = schedule.model_copy(update={"last_run_at": now})
-        
+
         # Calculate next run time
         try:
             from croniter import croniter
@@ -108,7 +116,12 @@ def add_or_update_schedule_job(app: FastAPI, schedule: TestSchedule) -> None:
             id=schedule.id,
             replace_existing=True,
         )
-        logger.info("Registered schedule job: %s with expression '%s' [%s]", schedule.id, schedule.cron_expression, schedule.timezone)
+        logger.info(
+            "Registered schedule job: %s with expression '%s' [%s]",
+            schedule.id,
+            schedule.cron_expression,
+            schedule.timezone,
+        )
     except Exception:
         logger.exception("Failed to add schedule job %s to scheduler", schedule.id)
 

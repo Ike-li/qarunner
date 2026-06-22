@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import jwt
-import pytest
-
 from qarunner.core.auth import (
     create_access_token,
     decode_access_token,

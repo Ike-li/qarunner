@@ -11,10 +11,10 @@ from fastapi.security import OAuth2PasswordBearer
 
 from qarunner.adapters.allure_cli_reporter import AllureCliReporter
 from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
+from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.adapters.junit_collector import JunitCollector
 from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.adapters.subprocess_runner import SubprocessRunner
-from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.adapters.system_clock import SystemClock
 from qarunner.adapters.uuid_ids import UuidIds
 from qarunner.config import Settings
