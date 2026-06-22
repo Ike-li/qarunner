@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, UTC
-import zoneinfo
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 
 from qarunner.core.scheduler import (
-    trigger_schedule_run,
     add_or_update_schedule_job,
     remove_schedule_job,
-    start_scheduler,
     shutdown_scheduler,
+    start_scheduler,
+    trigger_schedule_run,
 )
 from qarunner.models import RunRequest, TestProfile, TestSchedule
 
@@ -31,7 +30,7 @@ def mock_app() -> FastAPI:
 @pytest.mark.asyncio
 async def test_trigger_schedule_run_success(mock_app: FastAPI) -> None:
     container = mock_app.state.container
-    
+
     # Setup schedule and profile
     schedule = TestSchedule(
         id="sched-1",
@@ -50,7 +49,7 @@ async def test_trigger_schedule_run_success(mock_app: FastAPI) -> None:
         created_by="user",
         created_at=datetime.now(UTC),
     )
-    
+
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
     container.store.save_schedule = AsyncMock()
@@ -69,7 +68,7 @@ async def test_trigger_schedule_run_success(mock_app: FastAPI) -> None:
     run_req: RunRequest = container.orchestrator.create.call_args[0][0]
     assert run_req.tests_path == "sample"
     assert container.orchestrator.create.call_args[1]["created_by"] == "system:schedule"
-    
+
     # Verify schedule was updated and saved
     container.store.save_schedule.assert_called_once()
     saved_schedule: TestSchedule = container.store.save_schedule.call_args[0][0]
@@ -114,12 +113,12 @@ async def test_trigger_schedule_run_passes_profile_env(mock_app: FastAPI) -> Non
 @pytest.mark.asyncio
 async def test_trigger_schedule_run_missing_or_disabled(mock_app: FastAPI) -> None:
     container = mock_app.state.container
-    
+
     # 1. Missing schedule
     container.store.get_schedule = AsyncMock(return_value=None)
     await trigger_schedule_run(mock_app, "sched-missing")
     container.orchestrator.create.assert_not_called()
-    
+
     # 2. Disabled schedule
     disabled_sched = TestSchedule(
         id="sched-disabled",
@@ -151,7 +150,7 @@ async def test_trigger_schedule_run_missing_profile(mock_app: FastAPI) -> None:
     )
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=None)
-    
+
     await trigger_schedule_run(mock_app, "sched-1")
     container.orchestrator.create.assert_not_called()
 
@@ -196,7 +195,11 @@ async def test_trigger_schedule_run_dedups_across_concurrent_replicas(tmp_path) 
     create exactly one run (the DB claim elects a single leader)."""
     from qarunner.adapters.sqlite_store import SqliteStore
 
-    store = SqliteStore(":memory:")
+    # A real file-backed DB (as in a multi-replica deployment): concurrent
+    # claims serialise on the file write lock via busy_timeout. A ":memory:"
+    # shared-cache store would instead raise SQLITE_LOCKED (table-level locking,
+    # not honoured by busy_timeout) — an artefact that does not exist in prod.
+    store = SqliteStore(str(tmp_path / "sched.db"))
     await store.initialize()
     await store.save_profile(
         TestProfile(
@@ -262,7 +265,7 @@ async def test_trigger_schedule_run_exceptions(mock_app: FastAPI) -> None:
         created_by="user",
         created_at=datetime.now(UTC),
     )
-    
+
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
     container.store.claim_schedule_run = AsyncMock(return_value=True)
@@ -293,7 +296,7 @@ async def test_trigger_schedule_run_next_run_calc_failure(mock_app: FastAPI) -> 
         created_by="user",
         created_at=datetime.now(UTC),
     )
-    
+
     container.store.get_schedule = AsyncMock(return_value=schedule)
     container.store.get_profile = AsyncMock(return_value=profile)
     container.store.claim_schedule_run = AsyncMock(return_value=True)
@@ -310,7 +313,7 @@ async def test_trigger_schedule_run_next_run_calc_failure(mock_app: FastAPI) -> 
 
 def test_add_or_update_schedule_job(mock_app: FastAPI) -> None:
     scheduler = mock_app.state.scheduler
-    
+
     schedule = TestSchedule(
         id="sched-1",
         name="Test Sched",
@@ -321,19 +324,19 @@ def test_add_or_update_schedule_job(mock_app: FastAPI) -> None:
         created_by="user",
         created_at=datetime.now(UTC),
     )
-    
+
     # 1. Job doesn't exist
     scheduler.get_job = MagicMock(return_value=None)
     add_or_update_schedule_job(mock_app, schedule)
     scheduler.add_job.assert_called_once()
-    
+
     # 2. Job exists -> should be removed and re-added
     scheduler.get_job = MagicMock(return_value=MagicMock())
     scheduler.add_job.reset_mock()
     add_or_update_schedule_job(mock_app, schedule)
     scheduler.remove_job.assert_called_once_with("sched-1")
     scheduler.add_job.assert_called_once()
-    
+
     # 3. Schedule disabled -> should only remove if exists and not add
     disabled_sched = schedule.model_copy(update={"enabled": False})
     scheduler.remove_job.reset_mock()
@@ -341,7 +344,7 @@ def test_add_or_update_schedule_job(mock_app: FastAPI) -> None:
     add_or_update_schedule_job(mock_app, disabled_sched)
     scheduler.remove_job.assert_called_once_with("sched-1")
     scheduler.add_job.assert_not_called()
-    
+
     # 4. APScheduler trigger error
     scheduler.add_job.side_effect = Exception("Scheduler error")
     add_or_update_schedule_job(mock_app, schedule) # Should handle error gracefully
@@ -367,7 +370,7 @@ def test_add_or_update_schedule_job_no_scheduler() -> None:
 def test_remove_schedule_job(mock_app: FastAPI) -> None:
     scheduler = mock_app.state.scheduler
     scheduler.get_job = MagicMock(return_value=MagicMock())
-    
+
     remove_schedule_job(mock_app, "sched-1")
     scheduler.remove_job.assert_called_once_with("sched-1")
 
@@ -380,7 +383,7 @@ def test_remove_schedule_job_no_scheduler() -> None:
 def test_remove_schedule_job_missing(mock_app: FastAPI) -> None:
     scheduler = mock_app.state.scheduler
     scheduler.get_job = MagicMock(return_value=None)
-    
+
     remove_schedule_job(mock_app, "sched-1")
     scheduler.remove_job.assert_not_called()  # Should not attempt removal, covers 102->exit
 
@@ -389,7 +392,7 @@ def test_remove_schedule_job_missing(mock_app: FastAPI) -> None:
 @pytest.mark.asyncio
 async def test_start_scheduler(mock_app: FastAPI) -> None:
     container = mock_app.state.container
-    
+
     schedule1 = TestSchedule(
         id="sched-enabled",
         name="Test Sched",
@@ -410,16 +413,16 @@ async def test_start_scheduler(mock_app: FastAPI) -> None:
         created_by="user",
         created_at=datetime.now(UTC),
     )
-    
+
     container.store.list_schedules = AsyncMock(return_value=[schedule1, schedule2])
     container.store.save_schedule = AsyncMock()
-    
+
     with patch("qarunner.core.scheduler.AsyncIOScheduler") as mock_scheduler_class:
         mock_sched_inst = MagicMock()
         mock_scheduler_class.return_value = mock_sched_inst
-        
+
         await start_scheduler(mock_app)
-        
+
         # Verify scheduler is instantiated, started, and saved schedules are processed
         assert mock_app.state.scheduler == mock_sched_inst
         mock_sched_inst.start.assert_called_once()
@@ -458,9 +461,9 @@ async def test_start_scheduler_next_run_calc_failure(mock_app: FastAPI) -> None:
     with patch("qarunner.core.scheduler.AsyncIOScheduler") as mock_scheduler_class:
         mock_sched_inst = MagicMock()
         mock_scheduler_class.return_value = mock_sched_inst
-        
+
         await start_scheduler(mock_app)
-        
+
         assert mock_app.state.scheduler == mock_sched_inst
         mock_sched_inst.start.assert_called_once()
         container.store.save_schedule.assert_not_called()
