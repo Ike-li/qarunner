@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import aiosqlite
 
 from qarunner.errors import RunNotFound
-from qarunner.models import ReportRef, Run, RunStatus, TestSummary, TestProfile, TestSchedule
+from qarunner.models import ReportRef, Run, RunStatus, TestProfile, TestSchedule, TestSummary
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -308,11 +308,33 @@ class SqliteStore:
             "timeout, executor_mode, summary_json, report_json, exit_code, error, "
             "created_at, started_at, finished_at, env_json, locked "
             "FROM runs "
-            "WHERE finished_at <= ? AND locked = 0 AND status IN ('completed', 'failed', 'timeout')",
+            "WHERE finished_at <= ? AND locked = 0 "
+            "AND status IN ('completed', 'failed', 'timeout')",
             (cutoff_iso,),
         )
         rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
+
+    async def mark_interrupted_runs(self) -> int:
+        """Fail runs left QUEUED/RUNNING by a previous process (crash recovery).
+
+        Their in-process task died with the old process and can never resume,
+        so they are moved to a terminal FAILED state. Returns the count updated.
+        """
+        assert self._db is not None
+        now_iso = datetime.now(UTC).isoformat()
+        cursor = await self._db.execute(
+            "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE status IN (?, ?)",
+            (
+                RunStatus.FAILED.value,
+                "interrupted by server restart",
+                now_iso,
+                RunStatus.QUEUED.value,
+                RunStatus.RUNNING.value,
+            ),
+        )
+        await self._db.commit()
+        return cursor.rowcount
 
     async def delete_profile(self, profile_id: str) -> bool:
         assert self._db is not None

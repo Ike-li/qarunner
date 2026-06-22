@@ -12,9 +12,9 @@ from qarunner.models import (
     ReportRef,
     Run,
     RunStatus,
-    TestSummary,
     TestProfile,
     TestSchedule,
+    TestSummary,
 )
 
 
@@ -297,7 +297,7 @@ async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
 
     # 5. Cascade delete verification
     await store.delete_profile("profile-002")
-    # Because foreign keys are ON and ON DELETE CASCADE is specified, sched-001 should be deleted automatically!
+    # FK ON + ON DELETE CASCADE: sched-001 is deleted automatically
     retrieved_after_cascade = await store.get_schedule("sched-001")
     assert retrieved_after_cascade is None
 
@@ -306,7 +306,7 @@ async def test_sqlite_store_migration_env_json(tmp_path) -> None:
     # 1. Create legacy database schema without 'env_json' column in test_profiles
     import aiosqlite
     db_path = tmp_path / "legacy.db"
-    
+
     async with aiosqlite.connect(db_path) as db:
         # Create legacy test_profiles table
         await db.execute(
@@ -327,13 +327,16 @@ async def test_sqlite_store_migration_env_json(tmp_path) -> None:
             """
         )
         # Create users table so pre-populate admin has a table
-        await db.execute("CREATE TABLE users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL)")
+        await db.execute(
+            "CREATE TABLE users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, "
+            "role TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
         await db.commit()
-        
+
     # 2. Instantiate SqliteStore and initialize (triggers self-migration)
     store = SqliteStore(str(db_path))
     await store.initialize()
-    
+
     # 3. Verify env_json column now exists and can be queried
     profile = TestProfile(
         id="profile-migrated",
@@ -347,7 +350,7 @@ async def test_sqlite_store_migration_env_json(tmp_path) -> None:
     retrieved = await store.get_profile("profile-migrated")
     assert retrieved is not None
     assert retrieved.env == {"FOO": "BAR"}
-    
+
     await store.close()
 
 
@@ -368,7 +371,7 @@ async def test_sqlite_store_list_profiles_filter(store: SqliteStore) -> None:
     )
     await store.save_profile(p1)
     await store.save_profile(p2)
-    
+
     res = await store.list_profiles(tests_path="suite_a")
     assert len(res) == 1
     assert res[0].id == "p1"
@@ -377,16 +380,16 @@ async def test_sqlite_store_list_profiles_filter(store: SqliteStore) -> None:
 async def test_sqlite_store_lock_run(store: SqliteStore) -> None:
     run = _make_run(id="run-lock-test")
     await store.save(run)
-    
+
     # By default, run should not be locked
     retrieved = await store.get("run-lock-test")
     assert retrieved.locked is False
-    
+
     # Lock run
     await store.lock_run("run-lock-test", True)
     retrieved = await store.get("run-lock-test")
     assert retrieved.locked is True
-    
+
     # Unlock run
     await store.lock_run("run-lock-test", False)
     retrieved = await store.get("run-lock-test")
@@ -396,7 +399,7 @@ async def test_sqlite_store_lock_run(store: SqliteStore) -> None:
 async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
     from datetime import UTC, datetime, timedelta
     now = datetime.now(UTC)
-    
+
     # 1. Finished, unlocked, 10 days old (should be returned)
     old_run = _make_run(
         id="run-old",
@@ -405,17 +408,19 @@ async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
     )
     old_run = old_run.model_copy(update={"finished_at": now - timedelta(days=10)})
     await store.save(old_run)
-    
+
     # 2. Finished, locked, 10 days old (should NOT be returned)
     old_locked_run = _make_run(
         id="run-old-locked",
         status=RunStatus.COMPLETED,
         created_at=now - timedelta(days=10),
     )
-    old_locked_run = old_locked_run.model_copy(update={"finished_at": now - timedelta(days=10), "locked": True})
+    old_locked_run = old_locked_run.model_copy(
+        update={"finished_at": now - timedelta(days=10), "locked": True}
+    )
     await store.save(old_locked_run)
     await store.lock_run("run-old-locked", True)
-    
+
     # 3. Finished, unlocked, 2 days old (should NOT be returned)
     new_run = _make_run(
         id="run-new",
@@ -424,7 +429,7 @@ async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
     )
     new_run = new_run.model_copy(update={"finished_at": now - timedelta(days=2)})
     await store.save(new_run)
-    
+
     # Call get_old_unlocked_runs with 7 days retention
     unlocked_old = await store.get_old_unlocked_runs(7)
     assert len(unlocked_old) == 1
@@ -441,7 +446,7 @@ async def test_sqlite_store_delete_schedule(store: SqliteStore) -> None:
         created_at=datetime(2025, 1, 1, tzinfo=UTC),
     )
     await store.save_profile(profile)
-    
+
     # Save schedule
     schedule = TestSchedule(
         id="sched-del",
@@ -454,18 +459,42 @@ async def test_sqlite_store_delete_schedule(store: SqliteStore) -> None:
         created_at=datetime(2025, 1, 1, tzinfo=UTC),
     )
     await store.save_schedule(schedule)
-    
+
     # Delete non-existent schedule
     res = await store.delete_schedule("nonexistent-sched")
     assert res is False
-    
+
     # Delete existent schedule
     res = await store.delete_schedule("sched-del")
     assert res is True
-    
+
     # Verify deleted
     retrieved = await store.get_schedule("sched-del")
     assert retrieved is None
+
+
+async def test_mark_interrupted_runs(store: SqliteStore) -> None:
+    await store.save(_make_run(id="q1", status=RunStatus.QUEUED))
+    await store.save(_make_run(id="r1", status=RunStatus.RUNNING))
+    await store.save(_make_run(id="c1", status=RunStatus.COMPLETED))
+    await store.save(_make_run(id="f1", status=RunStatus.FAILED))
+
+    count = await store.mark_interrupted_runs()
+    assert count == 2
+
+    q1 = await store.get("q1")
+    assert q1.status == RunStatus.FAILED
+    assert q1.error == "interrupted by server restart"
+    assert q1.finished_at is not None
+    assert (await store.get("r1")).status == RunStatus.FAILED
+    # Terminal runs are untouched.
+    assert (await store.get("c1")).status == RunStatus.COMPLETED
+    assert (await store.get("f1")).status == RunStatus.FAILED
+
+
+async def test_mark_interrupted_runs_returns_zero_when_none(store: SqliteStore) -> None:
+    await store.save(_make_run(id="c1", status=RunStatus.COMPLETED))
+    assert await store.mark_interrupted_runs() == 0
 
 
 

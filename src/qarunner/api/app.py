@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -9,6 +10,8 @@ from fastapi import FastAPI
 
 from qarunner.api.deps import Container, create_container
 from qarunner.api.routes import router
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -19,7 +22,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.container = container
     # Initialize SQLite store
     await app.state.container.store.initialize()
-    from qarunner.core.scheduler import start_scheduler, shutdown_scheduler
+    # Crash recovery: fail any run left QUEUED/RUNNING by a previous process.
+    recover = getattr(app.state.container.store, "mark_interrupted_runs", None)
+    if recover is not None:
+        interrupted = await recover()
+        if interrupted:
+            logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
+    from qarunner.core.scheduler import shutdown_scheduler, start_scheduler
     await start_scheduler(app)
     yield
     # Cleanup

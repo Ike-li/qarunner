@@ -151,3 +151,54 @@ def test_static_files_not_mounted_if_no_dir(monkeypatch) -> None:
     # Should 404 since root is not mounted
     assert resp.status_code == 404
 
+
+def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
+    """Startup marks runs left QUEUED/RUNNING by a previous process as FAILED."""
+    import asyncio
+    import tempfile
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from qarunner.adapters.sqlite_store import SqliteStore
+    from qarunner.models import Run, RunStatus
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "test.db")
+        monkeypatch.setenv("QARUNNER_DB_PATH", db_path)
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(Path(td) / "tests"))
+        monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
+
+        async def seed() -> None:
+            store = SqliteStore(db_path)
+            await store.initialize()
+            await store.save(
+                Run(
+                    id="orphan-1",
+                    status=RunStatus.RUNNING,
+                    runner="pytest",
+                    created_by="system",
+                    tests_path="x",
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await store.close()
+
+        asyncio.run(seed())
+
+        # Entering the TestClient context triggers lifespan startup (recovery).
+        app = create_app()
+        with TestClient(app):
+            pass
+
+        async def fetch() -> Run:
+            store = SqliteStore(db_path)
+            await store.initialize()
+            run = await store.get("orphan-1")
+            await store.close()
+            return run
+
+        recovered = asyncio.run(fetch())
+        assert recovered.status == RunStatus.FAILED
+        assert recovered.error == "interrupted by server restart"
+        assert recovered.finished_at is not None
+
