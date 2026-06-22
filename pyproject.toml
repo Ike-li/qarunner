@@ -19,6 +19,7 @@ dependencies = [
     "docker",
     "apscheduler",
     "croniter",
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]

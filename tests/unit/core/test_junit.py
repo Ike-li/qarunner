@@ -18,6 +18,30 @@ class TestParseJUnitXml:
         result = parse_junit_xml(str(bad))
         assert result is None
 
+    def test_returns_none_for_entity_expansion(self, tmp_path):
+        """SEC-7: an entity-expansion (billion-laughs) junit.xml is rejected safely."""
+        f = tmp_path / "evil.xml"
+        f.write_text(
+            '<?xml version="1.0"?>\n'
+            '<!DOCTYPE testsuite [\n'
+            '  <!ENTITY lol "lol">\n'
+            '  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;">\n'
+            ']>\n'
+            '<testsuite name="s">\n'
+            '  <testcase name="&lol2;" classname="s" time="0.1"/>\n'
+            '</testsuite>\n'
+        )
+        assert parse_junit_xml(str(f)) is None
+
+    def test_returns_none_for_oversized_file(self, tmp_path, monkeypatch):
+        """SEC-7: a junit.xml larger than the size cap is rejected before parsing."""
+        from qarunner.core import junit
+
+        monkeypatch.setattr(junit, "_MAX_JUNIT_BYTES", 10)
+        f = tmp_path / "big.xml"
+        f.write_text('<?xml version="1.0"?><testsuite name="s"></testsuite>')
+        assert parse_junit_xml(str(f)) is None
+
     def test_returns_none_for_unknown_root(self, tmp_path):
         f = tmp_path / "weird.xml"
         f.write_text('<?xml version="1.0"?><unknown/>')

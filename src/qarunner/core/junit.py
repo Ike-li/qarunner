@@ -5,7 +5,15 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import defusedxml.ElementTree as DefusedET
+from defusedxml.common import DefusedXmlException
+
 from qarunner.models import CollectResult, TestCaseResult, TestSummary
+
+# A junit.xml is produced by untrusted test code, so parse it defensively:
+# defusedxml blocks XXE / entity-expansion (billion-laughs) attacks, and we cap
+# the file size so a giant report can't exhaust memory before parsing (SEC-7).
+_MAX_JUNIT_BYTES = 10 * 1024 * 1024
 
 
 def parse_junit_xml(path: str) -> CollectResult | None:
@@ -16,10 +24,12 @@ def parse_junit_xml(path: str) -> CollectResult | None:
     p = Path(path)
     if not p.is_file():
         return None
+    if p.stat().st_size > _MAX_JUNIT_BYTES:
+        return None
 
     try:
-        tree = ET.parse(p)  # noqa: S314 — trusted local file
-    except ET.ParseError:
+        tree = DefusedET.parse(p)
+    except (ET.ParseError, DefusedXmlException):
         return None
 
     root = tree.getroot()
