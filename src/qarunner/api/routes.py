@@ -31,9 +31,15 @@ from qarunner.api.schemas import (
 from qarunner.config import Settings
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
-from qarunner.models import RunRequest, User, TestProfile, TestSchedule
+from qarunner.models import Run, RunRequest, TestProfile, TestSchedule, User, UserRole
 
 router = APIRouter()
+
+
+def _require_run_access(run: Run, user: User) -> None:
+    """Raise 403 unless *user* owns *run* or is an admin (object-level authz)."""
+    if user.role != UserRole.ADMIN and run.created_by != user.username:
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 # ── Auth & User Management Endpoints ─────────────────────────────────────
@@ -330,11 +336,13 @@ async def create_run(
 @router.get("/runs", response_model=RunListResponse)
 async def list_runs(
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> RunListResponse:
-    """List all runs, newest first."""
+    """List runs, newest first (non-admins see only their own)."""
     container = request.app.state.container
     runs = await container.store.list()
+    if current_user.role != UserRole.ADMIN:
+        runs = [r for r in runs if r.created_by == current_user.username]
     return RunListResponse(runs=[run_to_response(r) for r in runs])
 
 
@@ -342,7 +350,7 @@ async def list_runs(
 async def get_run(
     run_id: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> RunResponse:
     """Retrieve a single run by ID."""
     container = request.app.state.container
@@ -350,6 +358,7 @@ async def get_run(
         run = await container.store.get(run_id)
     except RunNotFound:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
 
     cfg = Settings()
     run_dir = Path(cfg.artifacts_root) / run_id
@@ -387,7 +396,7 @@ async def get_run(
 async def get_report(
     run_id: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> FileResponse:
     """Serve the HTML report for a completed run."""
     container = request.app.state.container
@@ -395,6 +404,7 @@ async def get_report(
         run = await container.store.get(run_id)
     except RunNotFound:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
     return FileResponse(run.report.allure_report_file, media_type="text/html")
@@ -405,7 +415,7 @@ async def get_report_assets(
     run_id: str,
     path: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> FileResponse:
     """Serve Allure report static assets (JS, CSS, data files) securely."""
     container = request.app.state.container
@@ -413,6 +423,7 @@ async def get_report_assets(
         run = await container.store.get(run_id)
     except RunNotFound:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
 
@@ -435,14 +446,15 @@ async def get_report_assets(
 async def stream_run_logs(
     run_id: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream stdout logs in real-time using Server-Sent Events (SSE)."""
     container = request.app.state.container
     try:
-        await container.store.get(run_id)
+        run = await container.store.get(run_id)
     except RunNotFound:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    _require_run_access(run, current_user)
 
     from qarunner.models import RunStatus
     import asyncio
@@ -503,14 +515,15 @@ async def lock_run(
     run_id: str,
     req: LockRunRequest,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> RunResponse:
     """Toggle lock/pin status of a run to protect it from deletion."""
     container = request.app.state.container
     try:
-        await container.store.get(run_id)
+        run = await container.store.get(run_id)
     except RunNotFound:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    _require_run_access(run, current_user)
 
     await container.store.lock_run(run_id, req.locked)
     updated_run = await container.store.get(run_id)

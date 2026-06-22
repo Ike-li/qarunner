@@ -422,6 +422,50 @@ def test_get_report_assets_missing_file(tmp_path: Path) -> None:
     assert resp.status_code == 404
 
 
+# ── object-level authorization (SEC-4) ─────────────────────────────────
+
+
+def _override_user(app: FastAPI, username: str, role: UserRole) -> None:
+    async def _u() -> User:
+        return User(username=username, role=role, created_at=NOW)
+
+    app.dependency_overrides[get_current_user] = _u
+
+
+def test_get_run_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _make_run_in_store(container.store, id="r1", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/r1")
+    assert resp.status_code == 403
+
+
+def test_get_run_allowed_for_owner() -> None:
+    container = _make_container()
+    _make_run_in_store(container.store, id="r1", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "bob", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/r1")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "r1"
+
+
+def test_list_runs_non_admin_sees_only_own() -> None:
+    container = _make_container()
+    _make_run_in_store(container.store, id="ra", created_by="alice")
+    _make_run_in_store(container.store, id="rb", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs")
+    ids = [r["id"] for r in resp.json()["runs"]]
+    assert "ra" in ids
+    assert "rb" not in ids
+
+
 def test_list_tests_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test successful listing of valid test directories, filtering out hidden/internal ones."""
     # Create subdirectories
