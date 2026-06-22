@@ -37,6 +37,7 @@ packages = ["src/qarunner"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=qarunner --cov-branch --cov-report=term-missing --cov-fail-under=100 -m 'not e2e'"
 markers = [
     "e2e: end-to-end smoke tests (require real allure CLI, not counted in coverage gate)",
 ]

@@ -353,6 +353,75 @@ def test_get_report_html_not_generated(tmp_path: Path) -> None:
     assert resp.status_code == 404
 
 
+# ── GET /runs/{run_id}/report/{path} (static assets) ───────────────────
+
+
+def _report_run(store: FakeStore, run_id: str, report_dir: Path) -> None:
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "index.html").write_text("<html></html>")
+    report = ReportRef(
+        allure_results_dir=str(report_dir.parent),
+        allure_report_file=str(report_dir / "index.html"),
+        html_generated=True,
+    )
+    _make_run_in_store(store, id=run_id, status=RunStatus.COMPLETED, report=report)
+
+
+def test_get_report_assets_success(tmp_path: Path) -> None:
+    report_dir = tmp_path / "allure-report"
+    container = _make_container()
+    _report_run(container.store, "ra", report_dir)
+    (report_dir / "data").mkdir()
+    (report_dir / "data" / "suites.json").write_text('{"ok": true}')
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/ra/report/data/suites.json")
+    assert resp.status_code == 200
+    assert '"ok": true' in resp.text
+
+
+def test_get_report_assets_run_not_found() -> None:
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/nope/report/index.html")
+    assert resp.status_code == 404
+
+
+def test_get_report_assets_report_not_available() -> None:
+    container = _make_container()
+    _make_run_in_store(container.store, id="rb")  # no report attached
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/rb/report/index.html")
+    assert resp.status_code == 404
+
+
+def test_get_report_assets_traversal_blocked(tmp_path: Path) -> None:
+    report_dir = tmp_path / "allure-report"
+    container = _make_container()
+    _report_run(container.store, "rc", report_dir)
+    # A symlink inside the report dir pointing outside must not be served.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    (report_dir / "escape").symlink_to(secret)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/rc/report/escape")
+    assert resp.status_code == 403
+    assert "TOPSECRET" not in resp.text
+
+
+def test_get_report_assets_missing_file(tmp_path: Path) -> None:
+    report_dir = tmp_path / "allure-report"
+    container = _make_container()
+    _report_run(container.store, "rd", report_dir)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/rd/report/nonexistent.js")
+    assert resp.status_code == 404
+
+
 def test_list_tests_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test successful listing of valid test directories, filtering out hidden/internal ones."""
     # Create subdirectories

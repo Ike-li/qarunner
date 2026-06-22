@@ -416,13 +416,15 @@ async def get_report_assets(
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
 
-    allure_report_dir = Path(run.report.allure_report_file).parent
-    asset_file = (allure_report_dir / path).resolve()
+    from qarunner.core.paths import safe_subpath
 
-    # Directory traversal safety check
-    if allure_report_dir.resolve() not in asset_file.parents:
-        raise HTTPException(status_code=403, detail="Access denied")
+    allure_report_dir = str(Path(run.report.allure_report_file).parent)
+    try:
+        asset_path = safe_subpath(allure_report_dir, path)  # raises UnsafePath on escape
+    except UnsafePath:
+        raise HTTPException(status_code=403, detail="Access denied") from None
 
+    asset_file = Path(asset_path)
     if not asset_file.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
