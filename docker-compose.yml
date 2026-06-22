@@ -11,8 +11,10 @@ services:
       - QARUNNER_TESTS_ROOT=/app/external_tests
       - QARUNNER_ARTIFACTS_ROOT=/app/artifacts
       - QARUNNER_DB_PATH=/app/artifacts/qarunner.db
-      - QARUNNER_SECRET_KEY=production-secret-jwt-signing-key-change-me
-      - QARUNNER_ADMIN_PASSWORD=admin123
+      # Required — provide via a local .env (see .env.example); compose fails
+      # to start if unset. Never hard-code real secrets here (SEC-2).
+      - QARUNNER_SECRET_KEY=${QARUNNER_SECRET_KEY:?set QARUNNER_SECRET_KEY (see .env.example)}
+      - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:?set QARUNNER_ADMIN_PASSWORD (see .env.example)}
     volumes:
       - platform-artifacts:/app/artifacts
       - ./external_tests:/app/external_tests:ro # Read-only mount of local test files if present

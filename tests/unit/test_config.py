@@ -1,4 +1,9 @@
-"""Tests for qarunner.config — Settings defaults."""
+"""Tests for qarunner.config — Settings defaults and secret validation (SEC-2)."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
 
 from qarunner.config import Settings
 
@@ -22,3 +27,40 @@ class TestSettings:
         s = Settings()
         assert s.tests_root == "/custom/tests"
         assert s.max_concurrency == 8
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "super-secret-dev-key",
+        "production-secret-jwt-signing-key-change-me",
+        "change-me",
+        "",
+        "   ",
+    ],
+)
+def test_settings_rejects_placeholder_secret_key(bad: str) -> None:
+    """SEC-2: a blank or known-placeholder JWT secret is refused at startup."""
+    with pytest.raises(ValidationError):
+        Settings(secret_key=bad)
+
+
+@pytest.mark.parametrize("bad", ["admin123", "admin", "password", "change-me", "", "   "])
+def test_settings_rejects_placeholder_admin_password(bad: str) -> None:
+    """SEC-2: a blank or known-weak admin password is refused at startup."""
+    with pytest.raises(ValidationError):
+        Settings(admin_password=bad)
+
+
+def test_settings_secret_key_required(monkeypatch) -> None:
+    """SEC-2: a missing QARUNNER_SECRET_KEY refuses startup."""
+    monkeypatch.delenv("QARUNNER_SECRET_KEY", raising=False)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_settings_admin_password_required(monkeypatch) -> None:
+    """SEC-2: a missing QARUNNER_ADMIN_PASSWORD refuses startup."""
+    monkeypatch.delenv("QARUNNER_ADMIN_PASSWORD", raising=False)
+    with pytest.raises(ValidationError):
+        Settings()

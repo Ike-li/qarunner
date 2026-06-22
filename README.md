@@ -47,7 +47,7 @@ uv run uvicorn qarunner.api.app:app --reload
 # 1. Sign in to obtain access token
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "admin123"}' | jq -r '.access_token')
+  -d "{\"username\": \"admin\", \"password\": \"$QARUNNER_ADMIN_PASSWORD\"}" | jq -r '.access_token')
 
 # 2. Trigger a run with Authorization header
 curl -X POST http://localhost:8000/runs \
@@ -61,7 +61,10 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/runs/<id>
 
 ## Configuration
 
-All settings are read from environment variables with `QARUNNER_` prefix:
+All settings are read from environment variables with `QARUNNER_` prefix.
+`QARUNNER_SECRET_KEY` and `QARUNNER_ADMIN_PASSWORD` are **required** — the app
+refuses to start if either is unset or left as a known placeholder (SEC-2). See
+`.env.example` for a starting point.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -72,8 +75,9 @@ All settings are read from environment variables with `QARUNNER_` prefix:
 | `QARUNNER_EXECUTABLE` | (sys.executable) | Python executable for running tests |
 | `QARUNNER_DEFAULT_TIMEOUT_SECONDS` | `1800` | Default test execution timeout |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | Maximum concurrent test runs |
+| `QARUNNER_SECRET_KEY` | **(required)** | JWT signing secret. No default; known placeholders rejected. Generate via `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
 | `QARUNNER_ADMIN_USER` | `admin` | Initial default administrator username |
-| `QARUNNER_ADMIN_PASSWORD` | `admin123` | Initial default administrator password |
+| `QARUNNER_ADMIN_PASSWORD` | **(required)** | Initial administrator password. No default; known weak/default values rejected |
 | `QARUNNER_CRASH_RECOVERY_ON_STARTUP` | `true` | Fail QUEUED/RUNNING runs left by a previous process on startup. Assumes a single instance owns the DB — set `false` on all but one replica when scaling out, or sibling runs in flight will be wrongly failed |
 
 ## Architecture

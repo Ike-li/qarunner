@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -10,6 +12,10 @@ from qarunner.api.app import create_app
 from qarunner.api.deps import create_container
 from qarunner.config import Settings
 from qarunner.core.auth import create_access_token
+
+# The seeded admin uses QARUNNER_ADMIN_PASSWORD (set in conftest), so log in with
+# that same value rather than the old hard-coded default (SEC-2).
+ADMIN_PW = os.environ["QARUNNER_ADMIN_PASSWORD"]
 
 
 @pytest.fixture
@@ -37,7 +43,7 @@ def test_admin_login_success(client: TestClient) -> None:
     """Test successful login using the default pre-populated admin credentials."""
     resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": ADMIN_PW},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -60,7 +66,7 @@ def test_get_me_success_header(client: TestClient) -> None:
     # First login
     login_resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": ADMIN_PW},
     )
     token = login_resp.json()["access_token"]
 
@@ -80,7 +86,7 @@ def test_get_me_success_query_param(client: TestClient) -> None:
     fallback (e.g. for Allure reports)."""
     login_resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": ADMIN_PW},
     )
     token = login_resp.json()["access_token"]
 
@@ -122,7 +128,7 @@ def test_user_creation_and_listing_by_admin(client: TestClient) -> None:
     # 1. Login as admin
     login_resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": ADMIN_PW},
     )
     admin_token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {admin_token}"}
@@ -151,7 +157,7 @@ def test_user_creation_already_exists(client: TestClient) -> None:
     """Test that creating a user that already exists raises 400 Bad Request."""
     login_resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": ADMIN_PW},
     )
     admin_token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {admin_token}"}
@@ -172,7 +178,7 @@ def test_non_admin_forbidden_actions(client: TestClient) -> None:
     # 1. Login as admin to create a normal user "tester"
     login_resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": ADMIN_PW},
     )
     admin_token = login_resp.json()["access_token"]
 
