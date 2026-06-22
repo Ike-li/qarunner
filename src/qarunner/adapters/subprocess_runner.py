@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 from qarunner.errors import RunnerError
 from qarunner.models import ProcessResult
+
+# SEC-8: ProcessResult.stdout/stderr is never consumed downstream (the
+# orchestrator only reads exit_code/timed_out; the real logs live in the on-disk
+# stdout/stderr files). Reading a multi-GB log fully into memory here is pure
+# waste and an OOM vector, so we keep only the tail.
+_MAX_CAPTURE_BYTES = 256 * 1024
+
+
+def _read_tail(path: str, limit: int) -> bytes:
+    """Read at most the last *limit* bytes of *path* without loading it all."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        if size > limit:
+            f.seek(size - limit)
+        return f.read()
 
 
 class SubprocessRunner:
@@ -21,7 +37,6 @@ class SubprocessRunner:
         stdout_file: str | None = None,
         stderr_file: str | None = None,
     ) -> ProcessResult:
-        import os
         start = time.monotonic()
         timed_out = False
 
@@ -114,16 +129,14 @@ class SubprocessRunner:
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
         if stdout_file and os.path.exists(stdout_file):
-            with open(stdout_file, "rb") as f:
-                stdout_bytes = f.read()
+            stdout_bytes = _read_tail(stdout_file, _MAX_CAPTURE_BYTES)
         if stderr_file and os.path.exists(stderr_file):
-            with open(stderr_file, "rb") as f:
-                stderr_bytes = f.read()
+            stderr_bytes = _read_tail(stderr_file, _MAX_CAPTURE_BYTES)
 
         return ProcessResult(
             exit_code=proc.returncode,
-            stdout=stdout_bytes.decode(errors="replace"),
-            stderr=stderr_bytes.decode(errors="replace"),
+            stdout=stdout_bytes[-_MAX_CAPTURE_BYTES:].decode(errors="replace"),
+            stderr=stderr_bytes[-_MAX_CAPTURE_BYTES:].decode(errors="replace"),
             duration_ms=elapsed_ms,
             timed_out=timed_out,
         )

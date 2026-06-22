@@ -134,6 +134,27 @@ async def test_stdout_stderr_files(runner: SubprocessRunner, tmp_path: Path) -> 
     assert stderr_file.read_text() == "error file"
 
 
+async def test_capture_is_tail_bounded(
+    runner: SubprocessRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SEC-8: only the tail of a large log is captured into ProcessResult; the
+    # on-disk file stays complete.
+    from qarunner.adapters import subprocess_runner as sr
+
+    monkeypatch.setattr(sr, "_MAX_CAPTURE_BYTES", 20)
+    stdout_file = tmp_path / "stdout.log"
+    result = await runner.run(
+        [sys.executable, "-c", "print('HEAD' + 'x' * 1000 + 'TAIL')"],
+        cwd=".",
+        stdout_file=str(stdout_file),
+    )
+    assert result.exit_code == 0
+    assert len(result.stdout) <= 20
+    assert "TAIL" in result.stdout
+    assert "HEAD" not in result.stdout
+    assert stdout_file.read_text().startswith("HEAD")  # disk file is complete
+
+
 async def test_timeout_with_files(runner: SubprocessRunner, tmp_path: Path) -> None:
     stdout_file = tmp_path / "stdout.log"
     stderr_file = tmp_path / "stderr.log"

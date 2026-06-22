@@ -983,26 +983,42 @@ def test_get_run_detailed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         import shutil
         shutil.rmtree("./artifacts", ignore_errors=True)
 
-    # 3. Test exception handling during log reading
+    # 3. Log reading that fails returns None instead of propagating. The log
+    # paths are directories where files are expected, so the bounded reader
+    # hits OSError on open().
     exception_dir = tmp_path / "run_exception"
     exception_dir.mkdir()
-    (exception_dir / "stdout.log").write_text("will trigger exception", encoding="utf-8")
-    (exception_dir / "stderr.log").write_text("will trigger exception", encoding="utf-8")
-
-    original_read_text = Path.read_text
-    def mock_read_text(self: Path, *args, **kwargs):
-        if self.name in ("stdout.log", "stderr.log") and "run_exception" in str(self):
-            raise OSError("Inaccessible file")
-        return original_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", mock_read_text)
+    (exception_dir / "stdout.log").mkdir()
+    (exception_dir / "stderr.log").mkdir()
 
     with TestClient(app) as client:
         resp_exc = client.get("/runs/run_exception")
         assert resp_exc.status_code == 200
-        # Exception caught, should return None instead of propagating exception
         assert resp_exc.json()["stdout"] is None
         assert resp_exc.json()["stderr"] is None
+
+
+def test_get_run_truncates_large_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEC-8: get_run returns only the bounded, marked tail of a large log."""
+    from qarunner.api import routes
+
+    container = _make_container()
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    monkeypatch.setattr(routes, "_RUN_LOG_MAX_BYTES", 20)
+    _make_run_in_store(container.store, id="run_big")
+    big_dir = tmp_path / "run_big"
+    big_dir.mkdir()
+    (big_dir / "stdout.log").write_text("HEAD" + "x" * 1000 + "TAIL", encoding="utf-8")
+    (big_dir / "stderr.log").write_text("small", encoding="utf-8")
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_big")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "truncated" in body["stdout"]
+        assert "TAIL" in body["stdout"]
+        assert "HEAD" not in body["stdout"]
+        assert body["stderr"] == "small"  # small log: unchanged, no marker
 
 
 def test_stream_run_logs_missing_and_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -346,6 +346,29 @@ async def list_runs(
     return RunListResponse(runs=[run_to_response(r) for r in runs])
 
 
+_RUN_LOG_MAX_BYTES = 256 * 1024
+
+
+def _read_log_tail(path: Path) -> str | None:
+    """Return the bounded tail of a log file for API display (SEC-8).
+
+    Reads at most ``_RUN_LOG_MAX_BYTES`` from the end so a multi-GB log can't
+    exhaust memory or bloat the response. Returns ``None`` if it can't be read.
+    """
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > _RUN_LOG_MAX_BYTES:
+                f.seek(size - _RUN_LOG_MAX_BYTES)
+            data = f.read()
+    except OSError:
+        return None
+    text = data.decode("utf-8", errors="replace")
+    if size > _RUN_LOG_MAX_BYTES:
+        return "[... earlier output truncated ...]\n" + text
+    return text
+
+
 @router.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: str,
@@ -375,15 +398,9 @@ async def get_run(
     stderr_content = None
 
     if stdout_file.exists():
-        try:
-            stdout_content = stdout_file.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+        stdout_content = _read_log_tail(stdout_file)
     if stderr_file.exists():
-        try:
-            stderr_content = stderr_file.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+        stderr_content = _read_log_tail(stderr_file)
 
     res = run_to_response(run)
     res.stdout = stdout_content
