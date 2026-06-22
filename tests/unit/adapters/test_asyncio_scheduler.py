@@ -50,3 +50,44 @@ async def test_semaphore_limits_concurrency() -> None:
         scheduler.schedule(task())
     await asyncio.sleep(0.5)
     assert max_seen <= 2
+
+
+async def test_completed_task_is_dereferenced() -> None:
+    scheduler = AsyncioScheduler()
+
+    async def task() -> None:
+        return None
+
+    scheduler.schedule(task())
+    await asyncio.sleep(0.05)
+    # Strong reference is dropped once the task finishes cleanly.
+    assert scheduler._tasks == set()
+
+
+async def test_failing_task_is_logged_not_raised() -> None:
+    scheduler = AsyncioScheduler()
+
+    async def boom() -> None:
+        raise RuntimeError("kaboom")
+
+    # Must not propagate out of the scheduler / crash the loop.
+    scheduler.schedule(boom())
+    await asyncio.sleep(0.05)
+    assert scheduler._tasks == set()
+
+
+async def test_cancelled_task_is_handled() -> None:
+    scheduler = AsyncioScheduler()
+    started = asyncio.Event()
+
+    async def long_task() -> None:
+        started.set()
+        await asyncio.sleep(10)
+
+    scheduler.schedule(long_task())
+    await started.wait()
+    task = next(iter(scheduler._tasks))
+    task.cancel()
+    await asyncio.sleep(0.05)
+    # Cancellation is handled without calling .exception() (which would raise).
+    assert scheduler._tasks == set()
