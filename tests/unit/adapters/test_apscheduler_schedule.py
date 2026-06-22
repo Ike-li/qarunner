@@ -198,10 +198,13 @@ async def test_trigger_next_run_calc_failure() -> None:
     store.save_schedule = AsyncMock()
     orch.create = AsyncMock()
 
-    # croniter raises in both the tick-claim block (fire_time falls back to now)
-    # and the next_run_at computation (logged, falls through); the schedule is
+    # Both cron computations fail: the tick-claim block falls back to now(UTC)
+    # and the next_run_at computation is logged and skipped; the schedule is
     # still saved with an updated last_run_at.
-    with patch("croniter.croniter", side_effect=ValueError("Invalid timezone/cron")):
+    with (
+        patch("qarunner.core.cron.previous_run", side_effect=ValueError("bad cron")),
+        patch("qarunner.core.cron.next_run", side_effect=ValueError("bad cron")),
+    ):
         await port._trigger("sched-1")
     store.save_schedule.assert_called_once()
 

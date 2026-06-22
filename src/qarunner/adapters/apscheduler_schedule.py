@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import zoneinfo
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from qarunner.core import cron
 from qarunner.models import RunRequest
 
 if TYPE_CHECKING:
@@ -56,9 +56,7 @@ class ApschedulerSchedulePort:
         # its own in-process scheduler and fires this job at the same cron tick. Claim
         # the tick in the DB so only the winning replica creates a run; the rest skip.
         try:
-            from croniter import croniter
-            tz = zoneinfo.ZoneInfo(schedule.timezone)
-            fire_time = croniter(schedule.cron_expression, datetime.now(tz)).get_prev(datetime)
+            fire_time = cron.previous_run(schedule.cron_expression, schedule.timezone)
         except Exception:
             fire_time = datetime.now(UTC)
         if not await self._store.claim_schedule_run(schedule_id, fire_time):
@@ -98,11 +96,8 @@ class ApschedulerSchedulePort:
 
             # Calculate next run time
             try:
-                from croniter import croniter
-                tz = zoneinfo.ZoneInfo(schedule.timezone)
-                now_tz = datetime.now(tz)
-                iter = croniter(schedule.cron_expression, now_tz)
-                schedule = schedule.model_copy(update={"next_run_at": iter.get_next(datetime)})
+                next_at = cron.next_run(schedule.cron_expression, schedule.timezone)
+                schedule = schedule.model_copy(update={"next_run_at": next_at})
             except Exception:
                 logger.exception("Failed to calculate next run time for schedule %s", schedule_id)
 
@@ -161,12 +156,8 @@ class ApschedulerSchedulePort:
             if schedule.enabled:
                 # Update next_run_at statically at startup
                 try:
-                    from croniter import croniter
-                    tz = zoneinfo.ZoneInfo(schedule.timezone)
-                    now_tz = datetime.now(tz)
-                    iter = croniter(schedule.cron_expression, now_tz)
-                    next_run = iter.get_next(datetime)
-                    schedule = schedule.model_copy(update={"next_run_at": next_run})
+                    next_at = cron.next_run(schedule.cron_expression, schedule.timezone)
+                    schedule = schedule.model_copy(update={"next_run_at": next_at})
                     await self._store.save_schedule(schedule)
                 except Exception:
                     pass

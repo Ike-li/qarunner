@@ -615,26 +615,15 @@ async def preview_schedule(
     _current_user: User = Depends(get_current_user),
 ) -> TestSchedulePreviewResponse:
     """Preview the next 5 occurrences of a cron expression."""
-    import zoneinfo
-    from datetime import datetime
+    from qarunner.core import cron
 
-    from croniter import croniter
+    if not cron.is_valid_timezone(timezone):
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone}")
 
     try:
-        tz = zoneinfo.ZoneInfo(timezone)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {timezone}") from None
-
-    now = datetime.now(tz)
-    try:
-        if not croniter.is_valid(expression):
+        if not cron.is_valid_cron(expression):
             raise ValueError("Invalid cron expression syntax")
-
-        iter = croniter(expression, now)
-        next_runs = []
-        for _ in range(5):
-            next_runs.append(iter.get_next(datetime))
-        return TestSchedulePreviewResponse(next_runs=next_runs)
+        return TestSchedulePreviewResponse(next_runs=cron.next_runs(expression, timezone, 5))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid cron expression: {str(e)}") from e
 
@@ -647,11 +636,11 @@ async def create_schedule(
 ) -> TestScheduleResponse:
     """Create and persist a new test schedule."""
     container = request.app.state.container
+    import contextlib
     import uuid
-    import zoneinfo
     from datetime import UTC, datetime
 
-    from croniter import croniter
+    from qarunner.core import cron
 
     # Validate profile exists
     profile = await container.store.get_profile(req.profile_id)
@@ -659,23 +648,18 @@ async def create_schedule(
         raise HTTPException(status_code=400, detail=f"Profile {req.profile_id} not found")
 
     # Validate timezone
-    try:
-        tz = zoneinfo.ZoneInfo(req.timezone)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}") from None
+    if not cron.is_valid_timezone(req.timezone):
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}")
 
     # Validate cron expression
-    if not croniter.is_valid(req.cron_expression):
+    if not cron.is_valid_cron(req.cron_expression):
         raise HTTPException(status_code=400, detail="Invalid cron expression")
 
     # Compute static next_run_at preview
     next_run_at = None
     if req.enabled:
-        try:
-            iter = croniter(req.cron_expression, datetime.now(tz))
-            next_run_at = iter.get_next(datetime)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            next_run_at = cron.next_run(req.cron_expression, req.timezone)
 
     schedule_id = str(uuid.uuid4())
     schedule = TestSchedule(
@@ -733,10 +717,9 @@ async def update_schedule(
 ) -> TestScheduleResponse:
     """Update an existing test schedule."""
     container = request.app.state.container
-    import zoneinfo
-    from datetime import datetime
+    import contextlib
 
-    from croniter import croniter
+    from qarunner.core import cron
 
     existing = await container.store.get_schedule(schedule_id)
     if not existing:
@@ -748,23 +731,18 @@ async def update_schedule(
         raise HTTPException(status_code=400, detail=f"Profile {req.profile_id} not found")
 
     # Validate timezone
-    try:
-        tz = zoneinfo.ZoneInfo(req.timezone)
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}") from None
+    if not cron.is_valid_timezone(req.timezone):
+        raise HTTPException(status_code=400, detail=f"Invalid timezone: {req.timezone}")
 
     # Validate cron expression
-    if not croniter.is_valid(req.cron_expression):
+    if not cron.is_valid_cron(req.cron_expression):
         raise HTTPException(status_code=400, detail="Invalid cron expression")
 
     # Compute static next_run_at preview
     next_run_at = None
     if req.enabled:
-        try:
-            iter = croniter(req.cron_expression, datetime.now(tz))
-            next_run_at = iter.get_next(datetime)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            next_run_at = cron.next_run(req.cron_expression, req.timezone)
 
     updated = TestSchedule(
         id=existing.id,
