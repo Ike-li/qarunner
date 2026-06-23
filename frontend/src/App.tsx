@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { classifyLogLine, formatDuration, matchesLogLevel } from './logUtils'
 import { 
   Play, 
   RotateCw, 
@@ -1436,14 +1437,7 @@ export default function App() {
   }, [token, fetchRuns, fetchSelectedRunDetails])
 
 
-  // Utility formatting helpers
-  const formatDuration = (ms: number | undefined | null) => {
-    if (ms === undefined || ms === null) return '-'
-    if (ms < 1000) return `${ms}ms`
-    const sec = (ms / 1000).toFixed(1)
-    return `${sec}s`
-  }
-
+  // Utility formatting helpers (formatDuration lives in ./logUtils, unit-tested)
   const formatDate = (isoStr: string | null) => {
     if (!isoStr) return '-'
     const d = new Date(isoStr)
@@ -1686,30 +1680,7 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Log level filtering helper
-  const matchesLogLevel = (line: string, filter: 'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS') => {
-    if (filter === 'ALL') return true;
-    const lowerLine = line.toLowerCase();
-    if (filter === 'ERROR') {
-      return (
-        lowerLine.includes('failed') ||
-        lowerLine.includes('error') ||
-        lowerLine.includes('exception') ||
-        lowerLine.includes('traceback') ||
-        line.startsWith('E   ') ||
-        line.startsWith('>   ')
-      );
-    }
-    if (filter === 'WARNING') {
-      return lowerLine.includes('warning') || lowerLine.includes('userwarning') || lowerLine.includes('deprecationwarning');
-    }
-    if (filter === 'SUCCESS') {
-      return lowerLine.includes('passed');
-    }
-    return true;
-  };
-
-  // Log filtering helper
+  // Log filtering helper (matchesLogLevel lives in ./logUtils, unit-tested)
   const getFilteredLogs = (text: string) => {
     if (!text) return '';
     let lines = text.split('\n');
@@ -1756,20 +1727,13 @@ export default function App() {
     };
   };
 
-  // Regex syntax highlighter for comfortable reading
+  // Map the (pure, unit-tested) line classification to its styled span.
   const formatLogLine = (line: string) => {
-    if (line.startsWith('====') || line.startsWith('----') || line.includes('test session starts')) {
-      return <span className={styles.logHeaderLine}>{line}</span>
-    }
-    if (line.includes('PASSED') || line.includes('passed') && (line.includes('in ') || line.includes('==='))) {
-      return <span className={styles.logSuccessLine}>{line}</span>
-    }
-    if (line.includes('FAILED') || line.includes('failed') || line.includes('AssertionError') || line.includes('ValueError') || line.startsWith('E   ') || line.startsWith('>   ')) {
-      return <span className={styles.logErrorLine}>{line}</span>
-    }
-    if (line.includes('WARNING') || line.includes('warning') || line.includes('UserWarning')) {
-      return <span className={styles.logWarningLine}>{line}</span>
-    }
+    const kind = classifyLogLine(line)
+    if (kind === 'header') return <span className={styles.logHeaderLine}>{line}</span>
+    if (kind === 'success') return <span className={styles.logSuccessLine}>{line}</span>
+    if (kind === 'error') return <span className={styles.logErrorLine}>{line}</span>
+    if (kind === 'warning') return <span className={styles.logWarningLine}>{line}</span>
     return <span>{line}</span>
   }
 
