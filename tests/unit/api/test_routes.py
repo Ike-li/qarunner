@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -583,7 +584,15 @@ def test_schedule_crud_and_preview_endpoints() -> None:
         # A. Test preview schedule with valid expression
         resp = client.get("/schedules/preview?expression=*/5 * * * *&timezone=UTC")
         assert resp.status_code == 200
-        assert len(resp.json()["next_runs"]) == 5
+        # TEST-2: don't just count — pin the actual fire times. For "*/5 * * * *"
+        # they must be five strictly-increasing instants exactly five minutes
+        # apart. A mutation (get_prev instead of get_next, wrong field, dropped
+        # timezone) breaks ordering or spacing and turns this red.
+        next_runs = [datetime.fromisoformat(t) for t in resp.json()["next_runs"]]
+        assert len(next_runs) == 5
+        for earlier, later in pairwise(next_runs):
+            assert later > earlier
+            assert later - earlier == timedelta(minutes=5)
 
         # B. Test preview schedule with invalid expression
         resp_err = client.get("/schedules/preview?expression=invalid_expr&timezone=UTC")
@@ -761,9 +770,12 @@ def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         resp = client.get("/runs/run-stream/stream")
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
-        lines = resp.text.split("\n\n")
-        assert "data: line1" in lines
-        assert "data: line2" in lines
+        # TEST-2: assert the full ordered payload sequence, not mere membership.
+        # The log holds "line1\nline2\n", so the stream must emit exactly those
+        # two lines in order — a reorder, drop, or duplicate turns this red.
+        events = [e for e in resp.text.split("\n\n") if e.startswith("data: ")]
+        payloads = [e.removeprefix("data: ") for e in events]
+        assert payloads == ["line1", "line2"]
 
 
 def test_user_registration_and_login() -> None:
@@ -1068,12 +1080,17 @@ def test_profile_crud_endpoints() -> None:
             "selected_markers": ["unit"],
             "extra_args": "-vv",
             "executor_mode": "subprocess",
-            "timeout": 120
+            "timeout": 120,
+            "env": {"API_BASE_URL": "https://api.example", "FEATURE_FLAG": "on"},
         }
         resp = client.post("/profiles", json=payload)
         assert resp.status_code == 201
         profile_id = resp.json()["id"]
         assert resp.json()["name"] == "Integration Profile"
+        # TEST-2: env must survive the create round-trip verbatim (request schema
+        # → ProfileService.create → store → profile_to_response). A regression
+        # dropping env anywhere in that chain turns this red.
+        assert resp.json()["env"] == {"API_BASE_URL": "https://api.example", "FEATURE_FLAG": "on"}
 
         # B. List profiles (no filter)
         resp_list = client.get("/profiles")
@@ -1099,12 +1116,17 @@ def test_profile_crud_endpoints() -> None:
             "selected_markers": ["unit"],
             "extra_args": "-v",
             "executor_mode": "docker",
-            "timeout": 300
+            "timeout": 300,
+            "env": {"API_BASE_URL": "https://api.updated"},
         }
         resp_update = client.put(f"/profiles/{profile_id}", json=update_payload)
         assert resp_update.status_code == 200
         assert resp_update.json()["name"] == "Updated Profile"
         assert resp_update.json()["executor_mode"] == "docker"
+        # TEST-2: update replaces env wholesale — the new map is returned and the
+        # create-time keys (FEATURE_FLAG) are gone. Catches an update path that
+        # ignores req.env or merges instead of replacing.
+        assert resp_update.json()["env"] == {"API_BASE_URL": "https://api.updated"}
 
         # F. Update nonexistent profile
         resp_update_err = client.put("/profiles/ghost-profile-id", json=update_payload)
@@ -1230,22 +1252,22 @@ def test_stream_run_logs_missing_and_exception(
     log_file = run_dir / "stdout.log"
     log_file.write_text("line1\n", encoding="utf-8")
 
-    # Mock store.get to flip status to COMPLETED and append to the log mid-stream
-    call_count = 0
+    # Walk the run through an explicit status timeline rather than branching on a
+    # magic call number (TEST-2: drop call_count coupling). The route's access
+    # check and the first follow-loop poll see RUNNING — the latter exercises the
+    # still-running wait branch — then the next poll reports completion with a
+    # final line appended. Overflowing the iterator stays COMPLETED, so the test
+    # no longer breaks if the route polls store.get a different number of times.
+    statuses = iter([RunStatus.RUNNING, RunStatus.RUNNING, RunStatus.COMPLETED])
     original_get = container.store.get
     async def mock_get(run_id: str):
-        nonlocal call_count
         run_obj = await original_get(run_id)
-        if run_id == "run_flush":
-            call_count += 1
-            if call_count == 2:
-                # Still running, this triggers the sleep(0.2) branch on line 455 of routes.py!
-                return run_obj.model_copy(update={"status": RunStatus.RUNNING})
-            elif call_count >= 3:
-                # Append a final line and change status to completed
-                log_file.write_text("line1\nline_final\n", encoding="utf-8")
-                return run_obj.model_copy(update={"status": RunStatus.COMPLETED})
-        return run_obj
+        if run_id != "run_flush":
+            return run_obj
+        status = next(statuses, RunStatus.COMPLETED)
+        if status is RunStatus.COMPLETED:
+            log_file.write_text("line1\nline_final\n", encoding="utf-8")
+        return run_obj.model_copy(update={"status": status})
 
     monkeypatch.setattr(container.store, "get", mock_get)
 
@@ -1384,21 +1406,20 @@ def test_stream_tail_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     log_file = run_dir / "stdout.log"
     log_file.write_text("seed\n", encoding="utf-8")
 
-    call_count = 0
+    # Status timeline instead of a magic call number (TEST-2): the access check
+    # sees RUNNING, the first follow-loop poll goes terminal and appends a long
+    # tail so the byte-bounded final flush reads only its first 4 bytes.
+    statuses = iter([RunStatus.RUNNING, RunStatus.COMPLETED])
     original_get = container.store.get
 
     async def mock_get(run_id: str):
-        # call #1 is the route-level access check; keep it RUNNING and unchanged.
-        # On the follow loop's status check (#2) go terminal, leaving a long tail
-        # so the byte-bounded final flush reads only its first 4 bytes.
-        nonlocal call_count
         run_obj = await original_get(run_id)
-        if run_id == "run_tail":
-            call_count += 1
-            if call_count >= 2:
-                log_file.write_text("seed\nABCDEFGHIJKLMNOP\n", encoding="utf-8")
-                return run_obj.model_copy(update={"status": RunStatus.COMPLETED})
-        return run_obj
+        if run_id != "run_tail":
+            return run_obj
+        status = next(statuses, RunStatus.COMPLETED)
+        if status is RunStatus.COMPLETED:
+            log_file.write_text("seed\nABCDEFGHIJKLMNOP\n", encoding="utf-8")
+        return run_obj.model_copy(update={"status": status})
 
     monkeypatch.setattr(container.store, "get", mock_get)
     app = create_app(container)
@@ -1489,6 +1510,34 @@ def test_preview_schedule_detailed() -> None:
         resp_cron = client.get("/schedules/preview?expression=five_minutes&timezone=UTC")
         assert resp_cron.status_code == 400
         assert "Invalid cron expression" in resp_cron.json()["detail"]
+
+
+def test_preview_schedule_applies_dst_timezone() -> None:
+    """TEST-2: the requested timezone is actually applied, not silently UTC.
+
+    America/New_York is a DST-observing zone, so its fire times must carry the
+    DST-adjusted offset (EDT -4h or EST -5h) and never +00:00. Asserting the
+    offset is the deterministic way to catch a "timezone ignored" regression:
+    the base time is ``datetime.now()`` so no preview ever actually crosses a
+    DST boundary, but the offset proves the zone reached croniter.
+    """
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get(
+            "/schedules/preview?expression=*/5 * * * *&timezone=America/New_York"
+        )
+        assert resp.status_code == 200
+        times = [datetime.fromisoformat(t) for t in resp.json()["next_runs"]]
+        assert len(times) == 5
+        for t in times:
+            offset = t.utcoffset()
+            assert offset is not None  # timezone-aware
+            assert offset in (timedelta(hours=-4), timedelta(hours=-5))  # NY, not UTC
+        # Absolute ordering holds year-round even across a transition; exact
+        # spacing is asserted in the UTC case to stay clear of the fall-back hour.
+        for earlier, later in pairwise(times):
+            assert later > earlier
 
 
 def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
