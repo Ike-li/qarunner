@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react'
 import styles from '../App.module.css'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import { formatDuration } from '../logUtils'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Run } from '../types'
@@ -83,15 +84,30 @@ export function RunDetailsDrawer({
   setIsIframeLoading,
   terminalRef,
 }: RunDetailsDrawerProps) {
+  const dialogRef = useDialogA11y({
+    isOpen: !!selectedRun,
+    onClose: () => {
+      setSelectedRunId(null)
+      setIsDrawerExpanded(false)
+    },
+  })
   return (
     <div className={`${styles.drawerOverlay} ${selectedRun ? styles.drawerOpen : ''}`} onClick={() => {
       setSelectedRunId(null)
       setIsDrawerExpanded(false)
     }}>
-      <div className={`${styles.drawer} ${isDrawerExpanded ? styles.drawerExpanded : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={`${styles.drawer} ${isDrawerExpanded ? styles.drawerExpanded : ''}`}
+        role={selectedRun ? 'dialog' : undefined}
+        aria-modal={selectedRun ? true : undefined}
+        aria-labelledby={selectedRun ? 'run-details-title' : undefined}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.drawerHeader}>
           <div className={styles.drawerTitleGroup}>
-            <h3>{t('executionDetails')}</h3>
+            <h3 id="run-details-title">{t('executionDetails')}</h3>
             <code>{t('id')}: {selectedRun?.id}</code>
           </div>
           <div className={styles.drawerHeaderActions}>

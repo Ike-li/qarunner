@@ -1,5 +1,6 @@
 import { AlertTriangle, Calendar, Clock, X } from 'lucide-react'
 import styles from '../App.module.css'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Profile, Schedule } from '../types'
 
@@ -44,13 +45,22 @@ export function ScheduleModal({
   onSave,
   onDelete,
 }: ScheduleModalProps) {
+  const dialogRef = useDialogA11y({ isOpen: true, onClose })
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={`${styles.modal} ${styles.scheduleModal}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={`${styles.modal} ${styles.scheduleModal}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="schedule-modal-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.modalHeader}>
           <div className={styles.modalTitleGroup}>
             <Clock size={20} className={styles.iconAccent} />
-            <h2>{lang === 'zh' ? '配置定时运行计划' : 'Configure Scheduled Execution'}</h2>
+            <h2 id="schedule-modal-title">{lang === 'zh' ? '配置定时运行计划' : 'Configure Scheduled Execution'}</h2>
           </div>
           <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
             <X size={20} />

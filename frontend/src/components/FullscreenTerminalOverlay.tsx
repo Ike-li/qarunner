@@ -1,6 +1,7 @@
 import { Check, Copy, Download, Search, Terminal, X, ZoomIn, ZoomOut } from 'lucide-react'
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react'
 import styles from '../App.module.css'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Run } from '../types'
 
@@ -64,20 +65,26 @@ export function FullscreenTerminalOverlay({
   renderFormattedLogs,
   fullscreenTerminalRef,
 }: FullscreenTerminalOverlayProps) {
+  const dialogRef = useDialogA11y({ isOpen: true, onClose: () => setIsTerminalFullscreen(false) })
   return (
-    <div 
-      className={styles.fullscreenTerminalOverlay} 
+    <div
+      className={styles.fullscreenTerminalOverlay}
       onClick={() => setIsTerminalFullscreen(false)}
     >
-      <div 
-        className={styles.fullscreenTerminal} 
+      <div
+        ref={dialogRef}
+        className={styles.fullscreenTerminal}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fullscreen-terminal-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header Controls */}
         <div className={styles.fullscreenTerminalHeader}>
           <div className={styles.terminalTitleGroup}>
             <Terminal size={16} className={styles.terminalHeaderIcon} />
-            <h3 className={styles.fullscreenTerminalTitle}>
+            <h3 className={styles.fullscreenTerminalTitle} id="fullscreen-terminal-title">
               {lang === 'zh' ? '只读控制台终端' : 'Read-only Console Terminal'}
               <span className={styles.fullscreenTerminalSub}>
                 #{selectedRun.id}

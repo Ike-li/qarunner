@@ -5,6 +5,7 @@ import { activateOnKey } from '../a11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Profile, TreeNode } from '../types'
 import type { NodeCheckState } from '../hooks/useFileTreeSelection'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import { TestFileTree } from './TestFileTree'
 
 interface TriggerRunModalProps {
@@ -97,13 +98,22 @@ export function TriggerRunModal({
   onSaveProfile,
   onDeleteProfile,
 }: TriggerRunModalProps) {
+  const dialogRef = useDialogA11y({ isOpen: true, onClose })
   return (
     <div className={styles.modalOverlay} onClick={() => onClose()}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={styles.modal}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="trigger-modal-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.modalHeader}>
           <div className={styles.modalTitleGroup}>
             <SlidersHorizontal size={20} className={styles.iconAccent} />
-            <h2>{editingProfileId ? (lang === 'zh' ? '修改预设执行方案' : 'Modify Saved Execution Profile') : t('triggerTitle')}</h2>
+            <h2 id="trigger-modal-title">{editingProfileId ? (lang === 'zh' ? '修改预设执行方案' : 'Modify Saved Execution Profile') : t('triggerTitle')}</h2>
           </div>
           <button className={styles.modalCloseButton} onClick={() => onClose()} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
             <X size={20} />

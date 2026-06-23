@@ -1,6 +1,7 @@
 import type { FormEvent } from 'react'
 import { AlertTriangle, Plus, RotateCw, Trash2, Users, X } from 'lucide-react'
 import styles from '../App.module.css'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { UserProfile } from '../types'
 
@@ -53,13 +54,23 @@ export function UserManagementModal({
   apiFetch,
   fetchRuns,
 }: UserManagementModalProps) {
+  const dialogRef = useDialogA11y({ isOpen: true, onClose })
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modal} style={{ width: '640px' }} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={styles.modal}
+        style={{ width: '640px' }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="user-modal-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.modalHeader}>
           <div className={styles.modalTitleGroup}>
             <Users size={20} className={styles.iconAccent} />
-            <h2>{t('userManagementTitle')}</h2>
+            <h2 id="user-modal-title">{t('userManagementTitle')}</h2>
           </div>
           <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
             <X size={20} />
