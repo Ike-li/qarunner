@@ -117,6 +117,15 @@
 
 ---
 
+## 第 4 轮发现（前端 SSE / XSS）— 无新确认 bug
+
+- **XSS sink（日志/报告渲染）** — [已端到端验证] 干净：qarunner 前端**全仓无 `dangerouslySetInnerHTML`/`innerHTML`**，日志/报告文本走 React 文本节点（自动转义）。
+- **Allure 报告 XSS** — [已端到端验证] 干净：构造测试名（parametrize id，pytest 未净化、原样保留 `<img src=x onerror=…>`）+ 失败信息含 XSS payload → 生成单文件 allure 报告（base64 内嵌）→ **真 chromium 加载 + 导航到 Suites/套件展开/测试详情**，payload 作为**惰性文本**渲染进 DOM（`rendersPayloadText=true`）但**未执行**（无全局标志/无 live `<img onerror>`/无 alert dialog）。即 allure 2.43 客户端对测试名与失败信息做了转义。
+- **SSE 重连竞态** — [读代码推断] 干净：`App.tsx` effect deps 收敛为稳定的 `[selectedRunId, fetchSelectedRunDetails]`，`disposed` 标志 + cleanup、非活跃不重连、活跃指数退避重连、读 ref 避免 stale dep（FE-3 成立）。**小瑕疵（cosmetic，非 bug）**：瞬态重连不清 `streamedStdout` 且后端流从文件头重读 → 重连可能重复日志显示；难确定性复现、仅显示层、不予修。
+- **加固建议（非确认 bug，[读代码推断]）**：报告 iframe（`RunDetailsDrawer.tsx`）`src=/runs/{id}/report` **同源 + 无 `sandbox` 属性**。当前因 allure 已转义不可利用，但若未来 allure 出现 XSS，恶意测试作者的报告将在 app 源内执行（HttpOnly cookie 挡读 token，但同源请求仍带 cookie）。建议：报告 iframe 加 `sandbox`（allure 需 JS，可评估 `allow-scripts` 而不给 `allow-same-origin`，代价是同源资源加载需验证）或报告改独立源/子域服务。
+
+---
+
 ## 历史轮次判定干净的表面（按收敛规则记录）
 
 - **safe_subpath 路径穿越 / 软链逃逸** — [已端到端验证] 干净。`/tests/..%2f..%2fetc/tree` 等编码穿越 → 404；suite 内放指向 `/etc` 的软链 → tree 不跟随泄露。实现（`resolve()` + `is_relative_to`）稳。
