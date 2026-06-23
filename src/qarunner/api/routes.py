@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -32,6 +33,7 @@ from qarunner.config import Settings
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.errors import (
     InvalidScheduleRequest,
+    LoginLockedOut,
     ProfileNotFound,
     RunNotFound,
     ScheduleNotFound,
@@ -39,6 +41,8 @@ from qarunner.errors import (
     UnsafePath,
 )
 from qarunner.models import Run, RunRequest, User, UserRole
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -49,20 +53,51 @@ def _require_run_access(run: Run, user: User) -> None:
         raise HTTPException(status_code=403, detail="Access denied")
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
+
+    Returns the transport peer address; behind a reverse proxy this is the
+    proxy's IP, so a trusted-proxy ``X-Forwarded-For`` story is needed before
+    relying on it for per-client throttling in such deployments (SEC-6 /
+    deployment hardening).
+    """
+    return request.client.host if request.client else "unknown"
+
+
 # ── Auth & User Management Endpoints ─────────────────────────────────────
 
 
 @router.post("/auth/login", response_model=TokenResponse)
 async def login(req: LoginRequest, request: Request) -> TokenResponse:
-    """Authenticate credentials and return a JWT access token."""
+    """Authenticate credentials and return a JWT access token.
+
+    Brute-force protection (SEC-5): repeated failures for a (username, client IP)
+    pair trigger an exponential-backoff lockout answered with HTTP 429; failures
+    are audited (never the password).
+    """
     container = request.app.state.container
+    client_ip = _client_ip(request)
+    throttle_key = f"{req.username}|{client_ip}"
+    try:
+        container.login_throttle.check(throttle_key)
+    except LoginLockedOut as exc:
+        logger.warning("Locked-out login attempt username=%r ip=%s", req.username, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
     user_record = await container.store.get_user(req.username)
     if not user_record or not verify_password(req.password, user_record["password_hash"]):
+        container.login_throttle.record_failure(throttle_key)
+        logger.warning("Failed login username=%r ip=%s", req.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
 
+    container.login_throttle.record_success(throttle_key)
     token = create_access_token(user_record["username"], user_record["role"])
     return TokenResponse(access_token=token)
 

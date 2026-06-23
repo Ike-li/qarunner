@@ -39,3 +39,15 @@ class InvalidScheduleRequest(ValueError):
     Covers an unknown profile reference, an invalid timezone, or an invalid
     cron expression. The message is suitable for surfacing as an HTTP 400.
     """
+
+
+class LoginLockedOut(Exception):
+    """Raised when a login identity is temporarily locked after repeated failures.
+
+    Brute-force protection (SEC-5). Carries ``retry_after`` (whole seconds) so
+    the API layer can answer HTTP 429 with a ``Retry-After`` header.
+    """
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(f"too many failed login attempts; retry after {retry_after}s")
+        self.retry_after = retry_after

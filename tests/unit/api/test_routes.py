@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from qarunner.api.app import create_app as _real_create_app
 from qarunner.api.deps import Container, get_current_admin, get_current_user
+from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.profile_service import ProfileService
 from qarunner.core.schedule_service import ScheduleService
 from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
@@ -25,6 +26,7 @@ from qarunner.models import (
     User,
     UserRole,
 )
+from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_schedule_port import FakeSchedulePort
 
 NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -201,7 +203,7 @@ class FakeOrchestrator:
         return None
 
 
-def _make_container(**orch_kwargs: object) -> Container:
+def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> Container:
     store = FakeStore()
     orchestrator = FakeOrchestrator(store=store, **orch_kwargs)  # type: ignore[arg-type]
     scheduler = FakeSchedulePort()
@@ -211,6 +213,7 @@ def _make_container(**orch_kwargs: object) -> Container:
         scheduler=scheduler,
         schedule_service=ScheduleService(store=store, scheduler=scheduler),  # type: ignore[arg-type]
         profile_service=ProfileService(store=store),  # type: ignore[arg-type]
+        login_throttle=login_throttle or LoginThrottle(clock=FakeClock()),  # type: ignore[arg-type]
     )
 
 
@@ -774,6 +777,93 @@ def test_user_registration_and_login() -> None:
         resp_me = client.get("/auth/me")
         assert resp_me.status_code == 200
         assert resp_me.json()["username"] == "test_user"
+
+
+# ── SEC-5: login brute-force protection ─────────────────────────────────
+
+
+def test_login_locks_out_after_repeated_failures() -> None:
+    throttle = LoginThrottle(clock=FakeClock(), threshold=2, base_seconds=60.0)
+    app = create_app(_make_container(login_throttle=throttle))
+    with TestClient(app) as client:
+        for _ in range(2):
+            bad = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+            assert bad.status_code == 401
+        # Threshold reached — further attempts are locked out (429 + Retry-After).
+        locked = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+        assert locked.status_code == 429
+        assert int(locked.headers["Retry-After"]) >= 1
+        # The lock rejects even the *correct* password while it is active.
+        good = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        assert good.status_code == 429
+
+
+def test_login_failure_is_audited_without_password(caplog: pytest.LogCaptureFixture) -> None:
+    app = create_app(_make_container())
+    with caplog.at_level("WARNING", logger="qarunner.api.routes"), TestClient(app) as client:
+        resp = client.post(
+            "/auth/login", json={"username": "test_user", "password": "s3cret-leak"}
+        )
+        assert resp.status_code == 401
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("Failed login" in m and "test_user" in m for m in messages)
+    # The plaintext password must never reach the audit log.
+    assert all("s3cret-leak" not in m for m in messages)
+
+
+def test_login_succeeds_after_lockout_window_expires() -> None:
+    from datetime import timedelta
+
+    clock = FakeClock()
+    throttle = LoginThrottle(clock=clock, threshold=2, base_seconds=60.0)
+    app = create_app(_make_container(login_throttle=throttle))
+    with TestClient(app) as client:
+        for _ in range(2):
+            client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+        assert (
+            client.post(
+                "/auth/login", json={"username": "test_user", "password": "test_pass"}
+            ).status_code
+            == 429
+        )
+        # Advance past the lock window — the correct password is accepted again.
+        clock.current = clock.current + timedelta(seconds=61)
+        ok = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        assert ok.status_code == 200
+        assert "access_token" in ok.json()
+
+
+def test_successful_login_resets_failure_counter() -> None:
+    throttle = LoginThrottle(clock=FakeClock(), threshold=2, base_seconds=60.0)
+    app = create_app(_make_container(login_throttle=throttle))
+    with TestClient(app) as client:
+        # One miss, then a success clears the counter...
+        client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+        assert (
+            client.post(
+                "/auth/login", json={"username": "test_user", "password": "test_pass"}
+            ).status_code
+            == 200
+        )
+        # ...so a subsequent single miss does not immediately lock.
+        again = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+        assert again.status_code == 401
+
+
+def test_client_ip_helper_handles_missing_client() -> None:
+    from qarunner.api.routes import _client_ip
+
+    class _Addr:
+        host = "203.0.113.7"
+
+    class _ReqWithClient:
+        client = _Addr()
+
+    class _ReqNoClient:
+        client = None
+
+    assert _client_ip(_ReqWithClient()) == "203.0.113.7"  # type: ignore[arg-type]
+    assert _client_ip(_ReqNoClient()) == "unknown"  # type: ignore[arg-type]
 
 
 def test_test_tree_and_markers_detailed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

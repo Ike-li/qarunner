@@ -70,6 +70,7 @@ def test_create_app_with_container_injects_it() -> None:
         scheduler=None,
         schedule_service=None,
         profile_service=None,
+        login_throttle=None,
     )  # type: ignore[arg-type]
     app = create_app(container)
     assert app.state.container is container
@@ -97,6 +98,7 @@ def test_lifespan_runs_without_error() -> None:
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
+        login_throttle=None,
     )  # type: ignore[arg-type]
     app = create_app(container)
     app.dependency_overrides[get_current_user] = mock_get_current_user
@@ -150,6 +152,7 @@ def test_static_files_mounting(tmp_path, monkeypatch) -> None:
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
+        login_throttle=None,
     )  # type: ignore[arg-type]
 
     app = create_app(container)
@@ -171,6 +174,7 @@ def test_static_files_not_mounted_if_no_dir(monkeypatch) -> None:
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
+        login_throttle=None,
     )  # type: ignore[arg-type]
 
     app = create_app(container)
@@ -324,6 +328,7 @@ async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
+        login_throttle=None,
     )  # type: ignore[arg-type]
     app = FastAPI()
     app.state.container = container

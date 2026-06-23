@@ -20,6 +20,7 @@ from qarunner.adapters.system_clock import SystemClock
 from qarunner.adapters.uuid_ids import UuidIds
 from qarunner.config import Settings
 from qarunner.core.auth import decode_access_token
+from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.profile_service import ProfileService
 from qarunner.core.runners.pytest_runner import PytestRunner
@@ -38,6 +39,7 @@ class Container:
     scheduler: SchedulePort
     schedule_service: ScheduleService
     profile_service: ProfileService
+    login_throttle: LoginThrottle
 
 
 def create_container(settings: Settings | None = None) -> Container:
@@ -76,6 +78,7 @@ def create_container(settings: Settings | None = None) -> Container:
     schedule_port = ApschedulerSchedulePort(store=store, orchestrator=orchestrator)
     schedule_service = ScheduleService(store=store, scheduler=schedule_port)
     profile_service = ProfileService(store=store)
+    login_throttle = LoginThrottle(clock=clock)
 
     return Container(
         orchestrator=orchestrator,
@@ -83,6 +86,7 @@ def create_container(settings: Settings | None = None) -> Container:
         scheduler=schedule_port,
         schedule_service=schedule_service,
         profile_service=profile_service,
+        login_throttle=login_throttle,
     )
 
 
