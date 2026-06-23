@@ -794,6 +794,25 @@ def test_user_registration_and_login() -> None:
         assert resp_me.json()["username"] == "test_user"
 
 
+def test_create_user_missing_after_create_returns_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _make_container()
+
+    async def _always_none(_username: str) -> None:
+        return None
+
+    # Existence check and the post-create re-fetch both miss: the store broke its
+    # create->read invariant, so the route must 500 (ARCH-7: an `assert` here would
+    # be stripped under `python -O`, then None would crash on subscripting).
+    monkeypatch.setattr(container.store, "get_user", _always_none)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/users",
+            json={"username": "ghost", "password": "secret_password", "role": "user"},
+        )
+    assert resp.status_code == 500
+
+
 # ── SEC-5: login brute-force protection ─────────────────────────────────
 
 

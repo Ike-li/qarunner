@@ -131,9 +131,15 @@ async def create_user(
     hashed = hash_password(req.password)
     await container.store.create_user(req.username, hashed, req.role.value)
 
-    # Fetch newly created user record to construct response
+    # Fetch newly created user record to construct response. A missing record
+    # here means the store violated its create→read invariant; surface it as a
+    # 500 with an explicit check (an `assert` would be stripped under `python -O`).
     new_user = await container.store.get_user(req.username)
-    assert new_user is not None
+    if new_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User was created but could not be retrieved",
+        )
     return UserResponse(
         username=new_user["username"],
         role=new_user["role"],
