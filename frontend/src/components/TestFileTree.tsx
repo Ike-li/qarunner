@@ -1,5 +1,6 @@
 import { ChevronRight, FolderGit2, SlidersHorizontal } from 'lucide-react'
 import styles from '../App.module.css'
+import { activateOnKey } from '../a11y'
 import type { TreeNode } from '../types'
 import type { NodeCheckState } from '../hooks/useFileTreeSelection'
 
@@ -40,11 +41,18 @@ export function TestFileTree({
             <div style={{ width: '16px' }} />
           )}
 
+          {/* Mouse-only redundant hit target; keyboard toggling lives on the named label below (one tab stop per node). */}
           <div className={styles.treeCheckboxWrapper} onClick={() => onToggleNode(node)}>
             <div className={`${styles.treeCheckbox} ${checkState === 'checked' ? styles.treeCheckboxChecked : checkState === 'partial' ? styles.treeCheckboxPartial : ''}`} />
           </div>
 
-          <div className={`${styles.treeLabel} ${isFolder ? styles.treeNodeFolder : styles.treeNodeFile}`} onClick={() => onToggleNode(node)}>
+          <div
+            className={`${styles.treeLabel} ${isFolder ? styles.treeNodeFolder : styles.treeNodeFile}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => onToggleNode(node)}
+            onKeyDown={activateOnKey(() => onToggleNode(node))}
+          >
             {isFolder ? <FolderGit2 size={14} className={styles.treeIcon} /> : <SlidersHorizontal size={12} className={styles.treeIcon} />}
             <span>{node.name}</span>
           </div>

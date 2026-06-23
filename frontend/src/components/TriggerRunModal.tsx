@@ -1,6 +1,7 @@
 import { AlertTriangle, Box, Check, Cpu, Play, Plus, RotateCw, SlidersHorizontal, X } from 'lucide-react'
 import type { Dispatch, FormEvent, MouseEvent, SetStateAction } from 'react'
 import styles from '../App.module.css'
+import { activateOnKey } from '../a11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Profile, TreeNode } from '../types'
 import type { NodeCheckState } from '../hooks/useFileTreeSelection'
@@ -233,15 +234,19 @@ export function TriggerRunModal({
               <div className={styles.tagContainer}>
                 {scannedMarkers.map(tag => {
                   const isActive = selectedMarkers.includes(tag)
+                  const toggleMarker = () =>
+                    setSelectedMarkers(prev =>
+                      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+                    )
                   return (
                     <span
                       key={tag}
                       className={`${styles.tagPill} ${isActive ? styles.tagPillActive : ''}`}
-                      onClick={() => {
-                        setSelectedMarkers(prev =>
-                          prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
-                        )
-                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isActive}
+                      onClick={toggleMarker}
+                      onKeyDown={activateOnKey(toggleMarker)}
                     >
                       @{tag}
                     </span>

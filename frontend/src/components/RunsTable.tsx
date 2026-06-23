@@ -1,6 +1,7 @@
 import { Activity, BarChart3, Box, CheckCircle2, ChevronRight, Clock, Cpu, FolderGit2, Lock, Play, RotateCw, Sparkles, Unlock, Users, XCircle } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import styles from '../App.module.css'
+import { activateOnKey } from '../a11y'
 import { formatDuration } from '../logUtils'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Run } from '../types'
@@ -123,10 +124,12 @@ export function RunsTable({
               {filteredRuns.map((run) => {
                 const isSelected = run.id === selectedRunId
                 return (
-                  <tr 
+                  <tr
                     key={run.id}
                     className={`${styles.tableRow} ${isSelected ? styles.rowSelected : ''}`}
+                    tabIndex={0}
                     onClick={() => setSelectedRunId(run.id)}
+                    onKeyDown={activateOnKey(() => setSelectedRunId(run.id))}
                   >
                     <td className={styles.cellId}>
                       <code>{run.id.slice(0, 8)}</code>

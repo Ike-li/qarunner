@@ -1,6 +1,7 @@
 import { Activity, Clock, FolderGit2, Pencil, Play, SlidersHorizontal, X } from 'lucide-react'
 import type { MouseEvent, ReactNode } from 'react'
 import styles from '../App.module.css'
+import { activateOnKey } from '../a11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Profile, Run, Schedule } from '../types'
 
@@ -52,9 +53,12 @@ export function ProjectSidebar({
       </div>
       <div className={styles.sidebarContent}>
         {/* "All Suites" selector */}
-        <div 
+        <div
           className={`${styles.sidebarItem} ${selectedSuiteFilter === null ? styles.sidebarItemActive : ''}`}
+          role="button"
+          tabIndex={0}
           onClick={() => setSelectedSuiteFilter(null)}
+          onKeyDown={activateOnKey(() => setSelectedSuiteFilter(null))}
         >
           <div className={styles.sidebarItemMain}>
             <Activity size={14} className={styles.sidebarIcon} />
@@ -80,9 +84,12 @@ export function ProjectSidebar({
                 key={suite}
                 className={styles.sidebarItemContainer}
               >
-                <div 
+                <div
                   className={`${styles.sidebarItemRow} ${isFiltered ? styles.sidebarItemRowActive : ''}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedSuiteFilter(suite)}
+                  onKeyDown={activateOnKey(() => setSelectedSuiteFilter(suite))}
                 >
                   <div className={styles.sidebarItemMain}>
                     <FolderGit2 size={14} className={styles.sidebarIcon} />
@@ -147,11 +154,14 @@ export function ProjectSidebar({
                         }
 
                         dots.push(
-                          <span 
-                            key={run.id} 
-                            className={`${styles.historyDot} ${dotClass}`} 
+                          <span
+                            key={run.id}
+                            className={`${styles.historyDot} ${dotClass}`}
                             title={tooltip}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => setSelectedRunId(run.id)}
+                            onKeyDown={activateOnKey(() => setSelectedRunId(run.id))}
                           />
                         );
                       });
