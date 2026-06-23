@@ -102,6 +102,7 @@ export function RunDetailsDrawer({
         role={selectedRun ? 'dialog' : undefined}
         aria-modal={selectedRun ? true : undefined}
         aria-labelledby={selectedRun ? 'run-details-title' : undefined}
+        aria-hidden={selectedRun ? undefined : true}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
@@ -113,6 +114,7 @@ export function RunDetailsDrawer({
           <div className={styles.drawerHeaderActions}>
             <button
               className={styles.drawerExpandButton}
+              tabIndex={selectedRun ? undefined : -1}
               onClick={() => setIsDrawerExpanded(!isDrawerExpanded)}
               title={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
               aria-label={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
@@ -121,6 +123,7 @@ export function RunDetailsDrawer({
             </button>
             <button
               className={styles.drawerCloseButton}
+              tabIndex={selectedRun ? undefined : -1}
               aria-label={lang === 'zh' ? '关闭' : 'Close'}
               onClick={() => {
                 setSelectedRunId(null)
