@@ -27,6 +27,7 @@ from qarunner.models import (
     User,
     UserRole,
 )
+from qarunner.ports.store import Store
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_schedule_port import FakeSchedulePort
 
@@ -164,6 +165,12 @@ class FakeStore:
             return True
         return False
 
+    async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool:
+        return True
+
+    async def mark_interrupted_runs(self) -> int:
+        return 0
+
     async def initialize(self) -> None:
         pass
 
@@ -217,6 +224,12 @@ def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> 
         login_throttle=login_throttle or LoginThrottle(clock=FakeClock()),  # type: ignore[arg-type]
         settings=Settings(),
     )
+
+
+def test_fake_store_implements_full_store_port() -> None:
+    # The route fake stands in for the real adapter, so it must satisfy the
+    # whole Store port (ARCH-5), not just the run subset.
+    assert isinstance(FakeStore(), Store)
 
 
 def _make_run_in_store(store: FakeStore, **overrides: object) -> Run:

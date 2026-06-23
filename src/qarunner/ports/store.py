@@ -1,15 +1,22 @@
-"""Run storage port."""
+"""Persistence ports.
+
+``RunStore`` is the minimal run-lifecycle surface the orchestrator depends on.
+The API/container needs more (users, profiles, schedules, maintenance), so those
+are split into focused ports and composed into ``Store`` — the single port the
+``Container`` is typed against, keeping it decoupled from the concrete adapter.
+"""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from qarunner.models import Run
+from qarunner.models import Run, TestProfile, TestSchedule
 
 
 @runtime_checkable
 class RunStore(Protocol):
-    """Port for persisting and retrieving Run records."""
+    """Minimal run persistence used by the orchestrator."""
 
     async def save(self, run: Run) -> None: ...
 
@@ -18,3 +25,60 @@ class RunStore(Protocol):
         ...
 
     async def list(self) -> list[Run]: ...
+
+
+@runtime_checkable
+class UserStore(Protocol):
+    """Persistence for user accounts."""
+
+    async def get_user(self, username: str) -> dict | None: ...
+
+    async def create_user(self, username: str, password_hash: str, role: str) -> None: ...
+
+    async def list_users(self) -> list[dict]: ...
+
+
+@runtime_checkable
+class ProfileStore(Protocol):
+    """Persistence for saved test profiles."""
+
+    async def save_profile(self, profile: TestProfile) -> None: ...
+
+    async def get_profile(self, profile_id: str) -> TestProfile | None: ...
+
+    async def list_profiles(self, tests_path: str | None = None) -> list[TestProfile]: ...
+
+    async def delete_profile(self, profile_id: str) -> bool: ...
+
+
+@runtime_checkable
+class ScheduleStore(Protocol):
+    """Persistence for cron schedules (incl. the CONC-2 leader claim)."""
+
+    async def save_schedule(self, schedule: TestSchedule) -> None: ...
+
+    async def get_schedule(self, schedule_id: str) -> TestSchedule | None: ...
+
+    async def list_schedules(self, profile_id: str | None = None) -> list[TestSchedule]: ...
+
+    async def delete_schedule(self, schedule_id: str) -> bool: ...
+
+    async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool: ...
+
+
+@runtime_checkable
+class Store(RunStore, UserStore, ProfileStore, ScheduleStore, Protocol):
+    """Full persistence surface used by the API container.
+
+    Combines the focused stores and adds lifecycle and run-maintenance methods.
+    """
+
+    async def initialize(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    async def lock_run(self, run_id: str, locked: bool) -> None: ...
+
+    async def get_old_unlocked_runs(self, retention_days: int) -> list[Run]: ...
+
+    async def mark_interrupted_runs(self) -> int: ...

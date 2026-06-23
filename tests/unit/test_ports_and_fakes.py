@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.errors import RunNotFound
 from qarunner.models import (
     CollectResult,
@@ -21,7 +22,13 @@ from qarunner.ports.ids import IdGenerator
 from qarunner.ports.process import ProcessRunner
 from qarunner.ports.reporter import AllureReporter
 from qarunner.ports.scheduler import TaskScheduler
-from qarunner.ports.store import RunStore
+from qarunner.ports.store import (
+    ProfileStore,
+    RunStore,
+    ScheduleStore,
+    Store,
+    UserStore,
+)
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_collector import FakeResultCollector
 from tests.fakes.fake_ids import FakeIdGenerator
@@ -87,6 +94,14 @@ class TestProtocolConformance:
 
     def test_in_memory_run_store_is_run_store(self) -> None:
         assert isinstance(InMemoryRunStore(), RunStore)
+
+    def test_sqlite_store_implements_full_store_port(self) -> None:
+        store = SqliteStore(":memory:")
+        assert isinstance(store, Store)
+        assert isinstance(store, RunStore)
+        assert isinstance(store, UserStore)
+        assert isinstance(store, ProfileStore)
+        assert isinstance(store, ScheduleStore)
 
     def test_fake_scheduler_is_task_scheduler(self) -> None:
         assert isinstance(FakeScheduler(), TaskScheduler)

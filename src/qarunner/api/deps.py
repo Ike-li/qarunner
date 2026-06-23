@@ -28,6 +28,7 @@ from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.core.schedule_service import ScheduleService
 from qarunner.models import User, UserRole
 from qarunner.ports.schedule import SchedulePort
+from qarunner.ports.store import Store
 
 
 @dataclass
@@ -35,7 +36,7 @@ class Container:
     """Holds all port implementations.  Tests inject fakes."""
 
     orchestrator: RunOrchestrator
-    store: SqliteStore
+    store: Store
     scheduler: SchedulePort
     schedule_service: ScheduleService
     profile_service: ProfileService
