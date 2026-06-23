@@ -220,8 +220,8 @@ export function TriggerRunModal({
 
           {/* 2. Visual File Selection Tree Checklist */}
           <div className={styles.formField}>
-            <label className={styles.label}>{t('testSuiteSelection')}</label>
-            <div className={styles.treeContainer}>
+            <label className={styles.label} id="trigger-tree-label">{t('testSuiteSelection')}</label>
+            <div className={styles.treeContainer} role="group" aria-labelledby="trigger-tree-label">
               {scannedFilesTree.length === 0 ? (
                 <div className={styles.directoryFallbackText} style={{ padding: '0.5rem' }}>
                   {lang === 'zh' ? '无可用测试文件。' : 'No pytest files discovered.'}
@@ -241,8 +241,8 @@ export function TriggerRunModal({
           {/* 3. Visual Tag/Marker Picker */}
           {scannedMarkers.length > 0 && (
             <div className={styles.formField}>
-              <label className={styles.label}>{t('scannedMarkersTitle')}</label>
-              <div className={styles.tagContainer}>
+              <label className={styles.label} id="trigger-markers-label">{t('scannedMarkersTitle')}</label>
+              <div className={styles.tagContainer} role="group" aria-labelledby="trigger-markers-label">
                 {scannedMarkers.map(tag => {
                   const isActive = selectedMarkers.includes(tag)
                   const toggleMarker = () =>
@@ -268,14 +268,15 @@ export function TriggerRunModal({
           )}
 
           <div className={styles.formField}>
-            <label className={styles.label}>
+            <label className={styles.label} id="trigger-env-label">
               <span>{t('executionEnvironment')}</span>
               <span className={styles.requiredIndicator}>*</span>
             </label>
-            <div className={styles.segmentedControl}>
+            <div className={styles.segmentedControl} role="group" aria-labelledby="trigger-env-label">
               <button
                 type="button"
                 className={`${styles.segmentButton} ${executorMode === 'subprocess' ? styles.segmentButtonActive : ''}`}
+                aria-pressed={executorMode === 'subprocess'}
                 onClick={() => setExecutorMode('subprocess')}
               >
                 <Cpu size={16} />
@@ -287,6 +288,7 @@ export function TriggerRunModal({
               <button
                 type="button"
                 className={`${styles.segmentButton} ${executorMode === 'docker' ? styles.segmentButtonActive : ''}`}
+                aria-pressed={executorMode === 'docker'}
                 onClick={() => setExecutorMode('docker')}
               >
                 <Box size={16} />
@@ -319,15 +321,16 @@ export function TriggerRunModal({
 
           {/* Custom Environment Variables Grid Editor */}
           <div className={styles.formField}>
-            <label className={styles.label}>
+            <label className={styles.label} id="trigger-customenv-label">
               <span>{lang === 'zh' ? '自定义环境变量' : 'Custom Environment Variables'}</span>
             </label>
-            <div className={styles.envGridContainer}>
+            <div className={styles.envGridContainer} role="group" aria-labelledby="trigger-customenv-label">
               {envVars.map((env, idx) => (
                 <div key={idx} className={styles.envRow}>
                   <input
                     type="text"
                     className={styles.envInput}
+                    aria-label={lang === 'zh' ? '变量名' : 'Variable name'}
                     placeholder={lang === 'zh' ? '变量名 e.g. BASE_URL' : 'Name e.g. BASE_URL'}
                     value={env.key}
                     onChange={(e) => {
@@ -339,6 +342,7 @@ export function TriggerRunModal({
                   <input
                     type="text"
                     className={styles.envInput}
+                    aria-label={lang === 'zh' ? '变量值' : 'Variable value'}
                     placeholder={lang === 'zh' ? '变量值' : 'Value'}
                     value={env.value}
                     onChange={(e) => {
