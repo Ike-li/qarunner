@@ -74,6 +74,27 @@ async def test_platform_secrets_stripped(runner: SubprocessRunner, monkeypatch) 
     assert "ABSENT" in result.stdout
 
 
+async def test_non_allowlisted_host_env_not_forwarded(
+    runner: SubprocessRunner, monkeypatch
+) -> None:
+    # SEC-3: a host secret under an arbitrary (non-QARUNNER_) name — e.g. AWS_*,
+    # *_TOKEN, DATABASE_URL — must NOT leak into the untrusted child. Only the
+    # explicit allowlist passes through; a blocklist (strip QARUNNER_* only)
+    # would forward this and is what this test guards against.
+    monkeypatch.setenv("MY_CLOUD_SECRET", "host-credential-must-not-leak")
+    code = (
+        "import os;"
+        "print('SECRET=' + os.environ.get('MY_CLOUD_SECRET', 'ABSENT'));"
+        "print('PATH_PRESENT=' + ('yes' if os.environ.get('PATH') else 'no'))"
+    )
+    result = await runner.run([sys.executable, "-c", code], cwd=".")
+    assert result.exit_code == 0
+    assert "host-credential-must-not-leak" not in result.stdout
+    assert "SECRET=ABSENT" in result.stdout
+    # An allowlisted functional var (PATH) still passes through so tooling works.
+    assert "PATH_PRESENT=yes" in result.stdout
+
+
 async def test_stderr_captured(runner: SubprocessRunner) -> None:
     result = await runner.run(
         [sys.executable, "-c", "import sys; sys.stderr.write('err_msg')"],

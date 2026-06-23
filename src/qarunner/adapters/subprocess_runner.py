@@ -15,6 +15,33 @@ from qarunner.models import ProcessResult
 # waste and an OOM vector, so we keep only the tail.
 _MAX_CAPTURE_BYTES = 256 * 1024
 
+# SEC-3: untrusted test code must inherit only a minimal allowlist of host
+# environment variables — never the platform's full environment, which routinely
+# holds cloud credentials / tokens / DB URLs under arbitrary (non-QARUNNER_)
+# names that a blocklist would miss. The allowlist is the functional minimum for
+# pytest and the allure CLI (which share this runner) to locate
+# interpreters/tools, resolve locale and temp dirs, and find the JVM.
+# Caller-supplied env is layered on top.
+_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "TZ",
+        "JAVA_HOME",  # the allure CLI runs on the JVM
+    }
+)
+
 
 def _read_tail(path: str, limit: int) -> bytes:
     """Read at most the last *limit* bytes of *path* without loading it all."""
@@ -49,10 +76,11 @@ class SubprocessRunner:
             os.makedirs(os.path.dirname(stderr_file), exist_ok=True)
             f_err = open(stderr_file, "wb")  # noqa: SIM115 (handle outlives this scope)
 
-        # SEC-3: strip platform secrets (QARUNNER_*) from the child environment so
-        # untrusted test code can't read the JWT key, admin password, etc. System
-        # vars (PATH/HOME) are preserved; caller-supplied env still takes precedence.
-        full_env = {k: v for k, v in os.environ.items() if not k.startswith("QARUNNER_")}
+        # SEC-3: build the child environment from a minimal allowlist of host
+        # vars (see _ENV_ALLOWLIST) plus the caller-supplied env, so untrusted
+        # test code never inherits platform secrets carried in arbitrary
+        # (non-QARUNNER_) host variables. Caller-supplied env takes precedence.
+        full_env = {k: v for k, v in os.environ.items() if k in _ENV_ALLOWLIST}
         if env:
             full_env.update(env)
 
