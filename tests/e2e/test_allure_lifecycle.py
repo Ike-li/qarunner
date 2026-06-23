@@ -34,7 +34,9 @@ from tests.fakes.fake_store import InMemoryRunStore
 pytestmark = pytest.mark.e2e
 
 
-def _real_orchestrator(tests_root: Path, artifacts_root: Path) -> tuple[RunOrchestrator, InMemoryRunStore]:
+def _real_orchestrator(
+    tests_root: Path, artifacts_root: Path
+) -> tuple[RunOrchestrator, InMemoryRunStore]:
     registry = RunnerRegistry()
     registry.register(PytestRunner())
     store = InMemoryRunStore()
