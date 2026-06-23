@@ -46,6 +46,7 @@ export function LoginScreen({
           className={styles.actionIconButton}
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
         >
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
         </button>
@@ -54,6 +55,7 @@ export function LoginScreen({
           className={styles.actionIconButton}
           onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
           title={lang === 'en' ? '切换为中文' : 'Switch to English'}
+          aria-label={lang === 'en' ? '切换为中文' : 'Switch to English'}
         >
           <span className={styles.langText}>{lang === 'en' ? 'ZH' : 'EN'}</span>
         </button>

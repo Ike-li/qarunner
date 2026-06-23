@@ -95,17 +95,22 @@ export function RunDetailsDrawer({
             <code>{t('id')}: {selectedRun?.id}</code>
           </div>
           <div className={styles.drawerHeaderActions}>
-            <button 
-              className={styles.drawerExpandButton} 
+            <button
+              className={styles.drawerExpandButton}
               onClick={() => setIsDrawerExpanded(!isDrawerExpanded)}
               title={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
+              aria-label={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
             >
               {isDrawerExpanded ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
             </button>
-            <button className={styles.drawerCloseButton} onClick={() => {
-              setSelectedRunId(null)
-              setIsDrawerExpanded(false)
-            }}>
+            <button
+              className={styles.drawerCloseButton}
+              aria-label={lang === 'zh' ? '关闭' : 'Close'}
+              onClick={() => {
+                setSelectedRunId(null)
+                setIsDrawerExpanded(false)
+              }}
+            >
               <X size={20} />
             </button>
           </div>
@@ -211,10 +216,11 @@ export function RunDetailsDrawer({
                           onChange={(e) => setLogSearchQuery(e.target.value)}
                         />
                         {logSearchQuery && (
-                          <button 
-                            className={styles.terminalSearchClear} 
+                          <button
+                            className={styles.terminalSearchClear}
                             onClick={() => setLogSearchQuery('')}
                             title={lang === 'zh' ? "清除搜索" : "Clear search"}
+                            aria-label={lang === 'zh' ? "清除搜索" : "Clear search"}
                           >
                             <X size={10} />
                           </button>
@@ -248,24 +254,27 @@ export function RunDetailsDrawer({
                           className={styles.fontSizeBtn}
                           onClick={() => setTerminalFontSize(prev => Math.max(10, prev - 1))}
                           title={lang === 'zh' ? "减小字号" : "Decrease Font Size"}
+                          aria-label={lang === 'zh' ? "减小字号" : "Decrease Font Size"}
                         >
                           <ZoomOut size={12} />
                         </button>
                         <span className={styles.fontSizeValue}>{terminalFontSize}px</span>
-                        <button 
+                        <button
                           className={styles.fontSizeBtn}
                           onClick={() => setTerminalFontSize(prev => Math.min(20, prev + 1))}
                           title={lang === 'zh' ? "增大字号" : "Increase Font Size"}
+                          aria-label={lang === 'zh' ? "增大字号" : "Increase Font Size"}
                         >
                           <ZoomIn size={12} />
                         </button>
                       </div>
 
                       {/* Height toggle button */}
-                      <button 
+                      <button
                         className={styles.terminalHeightBtn}
                         onClick={() => setIsTerminalHeightExpanded(!isTerminalHeightExpanded)}
                         title={isTerminalHeightExpanded ? (lang === 'zh' ? "折叠控制台高度" : "Minimize height") : (lang === 'zh' ? "展开控制台高度" : "Maximize height")}
+                        aria-label={isTerminalHeightExpanded ? (lang === 'zh' ? "折叠控制台高度" : "Minimize height") : (lang === 'zh' ? "展开控制台高度" : "Maximize height")}
                       >
                         {isTerminalHeightExpanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                       </button>

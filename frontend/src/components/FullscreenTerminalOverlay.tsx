@@ -97,10 +97,11 @@ export function FullscreenTerminalOverlay({
                 onChange={(e) => setLogSearchQuery(e.target.value)}
               />
               {logSearchQuery && (
-                <button 
-                  className={styles.terminalSearchClear} 
+                <button
+                  className={styles.terminalSearchClear}
                   onClick={() => setLogSearchQuery('')}
                   title={lang === 'zh' ? "清除搜索" : "Clear search"}
+                  aria-label={lang === 'zh' ? "清除搜索" : "Clear search"}
                 >
                   <X size={10} />
                 </button>
@@ -130,18 +131,20 @@ export function FullscreenTerminalOverlay({
 
             {/* Font Sizer Controls */}
             <div className={styles.fontSizeControls}>
-              <button 
+              <button
                 className={styles.fontSizeBtn}
                 onClick={() => setTerminalFontSize(prev => Math.max(10, prev - 1))}
                 title={lang === 'zh' ? "减小字号" : "Decrease Font Size"}
+                aria-label={lang === 'zh' ? "减小字号" : "Decrease Font Size"}
               >
                 <ZoomOut size={12} />
               </button>
               <span className={styles.fontSizeValue}>{terminalFontSize}px</span>
-              <button 
+              <button
                 className={styles.fontSizeBtn}
                 onClick={() => setTerminalFontSize(prev => Math.min(24, prev + 1))}
                 title={lang === 'zh' ? "增大字号" : "Increase Font Size"}
+                aria-label={lang === 'zh' ? "增大字号" : "Increase Font Size"}
               >
                 <ZoomIn size={12} />
               </button>
@@ -190,10 +193,11 @@ export function FullscreenTerminalOverlay({
             </button>
 
             {/* Close Button */}
-            <button 
+            <button
               className={styles.fullscreenTerminalCloseBtn}
               onClick={() => setIsTerminalFullscreen(false)}
               title={lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
+              aria-label={lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
             >
               <X size={16} />
             </button>

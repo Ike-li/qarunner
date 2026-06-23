@@ -72,10 +72,11 @@ export function RunsTable({
           </button>
         </div>
 
-        <button 
-          className={styles.refreshIconButton} 
+        <button
+          className={styles.refreshIconButton}
           onClick={fetchRuns}
           title={t('refreshLogs')}
+          aria-label={t('refreshLogs')}
         >
           <RotateCw size={16} />
         </button>
@@ -135,8 +136,12 @@ export function RunsTable({
                         type="button"
                         className={`${styles.lockButton} ${run.locked ? styles.lockButtonActive : ''}`}
                         onClick={(e) => handleToggleLock(run.id, e)}
-                        title={run.locked 
-                          ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)') 
+                        title={run.locked
+                          ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
+                          : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
+                        }
+                        aria-label={run.locked
+                          ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
                           : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
                         }
                       >

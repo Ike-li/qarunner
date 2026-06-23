@@ -104,7 +104,7 @@ export function TriggerRunModal({
             <SlidersHorizontal size={20} className={styles.iconAccent} />
             <h2>{editingProfileId ? (lang === 'zh' ? '修改预设执行方案' : 'Modify Saved Execution Profile') : t('triggerTitle')}</h2>
           </div>
-          <button className={styles.modalCloseButton} onClick={() => onClose()}>
+          <button className={styles.modalCloseButton} onClick={() => onClose()} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
             <X size={20} />
           </button>
         </div>
@@ -195,6 +195,7 @@ export function TriggerRunModal({
                   type="button"
                   className={styles.nestedProfileDeleteButton}
                   title={lang === 'zh' ? '删除方案' : 'Delete Profile'}
+                  aria-label={lang === 'zh' ? '删除方案' : 'Delete Profile'}
                   onClick={(e) => onDeleteProfile(selectedProfileId, e)}
                   style={{ flexShrink: 0, width: '32px', height: '32px', borderRadius: '8px' }}
                 >
@@ -333,6 +334,7 @@ export function TriggerRunModal({
                     type="button"
                     className={styles.envDeleteBtn}
                     title={lang === 'zh' ? '删除' : 'Delete'}
+                    aria-label={lang === 'zh' ? '删除环境变量' : 'Delete variable'}
                     onClick={() => {
                       setEnvVars(envVars.filter((_, i) => i !== idx))
                     }}

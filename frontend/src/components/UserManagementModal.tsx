@@ -61,7 +61,7 @@ export function UserManagementModal({
             <Users size={20} className={styles.iconAccent} />
             <h2>{t('userManagementTitle')}</h2>
           </div>
-          <button className={styles.modalCloseButton} onClick={onClose}>
+          <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
             <X size={20} />
           </button>
         </div>

@@ -92,9 +92,10 @@ export function ProjectSidebar({
                     <span className={styles.suiteCountBadge}>
                       {suiteRunsCount}
                     </span>
-                    <button 
+                    <button
                       className={styles.quickPlayButton}
                       title={t('quickTrigger')}
+                      aria-label={t('quickTrigger')}
                       onClick={() => {
                         setTestsPath(suite)
                         setIsTriggerModalOpen(true)
@@ -167,30 +168,34 @@ export function ProjectSidebar({
                               )}
                             </div>
                             <div className={styles.nestedProfileActions}>
-                              <button 
+                              <button
                                 className={styles.nestedProfilePlayButton}
                                 title={lang === 'zh' ? '立即执行' : 'Instant Run'}
+                                aria-label={lang === 'zh' ? '立即执行' : 'Instant Run'}
                                 onClick={() => handleTriggerProfile(profile)}
                               >
                                 <Play size={8} fill="currentColor" />
                               </button>
-                              <button 
+                              <button
                                 className={styles.nestedProfileEditButton}
                                 title={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
+                                aria-label={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
                                 onClick={() => handleOpenEditProfile(profile)}
                               >
                                 <Pencil size={8} />
                               </button>
-                              <button 
+                              <button
                                 className={`${styles.nestedProfileClockButton} ${isSchedActive ? styles.nestedProfileClockButtonActive : ''}`}
                                 title={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
+                                aria-label={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
                                 onClick={() => handleOpenScheduleModal(profile)}
                               >
                                 <Clock size={8} />
                               </button>
-                              <button 
+                              <button
                                 className={styles.nestedProfileDeleteButton}
                                 title={lang === 'zh' ? '删除方案' : 'Delete Profile'}
+                                aria-label={lang === 'zh' ? '删除方案' : 'Delete Profile'}
                                 onClick={(e) => handleDeleteProfile(profile.id, e)}
                               >
                                 <X size={8} />

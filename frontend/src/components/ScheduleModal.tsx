@@ -52,7 +52,7 @@ export function ScheduleModal({
             <Clock size={20} className={styles.iconAccent} />
             <h2>{lang === 'zh' ? '配置定时运行计划' : 'Configure Scheduled Execution'}</h2>
           </div>
-          <button className={styles.modalCloseButton} onClick={onClose}>
+          <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
             <X size={20} />
           </button>
         </div>
