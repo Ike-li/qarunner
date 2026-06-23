@@ -2,11 +2,18 @@
 
 > QA test runner — execute external pytest code, collect results, generate Allure reports.
 
-## Quick start
+## Quick start (local development)
+
+The app refuses to start without a JWT secret and an admin password (SEC-2), so
+export them first — even for local dev:
 
 ```bash
 # Install dependencies
 uv sync --all-extras
+
+# Required: a strong JWT secret and a non-default admin password
+export QARUNNER_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
+export QARUNNER_ADMIN_PASSWORD='choose-a-strong-dev-password'
 
 # Run unit tests (100% coverage gate)
 uv run pytest
@@ -17,58 +24,169 @@ uv run pytest -m e2e
 # Lint
 uv run ruff check .
 
-# Start server
+# Start server (serves the API; build frontend/ separately for the SPA)
 uv run uvicorn qarunner.api.app:app --reload
 ```
 
+For local HTTP dev the auth cookie stays non-`Secure` (`QARUNNER_COOKIE_SECURE`
+defaults to `false`). **Set it to `true` in production** — see below.
+
+## Production deployment (Docker Compose)
+
+The bundled `Dockerfile.platform` builds a single image that serves **both the
+API and the built React SPA from the same origin** (port 8000) — a non-root
+runtime (DEP-1), dependencies pinned via `uv.lock` (DEP-2), and a `/health`
+readiness probe (DEP-4). `docker-compose.yml` wires the named volume, resource
+limits, healthcheck, and `restart: unless-stopped`.
+
+```bash
+# 1. Create .env with strong, unique secrets (NEVER commit it)
+cp .env.example .env
+#    QARUNNER_SECRET_KEY     — python -c "import secrets; print(secrets.token_urlsafe(64))"
+#    QARUNNER_ADMIN_PASSWORD — a strong, unique password
+#    QARUNNER_COOKIE_SECURE  — add `QARUNNER_COOKIE_SECURE=true` (see same-origin note)
+
+# 2. Build and start
+docker compose up -d --build
+
+# 3. Verify readiness (200 + {"status":"ok"} only when the DB round-trips)
+curl -f http://localhost:8000/health
+```
+
+### Same-origin requirement (SEC-6)
+
+Authentication uses an **`HttpOnly; SameSite=Strict; Secure` cookie**, planted at
+`/auth/login`. The browser only attaches it to **same-origin** requests, and the
+report `<iframe>`, the SSE log stream, and every `fetch` rely on it riding along
+automatically (no token is ever placed in a URL). Therefore:
+
+- **The frontend must be served from the same origin as the API.** The platform
+  image already does this (it mounts the built SPA at `/`), so publish a single
+  origin — e.g. `https://qa.example.com` fronting container port 8000. Splitting
+  the SPA and API onto different origins breaks auth: `SameSite=Strict` drops the
+  cookie on cross-origin SSE/iframe/fetch. Don't.
+- **Terminate TLS in front and set `QARUNNER_COOKIE_SECURE=true`.** Put a
+  reverse proxy (nginx / Caddy / cloud LB) ahead of port 8000. Without `Secure`,
+  the HttpOnly auth cookie could ride a plaintext hop.
+
+### Operational notes
+
+- **Health / readiness**: `GET /health` returns 200 only when the DB is
+  reachable, else 503. The compose healthcheck already polls it; point your
+  orchestrator's readiness probe at the same path.
+- **Persistence**: the SQLite DB and run artifacts both live in the
+  `platform-artifacts` named volume. Back it up to retain run history.
+- **Executor**: runs default to the in-process `subprocess` executor. The
+  hardened Docker executor (SEC-3: non-root, no network, `cap_drop=ALL`) needs a
+  Docker daemon socket mounted into the platform container and is **not** enabled
+  by the bundled compose.
+- **Single instance only**: crash recovery and the in-process scheduler assume
+  one instance owns the DB (CONC-2). Do **not** scale `platform` beyond one
+  replica without setting `QARUNNER_CRASH_RECOVERY_ON_STARTUP=false` on all but
+  one instance and moving scheduling out — otherwise a starting replica fails
+  runs still executing in its siblings, and each cron point fires N times.
+
 ## API
+
+All paths below are relative to the server origin (e.g. `http://localhost:8000`).
+
+**Auth column**
+
+- **None** — unauthenticated.
+- **User** — any authenticated user. Send `Authorization: Bearer <token>` (API
+  clients) or rely on the HttpOnly `token` cookie (browser). The legacy
+  `?token=` query parameter is **no longer accepted** (SEC-6).
+- **User†** — authenticated **and** object-level access: only the run's owner or
+  an admin may touch it; others get 403/404 (SEC-4).
+- **Admin** — admin role only.
+
+### Health
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | None | Liveness + readiness probe; 200 only when the DB round-trips, else 503 |
 
 ### Authentication & Users
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/auth/login` | None | Authenticate user and receive JWT token |
-| `GET` | `/auth/me` | Bearer | Retrieve logged-in user profile details |
-| `POST` | `/users` | Admin | Create a new user account (Admin-only) |
-| `GET` | `/users` | Admin | List all registered platform users (Admin-only) |
+| `POST` | `/auth/login` | None | Authenticate; returns a JWT in the body **and** sets the HttpOnly auth cookie. Rate-limited with backoff lockout (SEC-5) |
+| `POST` | `/auth/logout` | None | Clear the auth cookie (works even on an expired session) |
+| `GET` | `/auth/me` | User | Current user's profile |
+| `POST` | `/users` | Admin | Create a user account |
+| `GET` | `/users` | Admin | List all users |
 
-### Test Orchestration
+### Test discovery
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/runs` | Bearer | Trigger a test run (returns 202 + id) |
-| `GET` | `/runs` | Bearer | List all runs (newest first) |
-| `GET` | `/runs/{id}` | Bearer | Get run details + summary |
-| `GET` | `/runs/{id}/report` | Bearer/Query | Get Allure HTML report (accepts `Authorization` header or `?token=...`) |
+| `GET` | `/tests` | User | List test suite directories under `tests_root` |
+| `GET` | `/tests/{suite}/tree` | User | File tree for a suite |
+| `GET` | `/tests/{suite}/markers` | User | Pytest markers declared in a suite |
 
-### Example
+### Profiles (saved run configurations)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/profiles` | User | Create a run profile |
+| `GET` | `/profiles` | User | List profiles |
+| `PUT` | `/profiles/{id}` | User | Update a profile |
+| `DELETE` | `/profiles/{id}` | User | Delete a profile |
+
+### Runs
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/runs` | User | Trigger a test run (returns 202 + id) |
+| `GET` | `/runs` | User | List runs, newest first (non-admins see only their own, SEC-4) |
+| `GET` | `/runs/{id}` | User† | Run details + summary |
+| `GET` | `/runs/{id}/report` | User† | Allure HTML report (the browser embeds it via the same-origin cookie) |
+| `GET` | `/runs/{id}/report/{path}` | User† | Allure report static assets (path-traversal-safe) |
+| `GET` | `/runs/{id}/stream` | User† | Live stdout via Server-Sent Events |
+| `PUT` | `/runs/{id}/lock` | User† | Toggle a run's lock to protect it from cleanup |
+| `POST` | `/runs/cleanup` | Admin | Delete artifacts of unlocked runs older than `retention_days` (default 30); metadata is kept |
+
+### Schedules (cron)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/schedules/preview` | User | Preview the next fire times for a cron expression |
+| `POST` | `/schedules` | User | Create a schedule |
+| `GET` | `/schedules` | User | List schedules |
+| `GET` | `/schedules/{id}` | User | Get a schedule |
+| `PUT` | `/schedules/{id}` | User | Update a schedule |
+| `DELETE` | `/schedules/{id}` | User | Delete a schedule |
+
+### Example (API client)
 
 ```bash
-# 1. Sign in to obtain access token
+# 1. Sign in to obtain an access token (programmatic clients use the body token)
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
   -d "{\"username\": \"admin\", \"password\": \"$QARUNNER_ADMIN_PASSWORD\"}" | jq -r '.access_token')
 
-# 2. Trigger a run with Authorization header
+# 2. Trigger a run with the Authorization header
 curl -X POST http://localhost:8000/runs \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"tests_path": "sample_tests"}'
 
-# 3. Poll for results with Authorization header
+# 3. Poll for results
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/runs/<id>
 ```
 
+Browsers authenticate via the HttpOnly cookie set at login instead of the header.
+
 ## Configuration
 
-All settings are read from environment variables with `QARUNNER_` prefix.
+All settings are read from environment variables with the `QARUNNER_` prefix.
 `QARUNNER_SECRET_KEY` and `QARUNNER_ADMIN_PASSWORD` are **required** — the app
 refuses to start if either is unset or left as a known placeholder (SEC-2). See
 `.env.example` for a starting point.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `QARUNNER_TESTS_ROOT` | `./external_tests` | Root directory containing test code |
+| `QARUNNER_TESTS_ROOT` | `./external_tests/` | Root directory containing test code |
 | `QARUNNER_ARTIFACTS_ROOT` | `./artifacts` | Where run artifacts are stored |
 | `QARUNNER_DB_PATH` | `./artifacts/qarunner.db` | SQLite database path |
 | `QARUNNER_ALLURE_BIN` | `allure` | Path to allure CLI binary |
@@ -76,8 +194,11 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_DEFAULT_TIMEOUT_SECONDS` | `1800` | Default test execution timeout |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | Maximum concurrent test runs |
 | `QARUNNER_SECRET_KEY` | **(required)** | JWT signing secret. No default; known placeholders rejected. Generate via `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
+| `QARUNNER_ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | JWT / auth-cookie lifetime in minutes |
+| `QARUNNER_COOKIE_SECURE` | `false` | Add the `Secure` flag to the HttpOnly auth cookie. **Set `true` in production** (HTTPS) so the cookie never rides a plaintext connection (SEC-6) |
 | `QARUNNER_ADMIN_USER` | `admin` | Initial default administrator username |
 | `QARUNNER_ADMIN_PASSWORD` | **(required)** | Initial administrator password. No default; known weak/default values rejected |
+| `QARUNNER_STATIC_ROOT` | (project `frontend/dist`) | Directory of the built SPA to serve at `/`. The platform image sets this; override for a custom layout |
 | `QARUNNER_CRASH_RECOVERY_ON_STARTUP` | `true` | Fail QUEUED/RUNNING runs left by a previous process on startup. Assumes a single instance owns the DB — set `false` on all but one replica when scaling out, or sibling runs in flight will be wrongly failed |
 | `QARUNNER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS` | `30` | Grace period on shutdown to let in-flight runs persist their terminal state before the DB closes. Runs still executing after this are cancelled (and recovered as FAILED on the next start) |
 
