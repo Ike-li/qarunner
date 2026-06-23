@@ -324,15 +324,12 @@ class RunOrchestrator:
             await self._store.save(run)
 
         except Exception as exc:
-            # Error model: repr(exception) + stderr tail, truncated to ~2000 chars
-            import traceback
-
-            parts = [repr(exc)]
-            # Include traceback tail for debugging
-            tb = traceback.format_exc()
-            if len(tb) > 500:
-                parts.append(tb[-500:])
-            error_msg = "\n".join(parts)[:2000]
+            # API-facing error: the exception's repr (type + message) only,
+            # truncated. The full traceback goes to the server log via
+            # logger.exception below — never into run.error, because stack frames
+            # leak absolute source paths and code structure to API clients
+            # (defence in depth for a platform that executes untrusted test code).
+            error_msg = repr(exc)[:2000]
             logger.exception("execute failed for run %s", run_id)
             try:
                 run = _replace(

@@ -461,6 +461,10 @@ class TestExecuteErrorModel:
         assert stored.status == RunStatus.FAILED
         assert stored.error is not None
         assert "executable not found" in stored.error
+        # The API-facing error carries the message, not the traceback: no stack
+        # frames / absolute source paths leak to clients.
+        assert "Traceback" not in stored.error
+        assert 'File "' not in stored.error
         assert stored.finished_at is not None
 
     @pytest.mark.asyncio
