@@ -315,13 +315,28 @@ class SqliteStore:
         ]
 
     async def save(self, run: Run) -> None:
+        # Row-preserving upsert that deliberately omits `locked` from the
+        # conflict update. `locked` is owned by lock_run (a targeted UPDATE) and
+        # seeded only at creation; a full-row INSERT OR REPLACE here would clobber
+        # a lock toggled while a run executes, because execute() re-saves a run
+        # object whose in-memory `locked` is stale (BUG-4). On insert the VALUES
+        # still seed `locked`; on update the stored value is preserved.
         async with self._connect() as db:
             await db.execute(
-                "INSERT OR REPLACE INTO runs "
+                "INSERT INTO runs "
                 "(id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
                 "created_at, started_at, finished_at, env_json, locked) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "status=excluded.status, runner=excluded.runner, "
+                "created_by=excluded.created_by, tests_path=excluded.tests_path, "
+                "args_json=excluded.args_json, allure_enabled=excluded.allure_enabled, "
+                "timeout=excluded.timeout, executor_mode=excluded.executor_mode, "
+                "summary_json=excluded.summary_json, report_json=excluded.report_json, "
+                "exit_code=excluded.exit_code, error=excluded.error, "
+                "created_at=excluded.created_at, started_at=excluded.started_at, "
+                "finished_at=excluded.finished_at, env_json=excluded.env_json",
                 (
                     run.id,
                     run.status.value,

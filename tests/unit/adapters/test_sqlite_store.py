@@ -485,6 +485,31 @@ async def test_sqlite_store_lock_run(store: SqliteStore) -> None:
     assert retrieved.locked is False
 
 
+async def test_save_does_not_clobber_concurrent_lock(store: SqliteStore) -> None:
+    """A lifecycle save() must not overwrite a lock toggled meanwhile (BUG-4).
+
+    ``orchestrator.execute`` reads a run at start (locked=False), holds it in
+    memory, and re-saves the whole row at the terminal state. If a
+    ``PUT /runs/{id}/lock`` flipped ``locked`` via its targeted UPDATE in
+    between, a full-row INSERT OR REPLACE would clobber it back to False —
+    silently unprotecting the run from cleanup deletion. ``save`` must preserve
+    the stored ``locked`` (only creation and ``lock_run`` may set it).
+    """
+    run = _make_run(id="run-lock-race")
+    assert run.locked is False
+    await store.save(run)  # initial insert, as create() does
+
+    # A concurrent lock arrives while execute still holds locked=False in memory.
+    await store.lock_run("run-lock-race", True)
+
+    # execute re-saves its stale in-memory run at the terminal state.
+    await store.save(run.model_copy(update={"status": RunStatus.COMPLETED}))
+
+    retrieved = await store.get("run-lock-race")
+    assert retrieved.status == RunStatus.COMPLETED
+    assert retrieved.locked is True  # the lock survived the lifecycle save
+
+
 async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
     from datetime import UTC, datetime, timedelta
     now = datetime.now(UTC)
