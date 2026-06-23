@@ -453,7 +453,7 @@ export default function App() {
 
 
   // Auth State
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('qarunner_token'))
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)  // null = initial auth-cookie probe in flight
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
 
   // Login Form State
@@ -538,11 +538,10 @@ export default function App() {
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [logFilterTab, setLogFilterTab] = useState<'All' | 'Manual' | 'Scheduled'>('All')
 
-  // Logout handler
-  const handleLogout = useCallback(() => {
-    localStorage.removeItem('qarunner_token')
-    document.cookie = "token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict"
-    setToken(null)
+  // Reset all client-side session state. Used on user logout and on any 401
+  // (the auth cookie is gone/expired, so fall back to the login screen).
+  const clearSession = useCallback(() => {
+    setIsAuthenticated(false)
     setCurrentUser(null)
     setSelectedRunId(null)
     setRuns([])
@@ -560,38 +559,52 @@ export default function App() {
     setSchedules([])
   }, [])
 
-  // Fetch current user profile
-  const fetchProfile = useCallback(async (authToken: string) => {
-    try {
-      const resp = await fetch('/auth/me', {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      })
+  // Single fetch wrapper (FE-2). Always sends the HttpOnly auth cookie and never
+  // a token header or URL param (SEC-6). A 401 means the session is gone, so we
+  // clear it centrally — callers no longer duplicate 401 handling.
+  const apiFetch = useCallback(
+    async (path: string, opts: RequestInit = {}): Promise<Response> => {
+      const resp = await globalThis.fetch(path, { ...opts, credentials: "include" })
       if (resp.status === 401) {
-        handleLogout()
-        return
+        clearSession()
       }
+      return resp
+    },
+    [clearSession],
+  )
+
+  // User-initiated logout: the cookie is HttpOnly so JS can't clear it — ask the
+  // server to expire it, then reset client state.
+  const handleLogout = useCallback(async () => {
+    try {
+      await apiFetch("/auth/logout", { method: "POST" })
+    } catch {
+      // best-effort; clear client state regardless
+    }
+    clearSession()
+  }, [apiFetch, clearSession])
+
+  // Probe the session via the auth cookie and populate the current user.
+  // Replaces the old token-based profile fetch; drives the isAuthenticated gate.
+  const checkAuth = useCallback(async () => {
+    try {
+      const resp = await apiFetch('/auth/me')
       if (resp.ok) {
-        const user = await resp.json()
-        setCurrentUser(user)
+        setCurrentUser(await resp.json())
+        setIsAuthenticated(true)
       } else {
-        handleLogout()
+        setIsAuthenticated(false)
       }
     } catch (err) {
-      console.error('Error fetching profile:', err)
+      console.error('Error checking auth:', err)
+      setIsAuthenticated(false)
     }
-  }, [handleLogout])
+  }, [apiFetch])
 
   // Fetch runs list
   const fetchRuns = useCallback(async () => {
-    if (!token) return
     try {
-      const resp = await fetch('/runs', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
+      const resp = await apiFetch('/runs')
       if (resp.ok) {
         const data = await resp.json()
         setRuns(data.runs)
@@ -601,20 +614,13 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [token, handleLogout])
+  }, [apiFetch])
 
   // Fetch a single run details (with stdout/stderr)
   const fetchSelectedRunDetails = useCallback(async (runId: string) => {
-    if (!token) return
     setDetailsLoading(true)
     try {
-      const resp = await fetch(`/runs/${runId}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
+      const resp = await apiFetch(`/runs/${runId}`)
       if (resp.ok) {
         const data = await resp.json()
         setSelectedRunDetails(data)
@@ -624,17 +630,10 @@ export default function App() {
     } finally {
       setDetailsLoading(false)
     }
-  }, [token, handleLogout])  // Fetch saved test profiles
+  }, [apiFetch])  // Fetch saved test profiles
   const fetchProfiles = useCallback(async () => {
-    if (!token) return
     try {
-      const resp = await fetch('/profiles', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
+      const resp = await apiFetch('/profiles')
       if (resp.ok) {
         const data = await resp.json()
         setProfiles(data)
@@ -642,19 +641,12 @@ export default function App() {
     } catch (err) {
       console.error('Error fetching profiles:', err)
     }
-  }, [token, handleLogout])
+  }, [apiFetch])
 
   // Fetch saved test schedules
   const fetchSchedules = useCallback(async () => {
-    if (!token) return
     try {
-      const resp = await fetch('/schedules', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
+      const resp = await apiFetch('/schedules')
       if (resp.ok) {
         const data = await resp.json()
         setSchedules(data)
@@ -662,19 +654,17 @@ export default function App() {
     } catch (err) {
       console.error('Error fetching schedules:', err)
     }
-  }, [token, handleLogout])
+  }, [apiFetch])
 
   // Fetch schedule preview next 5 runs
   const fetchSchedulePreview = useCallback(async (expression: string, timezone: string) => {
-    if (!token || !expression) {
+    if (!expression) {
       setPreviewNextRuns([])
       setPreviewError(null)
       return
     }
     try {
-      const resp = await fetch(`/schedules/preview?expression=${encodeURIComponent(expression)}&timezone=${encodeURIComponent(timezone)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const resp = await apiFetch(`/schedules/preview?expression=${encodeURIComponent(expression)}&timezone=${encodeURIComponent(timezone)}`)
       if (resp.ok) {
         const data = await resp.json()
         setPreviewNextRuns(data.next_runs)
@@ -688,7 +678,7 @@ export default function App() {
       setPreviewError('Failed to fetch schedule preview')
       setPreviewNextRuns([])
     }
-  }, [token])
+  }, [apiFetch])
 
   // Open schedule manager modal and populate fields
   const handleOpenScheduleModal = useCallback((profile: Profile) => {
@@ -716,7 +706,7 @@ export default function App() {
 
   // Save schedule configuration
   const handleSaveSchedule = useCallback(async () => {
-    if (!token || !scheduleProfile) return
+    if (!scheduleProfile) return
     const existing = schedules.find(s => s.profile_id === scheduleProfile.id)
     const payload = {
       name: schedName,
@@ -729,19 +719,14 @@ export default function App() {
     try {
       const url = existing ? `/schedules/${existing.id}` : '/schedules'
       const method = existing ? 'PUT' : 'POST'
-      const resp = await fetch(url, {
+      const resp = await apiFetch(url, {
         method,
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         await fetchSchedules()
@@ -753,23 +738,17 @@ export default function App() {
     } catch (err) {
       setPreviewError('Network error. Failed to save schedule.')
     }
-  }, [token, scheduleProfile, schedules, schedName, schedExpression, schedEnabled, schedTimezone, handleLogout, fetchSchedules])
+  }, [scheduleProfile, schedules, schedName, schedExpression, schedEnabled, schedTimezone, apiFetch, fetchSchedules])
 
   // Delete schedule configuration
   const handleDeleteSchedule = useCallback(async (scheduleId: string) => {
-    if (!token) return
     if (!window.confirm(lang === 'zh' ? '确定要删除此定时调度吗？' : 'Are you sure you want to delete this schedule?')) {
       return
     }
     try {
-      const resp = await fetch(`/schedules/${scheduleId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+      const resp = await apiFetch(`/schedules/${scheduleId}`, {
+        method: 'DELETE'
       })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
       if (resp.ok) {
         await fetchSchedules()
         // If deleting the active profile's schedule being configured, update states
@@ -785,16 +764,14 @@ export default function App() {
     } catch (err) {
       console.error('Error deleting schedule:', err)
     }
-  }, [token, lang, scheduleProfile, schedules, handleLogout, fetchSchedules])
+  }, [lang, scheduleProfile, schedules, apiFetch, fetchSchedules])
 
   // Fetch file tree and markers for the active test suite
   const fetchSuiteMetadata = useCallback(async (suiteName: string) => {
-    if (!token || !suiteName) return
+    if (!suiteName) return
     try {
       // 1. Fetch File Tree
-      const treeResp = await fetch(`/tests/${encodeURIComponent(suiteName)}/tree`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const treeResp = await apiFetch(`/tests/${encodeURIComponent(suiteName)}/tree`)
       if (treeResp.status === 401) {
         handleLogout()
         return
@@ -807,9 +784,7 @@ export default function App() {
       }
 
       // 2. Fetch Markers statically
-      const markersResp = await fetch(`/tests/${encodeURIComponent(suiteName)}/markers`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const markersResp = await apiFetch(`/tests/${encodeURIComponent(suiteName)}/markers`)
       if (markersResp.ok) {
         const markersData = await markersResp.json()
         setScannedMarkers(markersData)
@@ -821,11 +796,10 @@ export default function App() {
       setScannedFilesTree([])
       setScannedMarkers([])
     }
-  }, [token, handleLogout])
+  }, [apiFetch])
 
   // Handle direct single-click trigger of a profile from the sidebar
   const handleTriggerProfile = useCallback(async (profile: Profile) => {
-    if (!token) return
     const payload = {
       tests_path: profile.tests_path,
       runner: 'pytest',
@@ -840,19 +814,14 @@ export default function App() {
     }
 
     try {
-      const resp = await fetch('/runs', {
+      const resp = await apiFetch('/runs', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         const newRun = await resp.json()
@@ -865,7 +834,7 @@ export default function App() {
     } catch (err) {
       console.error('Network error. Failed to trigger run for profile.', err)
     }
-  }, [token, handleLogout, fetchRuns])
+  }, [apiFetch, fetchRuns])
 
   // Handle deleting a saved execution profile
   const handleDeleteProfile = useCallback(async (profileId: string, e?: React.MouseEvent) => {
@@ -874,15 +843,10 @@ export default function App() {
     if (!window.confirm(confirmMsg)) return
 
     try {
-      const resp = await fetch(`/profiles/${profileId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+      const resp = await apiFetch(`/profiles/${profileId}`, {
+        method: 'DELETE'
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         await fetchProfiles()
@@ -897,20 +861,13 @@ export default function App() {
     } catch (err) {
       console.error('Error deleting profile:', err)
     }
-  }, [token, handleLogout, lang, fetchProfiles, fetchSchedules, selectedProfileId])
+  }, [apiFetch, lang, fetchProfiles, fetchSchedules, selectedProfileId])
 
 
   // Fetch tests directories
   const fetchTests = useCallback(async () => {
-    if (!token) return
     try {
-      const resp = await fetch('/tests', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
+      const resp = await apiFetch('/tests')
       if (resp.ok) {
         const data = await resp.json()
         setTests(data)
@@ -921,20 +878,14 @@ export default function App() {
     } catch (err) {
       console.error('Error fetching test directories:', err)
     }
-  }, [token, handleLogout])
+  }, [apiFetch])
 
   // Admin: Fetch all registered users
   const fetchUsers = useCallback(async () => {
-    if (!token || !currentUser || currentUser.role !== 'admin') return
+    if (!currentUser || currentUser.role !== 'admin') return
     setUsersLoading(true)
     try {
-      const resp = await fetch('/users', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
+      const resp = await apiFetch('/users')
       if (resp.ok) {
         const data = await resp.json()
         setUsersList(data.users)
@@ -944,7 +895,7 @@ export default function App() {
     } finally {
       setUsersLoading(false)
     }
-  }, [token, currentUser, handleLogout])
+  }, [currentUser, apiFetch])
 
   // Handle Login submission
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -958,7 +909,7 @@ export default function App() {
     setLoginError(null)
 
     try {
-      const resp = await fetch('/auth/login', {
+      const resp = await apiFetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -968,12 +919,11 @@ export default function App() {
       })
 
       if (resp.ok) {
-        const data = await resp.json()
-        localStorage.setItem('qarunner_token', data.access_token)
-        document.cookie = `token=${data.access_token}; path=/; max-age=86400; SameSite=Strict`
-        setToken(data.access_token)
+        // The server planted the HttpOnly auth cookie on this response; no token
+        // is read or stored in JS (SEC-6). Populate auth state from the cookie.
         setLoginUsername('')
         setLoginPassword('')
+        await checkAuth()
       } else {
         const errorData = await resp.json()
         setLoginError(errorData.detail || 'Invalid username or password.')
@@ -997,11 +947,10 @@ export default function App() {
     setNewUserError(null)
 
     try {
-      const resp = await fetch('/users', {
+      const resp = await apiFetch('/users', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           username: newUsername.trim(),
@@ -1010,10 +959,6 @@ export default function App() {
         })
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         // Reset registration form & reload list
@@ -1064,19 +1009,14 @@ export default function App() {
     }
 
     try {
-      const resp = await fetch('/runs', {
+      const resp = await apiFetch('/runs', {
         method: 'POST',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         const newRun = await resp.json()
@@ -1133,19 +1073,14 @@ export default function App() {
     }
 
     try {
-      const resp = await fetch('/profiles', {
+      const resp = await apiFetch('/profiles', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         // Refresh profiles list and close the save panel
@@ -1165,25 +1100,19 @@ export default function App() {
   // Handle locking and unlocking a run record
   const handleToggleLock = useCallback(async (runId: string, e: React.MouseEvent) => {
     e.stopPropagation() // Prevent selecting row when clicking lock
-    if (!token) return
     const run = runs.find(r => r.id === runId)
     if (!run) return
     const newLocked = !run.locked
 
     try {
-      const resp = await fetch(`/runs/${runId}/lock`, {
+      const resp = await apiFetch(`/runs/${runId}/lock`, {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ locked: newLocked })
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         // Update local runs state
@@ -1199,7 +1128,7 @@ export default function App() {
     } catch (err) {
       console.error('Error toggling lock:', err)
     }
-  }, [token, runs, selectedRunDetails, handleLogout])
+  }, [runs, selectedRunDetails, apiFetch])
 
   // Handle opening the launch modal in Edit Profile mode
   const handleOpenEditProfile = useCallback((profile: Profile) => {
@@ -1252,19 +1181,14 @@ export default function App() {
 
     setIsSubmitting(true)
     try {
-      const resp = await fetch(`/profiles/${editingProfileId}`, {
+      const resp = await apiFetch(`/profiles/${editingProfileId}`, {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       })
 
-      if (resp.status === 401) {
-        handleLogout()
-        return
-      }
 
       if (resp.ok) {
         await fetchProfiles()
@@ -1290,17 +1214,20 @@ export default function App() {
     }
   }
 
-  // Initial loads on auth state changes
+  // Probe the auth cookie once on mount to learn whether we're already logged in.
   useEffect(() => {
-    if (token) {
-      document.cookie = `token=${token}; path=/; max-age=86400; SameSite=Strict`
-      fetchProfile(token)
+    checkAuth()
+  }, [checkAuth])
+
+  // Initial data loads once authenticated.
+  useEffect(() => {
+    if (isAuthenticated) {
       fetchRuns()
       fetchTests()
       fetchProfiles()
       fetchSchedules()
     }
-  }, [token, fetchProfile, fetchRuns, fetchTests, fetchProfiles, fetchSchedules])
+  }, [isAuthenticated, fetchRuns, fetchTests, fetchProfiles, fetchSchedules])
 
   // Trigger test-suite file-tree and markers discovery when active directory changes
   useEffect(() => {
@@ -1372,7 +1299,7 @@ export default function App() {
   // connection can't spin. `fetchSelectedRunDetails` is a stable useCallback
   // keyed on [token, handleLogout], so it never churns mid-stream.
   useEffect(() => {
-    if (!token || !selectedRunId) {
+    if (!selectedRunId) {
       setStreamedStdout('')
       setIsStreaming(false)
       return
@@ -1401,7 +1328,7 @@ export default function App() {
     const connect = () => {
       if (disposed) return
       eventSource = new EventSource(
-        `/runs/${selectedRunId}/stream?token=${encodeURIComponent(token)}`
+        `/runs/${selectedRunId}/stream`
       )
 
       eventSource.onopen = () => {
@@ -1443,7 +1370,7 @@ export default function App() {
       eventSource?.close()
       setIsStreaming(false)
     }
-  }, [token, selectedRunId, fetchSelectedRunDetails])
+  }, [selectedRunId, fetchSelectedRunDetails])
 
   // Scroll terminal logs to bottom on changes
   useEffect(() => {
@@ -1492,7 +1419,7 @@ export default function App() {
 
   // Automated real-time polling
   useEffect(() => {
-    if (!token) return
+    if (!isAuthenticated) return
 
     const interval = setInterval(() => {
       const currentRuns = runsRef.current
@@ -1512,7 +1439,7 @@ export default function App() {
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [token, fetchRuns, fetchSelectedRunDetails])
+  }, [isAuthenticated, fetchRuns, fetchSelectedRunDetails])
 
 
   // Utility formatting helpers (formatDuration lives in ./logUtils, unit-tested)
@@ -1537,8 +1464,20 @@ export default function App() {
     : '0'
   const activeRunsCount = runs.filter(r => r.status === 'queued' || r.status === 'running').length
 
-  // Rendering 1: Login full-screen Glassmorphism if no token
-  if (!token) {
+  // Rendering 0: brief loader while the initial auth-cookie probe is in flight,
+  // so an already-logged-in user doesn't flash the login screen on reload.
+  if (isAuthenticated === null) {
+    return (
+      <div className={styles.loginOverlay}>
+        <div className={styles.ambientGlow1}></div>
+        <div className={styles.ambientGlow2}></div>
+        <RotateCw size={32} className={styles.spinIcon} />
+      </div>
+    )
+  }
+
+  // Rendering 1: Login full-screen Glassmorphism if not authenticated
+  if (!isAuthenticated) {
     return (
       <div className={styles.loginOverlay}>
         <div className={styles.ambientGlow1}></div>
@@ -2729,7 +2668,7 @@ export default function App() {
                         </div>
                         <div className={styles.reportIframeHeaderActions}>
                           <a 
-                            href={`/runs/${selectedRun.id}/report?token=${token}`}
+                            href={`/runs/${selectedRun.id}/report`}
                             target="_blank"
                             rel="noreferrer"
                             className={styles.terminalCopyButton}
@@ -2750,7 +2689,7 @@ export default function App() {
                       )}
 
                       <iframe
-                        src={`/runs/${selectedRun.id}/report?token=${token}`}
+                        src={`/runs/${selectedRun.id}/report`}
                         className={styles.reportIframe}
                         onLoad={() => setIsIframeLoading(false)}
                         title="Allure Report"
@@ -3702,11 +3641,8 @@ export default function App() {
                       }
                       setIsCleaningStorage(true);
                       try {
-                        const resp = await fetch(`/runs/cleanup?retention_days=${retentionDays}`, {
-                          method: 'POST',
-                          headers: {
-                            'Authorization': `Bearer ${token}`
-                          }
+                        const resp = await apiFetch(`/runs/cleanup?retention_days=${retentionDays}`, {
+                          method: 'POST'
                         });
                         const data = await resp.json();
                         if (resp.ok) {
