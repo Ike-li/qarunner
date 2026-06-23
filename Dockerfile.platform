@@ -24,12 +24,16 @@ RUN wget -q https://github.com/allure-framework/allure2/releases/download/2.24.0
     && ln -s /opt/allure-2.24.0/bin/allure /usr/bin/allure \
     && rm allure-2.24.0.zip
 
-# Copy backend files and pyproject.toml
-COPY pyproject.toml ./
+# Install dependencies from the lockfile for reproducible builds (DEP-2):
+# `uv sync --frozen` installs the exact pinned versions and fails if the lock is
+# stale, instead of letting `pip install .` re-resolve bare specifiers.
+COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
-
-# Install the Python package and all required dependencies
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir uv \
+    && uv sync --frozen --no-dev \
+    && rm -rf /root/.cache
+# Put the synced virtualenv first on PATH so CMD's uvicorn resolves to it.
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy built frontend assets
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist

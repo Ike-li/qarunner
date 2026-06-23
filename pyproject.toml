@@ -8,15 +8,15 @@ version = "0.1.0"
 description = "QA test runner — execute external pytest code, collect results, generate Allure reports"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi",
+    "fastapi>=0.115,<1",
     "uvicorn[standard]",
-    "pydantic>=2",
+    "pydantic>=2,<3",
     "pydantic-settings",
     "aiosqlite",
     "allure-pytest",
-    "pyjwt",
-    "bcrypt",
-    "docker",
+    "pyjwt>=2.8",
+    "bcrypt>=4.1",
+    "docker>=7,<8",
     "apscheduler",
     "croniter",
     "defusedxml>=0.7.1",
