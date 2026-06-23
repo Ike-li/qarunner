@@ -46,5 +46,13 @@ ENV PORT=8000
 ENV HOST=0.0.0.0
 ENV QARUNNER_STATIC_ROOT=/app/frontend/dist
 
+# Drop to a non-root user (DEP-1). Own /app so the app can write the SQLite DB
+# and so the artifacts named volume inherits write access on first mount; the
+# read-only external_tests mount stays world-readable.
+RUN useradd --create-home --uid 1000 app \
+    && mkdir -p /app/artifacts \
+    && chown -R app:app /app
+USER app
+
 # Command to run uvicorn server
 CMD ["uvicorn", "qarunner.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
