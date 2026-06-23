@@ -5,9 +5,8 @@ import {
   RotateCw, 
   CheckCircle2, 
   XCircle, 
-  Clock, 
-  Calendar,
-  AlertTriangle, 
+  Clock,
+  AlertTriangle,
   ExternalLink, 
   ChevronRight, 
   FolderGit2, 
@@ -30,7 +29,6 @@ import {
   Sun,
   Moon,
   Pencil,
-  Trash2,
   Maximize2,
   ChevronsLeft,
   ChevronsRight,
@@ -47,6 +45,8 @@ import { LoginScreen } from './components/LoginScreen'
 import { StatsCards } from './components/StatsCards'
 import { TestFileTree } from './components/TestFileTree'
 import { useFileTreeSelection } from './hooks/useFileTreeSelection'
+import { ScheduleModal } from './components/ScheduleModal'
+import { UserManagementModal } from './components/UserManagementModal'
 
 export default function App() {
   const [runs, setRuns] = useState<Run[]>([])
@@ -2750,369 +2750,52 @@ export default function App() {
 
       {/* Modal: Schedule Manager */}
       {isScheduleModalOpen && scheduleProfile && (
-        <div className={styles.modalOverlay} onClick={() => setIsScheduleModalOpen(false)}>
-          <div className={`${styles.modal} ${styles.scheduleModal}`} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalHeader}>
-              <div className={styles.modalTitleGroup}>
-                <Clock size={20} className={styles.iconAccent} />
-                <h2>{lang === 'zh' ? '配置定时运行计划' : 'Configure Scheduled Execution'}</h2>
-              </div>
-              <button className={styles.modalCloseButton} onClick={() => setIsScheduleModalOpen(false)}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className={styles.form}>
-              <div className={styles.scheduleProfileBanner}>
-                <span className={styles.bannerLabel}>{lang === 'zh' ? '执行方案: ' : 'Profile: '}</span>
-                <span className={styles.bannerValue}>{scheduleProfile.name}</span>
-                <span className={styles.bannerSuite}>({scheduleProfile.tests_path})</span>
-              </div>
-
-              {previewError && (
-                <div className={styles.formErrorAlert}>
-                  <AlertTriangle size={16} />
-                  <span>{previewError}</span>
-                </div>
-              )}
-
-              <div className={styles.formField}>
-                <label className={styles.label}>
-                  <span>{lang === 'zh' ? '计划名称' : 'Schedule Name'}</span>
-                  <span className={styles.requiredIndicator}>*</span>
-                </label>
-                <input 
-                  type="text"
-                  className={styles.input}
-                  value={schedName}
-                  onChange={(e) => setSchedName(e.target.value)}
-                  placeholder={lang === 'zh' ? '输入定时计划名称' : 'e.g. Daily Regression'}
-                  required
-                />
-              </div>
-
-              <div className={styles.formRow}>
-                <div className={styles.formField} style={{ flex: 1 }}>
-                  <label className={styles.label}>
-                    <span>{lang === 'zh' ? 'Cron 表达式' : 'Cron Expression'}</span>
-                    <span className={styles.requiredIndicator}>*</span>
-                  </label>
-                  <input 
-                    type="text"
-                    className={styles.input}
-                    value={schedExpression}
-                    onChange={(e) => setSchedExpression(e.target.value)}
-                    placeholder="e.g. 0 2 * * *"
-                    required
-                  />
-                  <span className={styles.fieldHelp}>
-                    {lang === 'zh' ? '标准 5 位 Cron 语法 (分 时 日 月 周)' : 'Standard 5-field cron syntax (min hour day month day-of-week).'}
-                  </span>
-                </div>
-
-                <div className={styles.formField} style={{ width: '150px' }}>
-                  <label className={styles.label}>
-                    <span>{lang === 'zh' ? '时区' : 'Timezone'}</span>
-                  </label>
-                  <div className={styles.selectWrapper}>
-                    <select 
-                      className={styles.select}
-                      value={schedTimezone}
-                      onChange={(e) => setSchedTimezone(e.target.value)}
-                    >
-                      <option value="UTC">UTC</option>
-                      <option value="Asia/Shanghai">Asia/Shanghai</option>
-                      <option value="America/New_York">America/New_York</option>
-                      <option value="Europe/London">Europe/London</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div className={styles.formField}>
-                <label className={styles.checkboxLabel} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                  <input 
-                    type="checkbox"
-                    className={styles.checkbox}
-                    checked={schedEnabled}
-                    onChange={(e) => setSchedEnabled(e.target.checked)}
-                  />
-                  <span>{lang === 'zh' ? '启用此定时调度' : 'Enable this schedule'}</span>
-                </label>
-              </div>
-
-              {/* Real-time future runs preview widget */}
-              <div className={styles.previewWidget}>
-                <div className={styles.previewWidgetHeader}>
-                  <Calendar size={14} className={styles.previewIcon} />
-                  <span>{lang === 'zh' ? '未来 5 次运行时间预测:' : 'Next 5 Projected Runs Preview (Static Check):'}</span>
-                </div>
-                {previewNextRuns.length > 0 ? (
-                  <div className={styles.previewList}>
-                    {previewNextRuns.map((runTime, idx) => (
-                      <div key={runTime} className={styles.previewItem}>
-                        <span className={styles.previewIdx}>#{idx + 1}</span>
-                        <span className={styles.previewTime}>{new Date(runTime).toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US', { timeZone: schedTimezone })}</span>
-                        <span className={styles.previewTz}>({schedTimezone})</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className={styles.previewEmpty}>
-                    {previewError ? (
-                      <span className={styles.previewErrorText}>{previewError}</span>
-                    ) : (
-                      <span>{lang === 'zh' ? '请输入有效的 Cron 表达式' : 'Please enter a valid Cron expression'}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className={styles.modalActions} style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2rem' }}>
-                <div>
-                  {schedules.some(s => s.profile_id === scheduleProfile.id) && (
-                    <button 
-                      type="button"
-                      className={`${styles.button} ${styles.buttonDanger}`}
-                      onClick={() => {
-                        const sched = schedules.find(s => s.profile_id === scheduleProfile.id)
-                        if (sched) handleDeleteSchedule(sched.id)
-                      }}
-                    >
-                      {lang === 'zh' ? '注销调度' : 'Delete Schedule'}
-                    </button>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: '0.75rem' }}>
-                  <button 
-                    type="button"
-                    className={`${styles.button} ${styles.buttonSecondary}`}
-                    onClick={() => setIsScheduleModalOpen(false)}
-                  >
-                    {t('cancel')}
-                  </button>
-                  <button 
-                    type="button"
-                    className={`${styles.button} ${styles.buttonPrimary}`}
-                    onClick={handleSaveSchedule}
-                  >
-                    {lang === 'zh' ? '保存配置' : 'Save Config'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ScheduleModal
+          t={t}
+          lang={lang}
+          profile={scheduleProfile}
+          schedName={schedName}
+          setSchedName={setSchedName}
+          schedExpression={schedExpression}
+          setSchedExpression={setSchedExpression}
+          schedTimezone={schedTimezone}
+          setSchedTimezone={setSchedTimezone}
+          schedEnabled={schedEnabled}
+          setSchedEnabled={setSchedEnabled}
+          previewError={previewError}
+          previewNextRuns={previewNextRuns}
+          schedules={schedules}
+          onClose={() => setIsScheduleModalOpen(false)}
+          onSave={handleSaveSchedule}
+          onDelete={handleDeleteSchedule}
+        />
       )}
 
       {/* Modal: Admin User Management */}
       {isUserModalOpen && currentUser?.role === 'admin' && (
-        <div className={styles.modalOverlay} onClick={() => setIsUserModalOpen(false)}>
-          <div className={styles.modal} style={{ width: '640px' }} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalHeader}>
-              <div className={styles.modalTitleGroup}>
-                <Users size={20} className={styles.iconAccent} />
-                <h2>{t('userManagementTitle')}</h2>
-              </div>
-              <button className={styles.modalCloseButton} onClick={() => setIsUserModalOpen(false)}>
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Section 1: User Directory List */}
-            <div className={styles.userListSection}>
-              <div className={styles.sectionHeader}>
-                <h3>{t('platformDirectory')}</h3>
-                {usersLoading && <RotateCw size={14} className={styles.spinIcon} />}
-              </div>
-
-              <div className={styles.userTableWrapper}>
-                <table className={styles.userTable}>
-                  <thead>
-                    <tr>
-                      <th>{t('username')}</th>
-                      <th>{t('role')}</th>
-                      <th>{t('registeredAt')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {usersList.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '1.5rem' }}>
-                          {t('noUsersRegistered')}
-                        </td>
-                      </tr>
-                    ) : (
-                      usersList.map((usr) => (
-                        <tr key={usr.username}>
-                          <td className={styles.tdUsername}>{usr.username}</td>
-                          <td>
-                            <span className={`${styles.roleBadge} ${styles[`roleBadge_${usr.role}`]}`}>
-                              {usr.role}
-                            </span>
-                          </td>
-                          <td className={styles.tdDate}>{formatDate(usr.created_at)}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Section 2: Register New User Form */}
-            <form onSubmit={handleCreateUserSubmit} className={styles.userCreateSection}>
-              <div className={styles.sectionHeader}>
-                <h3>{t('registerNewUser')}</h3>
-              </div>
-
-              {newUserError && (
-                <div className={styles.formErrorAlert} style={{ margin: 0 }}>
-                  <AlertTriangle size={16} />
-                  <span>{t(newUserError as any) || newUserError}</span>
-                </div>
-              )}
-
-              <div className={styles.userFormRow}>
-                <div className={styles.formField}>
-                  <label className={styles.label}>{t('username')}</label>
-                  <input 
-                    type="text"
-                    className={styles.input}
-                    placeholder="e.g. testing_lead"
-                    value={newUsername}
-                    onChange={(e) => setNewUsername(e.target.value)}
-                    disabled={newUserLoading}
-                    required
-                  />
-                </div>
-
-                <div className={styles.formField}>
-                  <label className={styles.label}>{t('password')}</label>
-                  <input 
-                    type="password"
-                    className={styles.input}
-                    placeholder="••••••••"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    disabled={newUserLoading}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className={styles.userFormRow}>
-                <div className={styles.formField}>
-                  <label className={styles.label}>{t('systemAccessRole')}</label>
-                  <div className={styles.selectWrapper}>
-                    <select 
-                      className={styles.select}
-                      value={newUserRole}
-                      onChange={(e) => setNewUserRole(e.target.value as 'admin' | 'user')}
-                      disabled={newUserLoading}
-                      required
-                    >
-                      <option value="user">{t('userStandardAccess')}</option>
-                      <option value="admin">{t('administratorFullControls')}</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className={styles.formField} style={{ justifyContent: 'flex-end' }}>
-                  <button 
-                    type="submit" 
-                    className={styles.submitButton}
-                    style={{ width: '100%', height: '38px', justifyContent: 'center' }}
-                    disabled={newUserLoading || !newUsername.trim() || !newPassword.trim()}
-                  >
-                    {newUserLoading ? (
-                      <>
-                        <RotateCw size={14} className={styles.spinIcon} />
-                        <span>{t('registering')}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Plus size={14} />
-                        <span>{t('addUserAccount')}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </form>
-
-            {/* Section 3: Storage Space & Data Retention Policy */}
-            <div className={styles.retentionSection}>
-              <div className={styles.sectionHeader}>
-                <h3>{lang === 'zh' ? '存储空间与数据保留策略' : 'Storage Space & Data Retention Policy'}</h3>
-              </div>
-              <p className={styles.sectionDescription} style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem', lineHeight: '1.4' }}>
-                {lang === 'zh' 
-                  ? '配置平台保留测试日志及报告的策略。执行物理清理将永久删除指定天数之前的运行日志和 HTML 报告目录，但会保留 SQLite 中的分析指标和运行结果数据，且已锁定的记录将被安全保护，不予清理。' 
-                  : 'Configure the storage retention policy. Running cleanup will permanently delete physical run execution directories (logs and reports) older than the specified days. SQLite metadata and run results will be preserved, and locked/pinned runs will be protected from deletion.'}
-              </p>
-              
-              <div className={styles.retentionFormRow}>
-                <div className={styles.formField} style={{ flex: '1' }}>
-                  <label className={styles.label}>{lang === 'zh' ? '保留天数' : 'Retention Days'}</label>
-                  <input 
-                    type="number"
-                    min="1"
-                    className={styles.input}
-                    value={retentionDays}
-                    onChange={(e) => setRetentionDays(Number(e.target.value))}
-                    disabled={isCleaningStorage}
-                  />
-                </div>
-                
-                <div className={styles.formField} style={{ justifyContent: 'flex-end', flex: '1' }}>
-                  <button 
-                    type="button"
-                    className={styles.cleanupButton}
-                    disabled={isCleaningStorage || retentionDays <= 0}
-                    onClick={async () => {
-                      if (!confirm(lang === 'zh' ? `确认要物理清理所有非锁定且早于 ${retentionDays} 天的测试记录文件吗？此操作无法撤销。` : `Are you sure you want to clean up physical files of all unlocked runs older than ${retentionDays} days? This cannot be undone.`)) {
-                        return;
-                      }
-                      setIsCleaningStorage(true);
-                      try {
-                        const resp = await apiFetch(`/runs/cleanup?retention_days=${retentionDays}`, {
-                          method: 'POST'
-                        });
-                        const data = await resp.json();
-                        if (resp.ok) {
-                          alert(lang === 'zh' 
-                            ? `清理成功！已清理 ${data.cleaned_count || 0} 个记录目录。` 
-                            : `Cleanup successful! Purged ${data.cleaned_count || 0} runs directories.`);
-                          fetchRuns();
-                        } else {
-                          alert(data.detail || 'Cleanup failed');
-                        }
-                      } catch (err) {
-                        console.error('Error during cleanup:', err);
-                        alert('Network error. Failed to run storage cleanup.');
-                      } finally {
-                        setIsCleaningStorage(false);
-                      }
-                    }}
-                  >
-                    {isCleaningStorage ? (
-                      <>
-                        <RotateCw size={14} className={styles.spinIcon} />
-                        <span>{lang === 'zh' ? '清理中...' : 'Cleaning...'}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Trash2 size={14} />
-                        <span>{lang === 'zh' ? '立即执行物理清理' : 'Execute Storage Cleanup'}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <UserManagementModal
+          t={t}
+          lang={lang}
+          usersLoading={usersLoading}
+          usersList={usersList}
+          formatDate={formatDate}
+          onClose={() => setIsUserModalOpen(false)}
+          onCreateUser={handleCreateUserSubmit}
+          newUserError={newUserError}
+          newUsername={newUsername}
+          setNewUsername={setNewUsername}
+          newPassword={newPassword}
+          setNewPassword={setNewPassword}
+          newUserRole={newUserRole}
+          setNewUserRole={setNewUserRole}
+          newUserLoading={newUserLoading}
+          retentionDays={retentionDays}
+          setRetentionDays={setRetentionDays}
+          isCleaningStorage={isCleaningStorage}
+          setIsCleaningStorage={setIsCleaningStorage}
+          apiFetch={apiFetch}
+          fetchRuns={fetchRuns}
+        />
       )}
     </div>
   )
