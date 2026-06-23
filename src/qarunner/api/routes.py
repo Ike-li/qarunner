@@ -63,6 +63,29 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# ── Health ───────────────────────────────────────────────────────────────
+
+
+@router.get("/health")
+async def health(request: Request) -> dict[str, str]:
+    """Unauthenticated liveness + readiness probe (DEP-4).
+
+    Returns 200 only when the process can reach its database; a failing DB
+    round-trip yields 503 so an orchestrator stops routing traffic to a broken
+    instance.
+    """
+    container = request.app.state.container
+    try:
+        await container.store.get_user("__health_probe__")
+    except Exception as exc:
+        logger.warning("Health probe failed: database unreachable", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+    return {"status": "ok"}
+
+
 # ── Auth & User Management Endpoints ─────────────────────────────────────
 
 

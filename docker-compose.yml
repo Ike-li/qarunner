@@ -18,6 +18,19 @@ services:
     volumes:
       - platform-artifacts:/app/artifacts
       - ./external_tests:/app/external_tests:ro # Read-only mount of local test files if present
+    restart: unless-stopped
+    healthcheck:
+      # Readiness: /health returns 200 only when the DB round-trips (DEP-4).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
 
 volumes:
   platform-artifacts:

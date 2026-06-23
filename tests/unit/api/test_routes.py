@@ -252,6 +252,30 @@ def _make_run_in_store(store: FakeStore, **overrides: object) -> Run:
     return run
 
 
+# ── GET /health (DEP-4) ──────────────────────────────────────────────────
+
+
+def test_health_ok() -> None:
+    app = create_app(_make_container())
+    with TestClient(app) as client:
+        resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def test_health_db_unavailable_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _make_container()
+
+    async def _boom(_username: str) -> None:
+        raise OSError("db down")
+
+    monkeypatch.setattr(container.store, "get_user", _boom)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/health")
+    assert resp.status_code == 503
+
+
 # ── POST /runs ─────────────────────────────────────────────────────────
 
 
