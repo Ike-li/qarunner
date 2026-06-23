@@ -204,6 +204,19 @@ async def test_docker_runner_image_not_found_causes_build() -> None:
     assert mock_client.run_called is True
 
 
+async def test_docker_runner_image_not_found_build_disabled_raises() -> None:
+    # DEP-5: with runtime build disabled, a missing executor image fails fast
+    # instead of being silently (re)built.
+    mock_client = MockClient(images_exist=False, wait_status=0)
+    runner = DockerRunner(client=mock_client, allow_runtime_build=False)
+
+    with pytest.raises(RunnerError, match="runtime build is disabled"):
+        await runner.run(["python", "-m", "pytest"], cwd="/tmp/tests", timeout=10)
+
+    assert mock_client.build_called is False
+    assert mock_client.run_called is False
+
+
 async def test_docker_runner_timeout() -> None:
     mock_client = MockClient(images_exist=True, wait_status="timeout")
     runner = DockerRunner(client=mock_client)

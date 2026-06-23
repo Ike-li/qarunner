@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 class DockerRunner:
     """Execute pytest commands inside an isolated Docker container."""
 
-    def __init__(self, client: DockerClient | None = None) -> None:
+    def __init__(
+        self, client: DockerClient | None = None, *, allow_runtime_build: bool = True
+    ) -> None:
         self._client = client
+        self._allow_runtime_build = allow_runtime_build
 
     def _get_client(self) -> DockerClient:
         if self._client is None:
@@ -37,6 +40,15 @@ class DockerRunner:
         try:
             client.images.get("qarunner-executor:latest")
         except ImageNotFound:
+            if not self._allow_runtime_build:
+                # DEP-5: in production the executor image must be pre-built. A
+                # silent runtime build re-resolves the Dockerfile and can drift
+                # (and masks a missing image), so fail fast instead.
+                raise RunnerError(
+                    "Executor image 'qarunner-executor:latest' not found and runtime "
+                    "build is disabled (QARUNNER_EXECUTOR_AUTOBUILD=false). Pre-build it: "
+                    "docker build -f Dockerfile -t qarunner-executor:latest ."
+                ) from None
             logger.info("Base image 'qarunner-executor:latest' not found. Building...")
             root = self._find_project_root()
             client.images.build(

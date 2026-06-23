@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     executable: str = ""  # empty → sys.executable at runtime
     default_timeout_seconds: int = 1800
     max_concurrency: int = 4
+    # Executor image runtime auto-build (DEP-5). When qarunner-executor:latest is
+    # missing, DockerRunner builds it from the Dockerfile at runtime — convenient
+    # in dev, but a production risk: the build is silent and can drift from the
+    # pinned image. Set false in production and pre-build the image so a missing
+    # one fails fast instead of being silently (re)built.
+    executor_autobuild: bool = True
     # JWT signing secret — required, no default (SEC-2). Missing → ValidationError
     # at startup; a known placeholder is rejected by the validator below.
     secret_key: str

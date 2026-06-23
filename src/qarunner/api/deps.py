@@ -53,7 +53,7 @@ def create_container(settings: Settings | None = None) -> Container:
     clock = SystemClock()
     ids = UuidIds()
     process = SubprocessRunner()
-    docker_process = DockerRunner()
+    docker_process = DockerRunner(allow_runtime_build=cfg.executor_autobuild)
     collector = JunitCollector()
     reporter = AllureCliReporter(process=process, allure_bin=cfg.allure_bin)
     scheduler = AsyncioScheduler(max_concurrency=cfg.max_concurrency)

@@ -77,9 +77,13 @@ automatically (no token is ever placed in a URL). Therefore:
 - **Persistence**: the SQLite DB and run artifacts both live in the
   `platform-artifacts` named volume. Back it up to retain run history.
 - **Executor**: runs default to the in-process `subprocess` executor. The
-  hardened Docker executor (SEC-3: non-root, no network, `cap_drop=ALL`) needs a
-  Docker daemon socket mounted into the platform container and is **not** enabled
-  by the bundled compose.
+  hardened Docker executor (SEC-3: non-root, no network, `cap_drop=ALL`,
+  read-only rootfs, pid/mem/cpu limits) needs a Docker daemon socket mounted into
+  the platform container and is **not** enabled by the bundled compose. It runs
+  tests in a `qarunner-executor:latest` image; in dev that image is built on
+  demand, but in production set `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build
+  it (`docker build -f Dockerfile -t qarunner-executor:latest .`) so a missing
+  image fails fast instead of being silently (re)built.
 - **Single instance only**: crash recovery and the in-process scheduler assume
   one instance owns the DB (CONC-2). Do **not** scale `platform` beyond one
   replica without setting `QARUNNER_CRASH_RECOVERY_ON_STARTUP=false` on all but
@@ -193,6 +197,7 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_EXECUTABLE` | (sys.executable) | Python executable for running tests |
 | `QARUNNER_DEFAULT_TIMEOUT_SECONDS` | `1800` | Default test execution timeout |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | Maximum concurrent test runs |
+| `QARUNNER_EXECUTOR_AUTOBUILD` | `true` | Build the `qarunner-executor:latest` image at runtime if missing. **Set `false` in production** and pre-build the image, so a missing image fails fast instead of being silently (re)built and drifting from the Dockerfile |
 | `QARUNNER_SECRET_KEY` | **(required)** | JWT signing secret. No default; known placeholders rejected. Generate via `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
 | `QARUNNER_ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | JWT / auth-cookie lifetime in minutes |
 | `QARUNNER_COOKIE_SECURE` | `false` | Add the `Secure` flag to the HttpOnly auth cookie. **Set `true` in production** (HTTPS) so the cookie never rides a plaintext connection (SEC-6) |
