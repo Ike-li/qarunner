@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from docker.errors import ImageNotFound
+from docker.errors import DockerException, ImageNotFound
 
 from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.errors import RunnerError
@@ -337,7 +337,7 @@ async def test_docker_runner_streamer_reload_exception() -> None:
     original_run_container = mock_client._run_container
     def reload_failing_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
-        container.reload = MagicMock(side_effect=Exception("Reload failed"))
+        container.reload = MagicMock(side_effect=DockerException("Reload failed"))
         return container
 
     mock_client.containers.run.side_effect = reload_failing_container
@@ -360,16 +360,15 @@ async def test_docker_runner_streamer_logs_exception() -> None:
     def logs_failing_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
 
-        # We want logs to fail during streaming (status is 'running')
-        # and succeed during final gather (or succeed after one failure)
-        # To make it robust: raise Exception only if called when container.status is running,
-        # but let final gather pass by changing status, or simply tracking calls.
+        # Fail the first streamer logs() call so the narrowed DockerException
+        # handler runs once; later calls (final gather) succeed. reload() flips
+        # status to "completed", so the loop exits after this single iteration.
         container_logs_called = 0
         def logs_side_effect(stdout=True, stderr=True):
             nonlocal container_logs_called
             container_logs_called += 1
-            if container.status == "running" and container_logs_called <= 2:
-                raise Exception("Logs failed during stream")
+            if container_logs_called <= 1:
+                raise DockerException("Logs failed during stream")
             return b"hello" if stdout else b"error"
 
         container.logs = MagicMock(side_effect=logs_side_effect)

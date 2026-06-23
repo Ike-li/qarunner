@@ -57,7 +57,12 @@ class ApschedulerSchedulePort:
         # the tick in the DB so only the winning replica creates a run; the rest skip.
         try:
             fire_time = cron.previous_run(schedule.cron_expression, schedule.timezone)
-        except Exception:
+        except (KeyError, ValueError):
+            logger.warning(
+                "Failed to compute fire time for schedule %s; using now()",
+                schedule_id,
+                exc_info=True,
+            )
             fire_time = datetime.now(UTC)
         if not await self._store.claim_schedule_run(schedule_id, fire_time):
             logger.info(
@@ -159,8 +164,12 @@ class ApschedulerSchedulePort:
                     next_at = cron.next_run(schedule.cron_expression, schedule.timezone)
                     schedule = schedule.model_copy(update={"next_run_at": next_at})
                     await self._store.save_schedule(schedule)
-                except Exception:
-                    pass
+                except (KeyError, ValueError):
+                    logger.warning(
+                        "Failed to compute startup next-run for schedule %s",
+                        schedule.id,
+                        exc_info=True,
+                    )
                 self.upsert(schedule)
 
         scheduler.start()

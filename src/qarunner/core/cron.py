@@ -18,7 +18,7 @@ def is_valid_timezone(tz: str) -> bool:
     """Return whether *tz* is a known IANA timezone name."""
     try:
         zoneinfo.ZoneInfo(tz)
-    except Exception:
+    except (KeyError, ValueError):
         return False
     return True
 

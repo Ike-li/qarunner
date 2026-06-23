@@ -227,8 +227,8 @@ async def get_test_tree(
                             "path": relative_path,
                             "is_dir": False
                         })
-        except Exception:
-            pass
+        except OSError:
+            logger.warning("Failed to scan test directory %s", current_path, exc_info=True)
         return nodes
 
     return walk_dir(suite_dir, suite_dir)
@@ -273,8 +273,8 @@ async def get_test_markers(
                                 val_inner = inner.value
                                 if isinstance(val_inner, ast.Name) and val_inner.id == "pytest":
                                     markers.add(dec_node.attr)
-        except Exception:
-            pass
+        except (OSError, SyntaxError, ValueError):
+            logger.warning("Failed to parse markers from %s", py_file, exc_info=True)
 
     return sorted(list(markers))
 
@@ -556,6 +556,12 @@ async def stream_run_logs(
                                     yield f"data: {log_line}\n\n"
                             break
                     except Exception:
+                        # Resilient streaming: any mid-stream failure (run deleted,
+                        # log read error, …) ends the stream cleanly rather than
+                        # 500-ing a half-sent response.
+                        logger.warning(
+                            "Log stream for run %s ended on error", run_id, exc_info=True
+                        )
                         break
                     await asyncio.sleep(0.2)
         finally:
@@ -614,8 +620,8 @@ async def cleanup_runs(
             try:
                 await asyncio.to_thread(shutil.rmtree, run_dir)
                 cleaned_count += 1
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Failed to remove run directory %s", run_dir, exc_info=True)
 
     return {"status": "success", "cleaned_runs": cleaned_count}
 
@@ -639,7 +645,7 @@ async def preview_schedule(
         if not cron.is_valid_cron(expression):
             raise ValueError("Invalid cron expression syntax")
         return TestSchedulePreviewResponse(next_runs=cron.next_runs(expression, timezone, 5))
-    except Exception as e:
+    except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid cron expression: {str(e)}") from e
 
 

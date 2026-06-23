@@ -26,7 +26,7 @@ def verify_password(password: str, hashed: str) -> bool:
     hashed_bytes = hashed.encode("utf-8")
     try:
         return bcrypt.checkpw(pw_bytes, hashed_bytes)
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 

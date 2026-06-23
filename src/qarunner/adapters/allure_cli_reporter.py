@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from qarunner.core.allure import build_generate_command, should_generate
 from qarunner.models import ReportRef
 from qarunner.ports.process import ProcessRunner
+
+logger = logging.getLogger(__name__)
 
 
 class AllureCliReporter:
@@ -29,7 +33,10 @@ class AllureCliReporter:
 
         try:
             proc = await self._process.run(cmd, cwd=".", timeout=300)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — allure is best-effort; never fail the run
+            logger.warning(
+                "Allure report generation failed for %s", results_dir, exc_info=True
+            )
             return ReportRef(allure_results_dir=results_dir)
 
         if proc.exit_code != 0:

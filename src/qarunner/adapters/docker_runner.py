@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import docker
-from docker.errors import ImageNotFound
+from docker.errors import DockerException, ImageNotFound
 
 from qarunner.errors import RunnerError
 from qarunner.models import ProcessResult
@@ -137,7 +137,8 @@ class DockerRunner:
                 while True:
                     try:
                         container.reload()
-                    except Exception:
+                    except DockerException:
+                        logger.debug("Container reload failed; ending log stream", exc_info=True)
                         break
                     try:
                         out_bytes = container.logs(stdout=True, stderr=False)
@@ -150,8 +151,8 @@ class DockerRunner:
                             os.makedirs(os.path.dirname(stderr_file), exist_ok=True)
                             with open(stderr_file, "wb") as f:
                                 f.write(err_bytes)
-                    except Exception:
-                        pass
+                    except (DockerException, OSError):
+                        logger.warning("Failed to stream container logs to file", exc_info=True)
                     if getattr(container, "status", "") != "running":
                         break
                     await asyncio.sleep(1.0)

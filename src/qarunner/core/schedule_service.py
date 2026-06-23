@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
     from qarunner.api.schemas import TestScheduleCreateRequest, TestScheduleUpdateRequest
     from qarunner.ports.schedule import SchedulePort
     from qarunner.ports.store import RunStore
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleService:
@@ -43,7 +46,13 @@ class ScheduleService:
             return None
         try:
             return cron.next_run(cron_expression, timezone)
-        except Exception:
+        except (KeyError, ValueError):
+            logger.warning(
+                "Failed to compute next run for cron %r tz %r",
+                cron_expression,
+                timezone,
+                exc_info=True,
+            )
             return None
 
     async def create(self, req: TestScheduleCreateRequest, created_by: str) -> TestSchedule:
