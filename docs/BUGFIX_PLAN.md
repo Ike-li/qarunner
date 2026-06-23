@@ -71,11 +71,32 @@
 
 ---
 
+## 第 2 轮发现
+
+### 🟠 BUG-3：subprocess 执行器把宿主全部非-QARUNNER 环境变量泄漏给被测代码 — [已端到端验证]
+
+**结论**：默认的 subprocess 执行器在构造子进程环境时**只剥离 `QARUNNER_*` 前缀**、继承宿主其余全部环境变量，被测代码可读取宿主任意非-QARUNNER 机密（`AWS_*`/`GITHUB_TOKEN`/`DATABASE_URL` 等）并经 run 的 stdout（API 可读）外带。
+
+**真表面复现**：起 uvicorn 时注入 `MY_CLOUD_SECRET=...`（非 QARUNNER 前缀）+ 一个 dump `os.environ` 的测试 → `POST /runs`（subprocess, `extra_args=-s` 禁 pytest 捕获）→ `GET /runs/{id}` 的 stdout 含 `CLOUD_SECRET_VALUE=s3cr3t...`（泄漏），`QARUNNER_SECRET_KEY=<absent>`（黑名单只挡了 QARUNNER_*）。
+
+**根因**：`adapters/subprocess_runner.py` `full_env = {k:v for ... if not k.startswith("QARUNNER_")}`（黑名单）。SEC-3 计划原文要的是**白名单最小环境**（「不传 `dict(os.environ)`」），黑名单是半成品。**docker 执行器不受影响**（`docker_runner.py` `environment=env or {}` 只传用户 env + network none/read_only/cap drop/非 root）。
+
+**严重度**：🟠（机密泄漏；[INFERRED] 纯 API 用户无文件上传端点、需能把测试塞进 tests_root 才能利用，但平台多用户语义下测试作者即不同用户，违反 SEC-3 隔离意图）。**用户决策：改白名单最小环境**。
+
+**修复**：`subprocess_runner.py` 改为 `_ENV_ALLOWLIST`（PATH/HOME/USER/locale/TMP*/TZ/JAVA_HOME——pytest 与共用此 runner 的 allure CLI 的功能最小集）+ 用户 env 叠加。**注**：subprocess 仍共享平台 uid 与文件系统/网络，docker 仍是不可信套件的隔离路径；本修复专堵 env 变量泄漏。
+
+**回归测试**（`tests/unit/adapters/test_subprocess_runner.py::test_non_allowlisted_host_env_not_forwarded`）：注入非-allowlist 宿主机密 → 子进程读到 `ABSENT`、PATH 仍在；黑名单下红、白名单后绿（变异验证已复核）。**真接口复验**：泄漏堵（`<absent>`）+ PATH 在 + **allure 报告仍正常生成**（白名单经 `env -i` 隔离测 + 真 run 双证，`html_generated=true`+index.html 落盘）。
+
+**关联（未实现，记录缘由）**：SEC-1 计划改法 #3 还要求 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`/`-p no:cacheprovider`/`-o addopts=`/`--noconftest`，`PytestRunner.build_command` 均未加。**未一并实现**：① `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` 会**禁用 allure-pytest 插件**→ `--alluredir` 报错，破坏招牌报告功能，需显式 `-p allure_pytest` 重新接线（较大改动）；② `--noconftest` 会破坏依赖 conftest fixture 的正常套件；③ 经 API 无法把 `conftest.py`/`pytest.ini` 注入 tests_root（无上传端点），故非 API 可利用的漏洞，仅 defense-in-depth。判定为**独立后续项**，不在本轮 BUG-3 内强塞。
+
+---
+
 ## 本轮排查后判定干净的表面（按收敛规则记录）
 
 - **safe_subpath 路径穿越 / 软链逃逸** — [已端到端验证] 干净。`/tests/..%2f..%2fetc/tree` 等编码穿越 → 404；suite 内放指向 `/etc` 的软链 → tree 不跟随泄露。实现（`resolve()` + `is_relative_to`）稳。
 - **JWT / cookie / `?token=` / admin 边界** — [已端到端验证] 干净。无凭证 / 垃圾 token / `?token=` URL 旁路 → 全 401；普通用户打 `/users` → 403。SEC-5/SEC-6 实际生效。
 
-## 次要疑点（待用户决策，本轮未改）
+## 后续项（已记录，未在本轮修）
 
-- **subprocess 执行器 env 仅黑名单 `QARUNNER_*`** — [读代码推断]。`adapters/subprocess_runner.py:55` 用 `{k:v for k,v in os.environ.items() if not k.startswith("QARUNNER_")}`，被测代码继承宿主**全部其它环境变量**（如 `AWS_*` / `GITHUB_TOKEN`）。SEC-3 计划原文要的是**白名单最小环境**。是否算缺陷取决于部署威胁模型——待定。
+- **SEC-1 plugin/conftest 加固**（见 BUG-3「关联」）：`PYTEST_DISABLE_PLUGIN_AUTOLOAD`/`--noconftest` 与 allure-pytest、正常 conftest fixture 冲突，且无 API 注入面，列为独立后续项。
+- **subprocess 模式的文件系统/网络隔离**：subprocess 共享平台 uid，被测代码可读平台用户可访问的任意文件（`~/.aws/` 等）、可联网。SEC-3 已注明「不可信场景禁用 subprocess / 用 docker」。docker 执行器已具备完整隔离。属已知设计取舍，非新 bug。
