@@ -86,6 +86,41 @@ interface UserProfile {
   created_at: string
 }
 
+interface Profile {
+  id: string
+  name: string
+  description: string | null
+  tests_path: string
+  selected_files: string[]
+  selected_markers: string[]
+  extra_args: string
+  executor_mode: 'subprocess' | 'docker'
+  timeout: number | null
+  created_by: string
+  created_at: string
+  env: Record<string, string>
+}
+
+interface Schedule {
+  id: string
+  name: string
+  profile_id: string
+  cron_expression: string
+  enabled: boolean
+  timezone: string
+  last_run_at: string | null
+  next_run_at: string | null
+  created_by: string
+  created_at: string
+}
+
+interface TreeNode {
+  name: string
+  path: string
+  is_dir: boolean
+  children?: TreeNode[]
+}
+
 const translations = {
   en: {
     platformTitle: "qarunner",
@@ -448,8 +483,8 @@ export default function App() {
   const [selectedSuiteFilter, setSelectedSuiteFilter] = useState<string | null>(null)
 
   // Visual test suite & profile states
-  const [profiles, setProfiles] = useState<any[]>([])
-  const [scannedFilesTree, setScannedFilesTree] = useState<any[]>([])
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [scannedFilesTree, setScannedFilesTree] = useState<TreeNode[]>([])
   const [scannedMarkers, setScannedMarkers] = useState<string[]>([])
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
   const [selectedMarkers, setSelectedMarkers] = useState<string[]>([])
@@ -492,9 +527,9 @@ export default function App() {
   }, [isTriggerModalOpen])
 
   // Schedules Subsystem State
-  const [schedules, setSchedules] = useState<any[]>([])
+  const [schedules, setSchedules] = useState<Schedule[]>([])
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
-  const [scheduleProfile, setScheduleProfile] = useState<any | null>(null)
+  const [scheduleProfile, setScheduleProfile] = useState<Profile | null>(null)
   const [schedName, setSchedName] = useState('')
   const [schedExpression, setSchedExpression] = useState('')
   const [schedTimezone, setSchedTimezone] = useState('UTC')
@@ -656,7 +691,7 @@ export default function App() {
   }, [token])
 
   // Open schedule manager modal and populate fields
-  const handleOpenScheduleModal = useCallback((profile: any) => {
+  const handleOpenScheduleModal = useCallback((profile: Profile) => {
     setScheduleProfile(profile)
     // Find if there is an existing schedule for this profile
     const existing = schedules.find(s => s.profile_id === profile.id)
@@ -789,7 +824,7 @@ export default function App() {
   }, [token, handleLogout])
 
   // Handle direct single-click trigger of a profile from the sidebar
-  const handleTriggerProfile = useCallback(async (profile: any) => {
+  const handleTriggerProfile = useCallback(async (profile: Profile) => {
     if (!token) return
     const payload = {
       tests_path: profile.tests_path,
@@ -1167,7 +1202,7 @@ export default function App() {
   }, [token, runs, selectedRunDetails, handleLogout])
 
   // Handle opening the launch modal in Edit Profile mode
-  const handleOpenEditProfile = useCallback((profile: any) => {
+  const handleOpenEditProfile = useCallback((profile: Profile) => {
     setEditingProfileId(profile.id)
     setTestsPath(profile.tests_path)
     setCustomArgs(profile.extra_args || '')
@@ -1325,7 +1360,17 @@ export default function App() {
     lastStatusRef.current = currentStatus
   }, [selectedRunId, runs, selectedRunDetails?.status, fetchSelectedRunDetails, fetchRuns])
 
-  // Connect to EventSource for SSE live log streaming when a run is active
+  // Connect to EventSource for SSE live log streaming when a run is active.
+  //
+  // Deps are deliberately limited to [token, selectedRunId]. The previous
+  // version also depended on `runs` and `selectedRunDetails`, which the polling
+  // loop replaces every ~1.5s — so the effect tore down and rebuilt the
+  // EventSource on every poll (constant reconnects + log flicker). Worse,
+  // `onerror` called `fetchSelectedRunDetails`, mutating a dep and feeding the
+  // teardown loop. We now read the freshest run state from refs to decide
+  // whether to stream, and reconnect with a capped backoff so a flapping
+  // connection can't spin. `fetchSelectedRunDetails` is a stable useCallback
+  // keyed on [token, handleLogout], so it never churns mid-stream.
   useEffect(() => {
     if (!token || !selectedRunId) {
       setStreamedStdout('')
@@ -1333,13 +1378,14 @@ export default function App() {
       return
     }
 
-    const run = runs.find(r => r.id === selectedRunId) || selectedRunDetails
-    if (!run) return
+    const findRun = (): Run | null | undefined =>
+      runsRef.current.find(r => r.id === selectedRunId) || selectedRunDetailsRef.current
+    const isActive = (r: Run | null | undefined): boolean =>
+      r?.status === 'running' || r?.status === 'queued'
 
-    const isActive = run.status === 'running' || run.status === 'queued'
-    if (!isActive) {
-      // Don't clear streamedStdout immediately so we don't flash a blank screen
-      // while we fetch the completed logs from the backend.
+    if (!isActive(findRun())) {
+      // Not active: nothing to stream. Keep streamedStdout so we don't flash a
+      // blank screen while the completed logs are fetched.
       setIsStreaming(false)
       return
     }
@@ -1347,25 +1393,57 @@ export default function App() {
     setStreamedStdout('')
     setIsStreaming(true)
 
-    const url = `/runs/${selectedRunId}/stream?token=${encodeURIComponent(token)}`
-    const eventSource = new EventSource(url)
+    let eventSource: EventSource | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectAttempts = 0
+    let disposed = false
 
-    eventSource.onmessage = (event) => {
-      setStreamedStdout(prev => prev + event.data + '\n')
+    const connect = () => {
+      if (disposed) return
+      eventSource = new EventSource(
+        `/runs/${selectedRunId}/stream?token=${encodeURIComponent(token)}`
+      )
+
+      eventSource.onopen = () => {
+        reconnectAttempts = 0
+      }
+
+      eventSource.onmessage = (event) => {
+        setStreamedStdout(prev => prev + event.data + '\n')
+      }
+
+      eventSource.onerror = (err) => {
+        console.error('SSE connection error:', err)
+        eventSource?.close()
+        eventSource = null
+        if (disposed) return
+
+        // The backend closes the stream when the run finishes, which surfaces
+        // here as an error. If the run is no longer active, stop and fetch the
+        // completed logs once — do NOT reconnect (that would spin forever).
+        if (!isActive(findRun())) {
+          setIsStreaming(false)
+          fetchSelectedRunDetails(selectedRunId)
+          return
+        }
+
+        // Still active: a transient drop. Reconnect with capped exponential
+        // backoff (1s, 2s, 4s … max 15s) instead of hammering the endpoint.
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 15000)
+        reconnectAttempts += 1
+        reconnectTimer = setTimeout(connect, delay)
+      }
     }
 
-    eventSource.onerror = (err) => {
-      console.error('SSE connection error, closing stream:', err)
-      fetchSelectedRunDetails(selectedRunId)
-      eventSource.close()
-      setIsStreaming(false)
-    }
+    connect()
 
     return () => {
-      eventSource.close()
+      disposed = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      eventSource?.close()
       setIsStreaming(false)
     }
-  }, [token, selectedRunId, runs, selectedRunDetails, fetchSelectedRunDetails])
+  }, [token, selectedRunId, fetchSelectedRunDetails])
 
   // Scroll terminal logs to bottom on changes
   useEffect(() => {
@@ -1561,7 +1639,7 @@ export default function App() {
   }
 
   // Helper to collect all file paths nested recursively under a node folder
-  const getAllFilesUnderNode = (node: any): string[] => {
+  const getAllFilesUnderNode = (node: TreeNode): string[] => {
     if (!node.is_dir) {
       return [node.path]
     }
@@ -1575,7 +1653,7 @@ export default function App() {
   }
 
   // Get checkbox selection state of a tree node
-  const getNodeCheckState = (node: any): 'checked' | 'partial' | 'unchecked' => {
+  const getNodeCheckState = (node: TreeNode): 'checked' | 'partial' | 'unchecked' => {
     if (!node.is_dir) {
       return selectedFiles.includes(node.path) ? 'checked' : 'unchecked'
     }
@@ -1591,7 +1669,7 @@ export default function App() {
   }
 
   // Toggle selection of a folder node or individual test file
-  const handleToggleNode = (node: any) => {
+  const handleToggleNode = (node: TreeNode) => {
     const descendantFiles = getAllFilesUnderNode(node)
     const currentState = getNodeCheckState(node)
 
@@ -1606,7 +1684,7 @@ export default function App() {
   }
 
   // Recursive renderer for the folder/file test suite tree checkbox component
-  const renderTreeNode = (node: any, depth = 0) => {
+  const renderTreeNode = (node: TreeNode, depth = 0) => {
     const isFolder = node.is_dir
     const isExpanded = expandedFolders.includes(node.path)
     const checkState = getNodeCheckState(node)
@@ -1642,7 +1720,7 @@ export default function App() {
 
         {isFolder && isExpanded && node.children && (
           <div className={styles.treeChildren}>
-            {node.children.map((child: any) => renderTreeNode(child, depth + 1))}
+            {node.children.map((child: TreeNode) => renderTreeNode(child, depth + 1))}
           </div>
         )}
       </div>
@@ -1704,7 +1782,7 @@ export default function App() {
   const filteredStreamed = streamedStdout ? getFilteredLogs(streamedStdout) : ''
 
   // Aggregation helper for saved profiles statistics in the sidebar
-  const getProfileRunStats = (profile: any) => {
+  const getProfileRunStats = (profile: Profile) => {
     // Find all completed/failed/timeout/running runs matching this profile's tests_path
     const profileRuns = runs.filter(r => r.tests_path === profile.tests_path)
 
@@ -2004,7 +2082,7 @@ export default function App() {
                                   <SlidersHorizontal size={11} className={styles.nestedProfileIcon} />
                                   <span className={styles.nestedProfileName}>{profile.name}</span>
                                   {isSchedActive && (
-                                    <span className={styles.activeScheduleIndicator} title={lang === 'zh' ? `定时已启用: ${existingSched.cron_expression}` : `Schedule active: ${existingSched.cron_expression}`} />
+                                    <span className={styles.activeScheduleIndicator} title={lang === 'zh' ? `定时已启用: ${existingSched?.cron_expression}` : `Schedule active: ${existingSched?.cron_expression}`} />
                                   )}
                                 </div>
                                 <div className={styles.nestedProfileActions}>
@@ -3422,7 +3500,10 @@ export default function App() {
                     <button 
                       type="button"
                       className={`${styles.button} ${styles.buttonDanger}`}
-                      onClick={() => handleDeleteSchedule(schedules.find(s => s.profile_id === scheduleProfile.id).id)}
+                      onClick={() => {
+                        const sched = schedules.find(s => s.profile_id === scheduleProfile.id)
+                        if (sched) handleDeleteSchedule(sched.id)
+                      }}
                     >
                       {lang === 'zh' ? '注销调度' : 'Delete Schedule'}
                     </button>
