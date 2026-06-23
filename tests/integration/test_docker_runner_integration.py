@@ -158,9 +158,13 @@ async def test_real_container_sec3_isolation_via_inspect(docker_client, tmp_path
     assert host["CapDrop"] == ["ALL"]
     # No privilege escalation.
     assert any("no-new-privileges" in opt for opt in (host.get("SecurityOpt") or []))
-    # Resource limits (pids_limit=512, mem_limit="2g").
+    # Resource limits (pids_limit=512, mem_limit="2g", nano_cpus=2 cores).
     assert host["PidsLimit"] == 512
     assert host["Memory"] == 2 * 1024**3
+    assert host["NanoCpus"] == 2_000_000_000
+    # Read-only root filesystem, with a writable /tmp tmpfs for pytest.
+    assert host["ReadonlyRootfs"] is True
+    assert "/tmp" in (host.get("Tmpfs") or {})
 
 
 @pytest.mark.asyncio

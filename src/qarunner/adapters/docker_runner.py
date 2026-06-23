@@ -128,6 +128,13 @@ class DockerRunner:
                     security_opt=["no-new-privileges"],
                     pids_limit=512,
                     mem_limit="2g",
+                    nano_cpus=2_000_000_000,  # SEC-3: cap CPU at 2.0 cores.
+                    # SEC-3: read-only root filesystem so untrusted test code
+                    # can't tamper with the image. The bind-mounted cwd and
+                    # results dir stay writable (declared above); pytest's own
+                    # temp/cache needs a writable /tmp, supplied as a tmpfs.
+                    read_only=True,
+                    tmpfs={"/tmp": ""},
                 )
 
             container = await asyncio.to_thread(_start_container)
