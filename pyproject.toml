@@ -38,9 +38,10 @@ packages = ["src/qarunner"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=qarunner --cov-branch --cov-report=term-missing --cov-fail-under=100 -m 'not e2e'"
+addopts = "--cov=qarunner --cov-branch --cov-report=term-missing --cov-fail-under=100 -m 'not e2e and not docker'"
 markers = [
     "e2e: end-to-end smoke tests (require real allure CLI, not counted in coverage gate)",
+    "docker: real-Docker integration tests (require a running daemon; opt-in via `-m docker --no-cov`, excluded from the default coverage gate)",
 ]
 
 # ── coverage ────────────────────────────────────────────────────────────────
