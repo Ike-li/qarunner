@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 
+// The backend rejects known-weak admin passwords (SEC-2), so the seeded admin
+// password is configurable. Override via E2E_ADMIN_PASSWORD to match the backend
+// under test; defaults to the legacy 'admin123' for local/dev backends.
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
+
 test.describe('qarunner Premium UI E2E Tests', () => {
   // Run before each test
   test.beforeEach(async ({ page }) => {
@@ -31,7 +36,7 @@ test.describe('qarunner Premium UI E2E Tests', () => {
   test('Test Case 3: Successful Sign In (Admin) & Dashboard Render', async ({ page }) => {
     // Log in with default Admin credentials
     await page.getByPlaceholder('Enter username').fill('admin');
-    await page.getByPlaceholder('Enter password').fill('admin123');
+    await page.getByPlaceholder('Enter password').fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: 'Sign In' }).click();
 
     // Verify profile capsule contains admin information
@@ -51,7 +56,7 @@ test.describe('qarunner Premium UI E2E Tests', () => {
   test('Test Case 4: Run Trigger Modal Workflow', async ({ page }) => {
     // Log in
     await page.getByPlaceholder('Enter username').fill('admin');
-    await page.getByPlaceholder('Enter password').fill('admin123');
+    await page.getByPlaceholder('Enter password').fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: 'Sign In' }).click();
 
     // Click on Trigger Run
@@ -74,7 +79,7 @@ test.describe('qarunner Premium UI E2E Tests', () => {
   test('Test Case 5: User Management Panel (Admin Only)', async ({ page }) => {
     // Log in
     await page.getByPlaceholder('Enter username').fill('admin');
-    await page.getByPlaceholder('Enter password').fill('admin123');
+    await page.getByPlaceholder('Enter password').fill(ADMIN_PASSWORD);
     await page.getByRole('button', { name: 'Sign In' }).click();
 
     // Click on Users button in header
