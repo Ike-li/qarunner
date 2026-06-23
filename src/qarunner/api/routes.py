@@ -46,10 +46,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _require_owner_access(created_by: str, user: User) -> None:
+    """Raise 403 unless *user* owns the resource (by ``created_by``) or is admin.
+
+    Object-level authorization shared by runs, profiles and schedules: each of
+    those records its creator and a non-admin may only touch its own. SEC-4
+    originally hardened runs only; profiles and schedules were an IDOR gap —
+    any logged-in user could list/read/modify/delete another user's.
+    """
+    if user.role != UserRole.ADMIN and created_by != user.username:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
 def _require_run_access(run: Run, user: User) -> None:
     """Raise 403 unless *user* owns *run* or is an admin (object-level authz)."""
-    if user.role != UserRole.ADMIN and run.created_by != user.username:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _require_owner_access(run.created_by, user)
 
 
 def _client_ip(request: Request) -> str:
@@ -359,11 +370,16 @@ async def create_profile(
 async def list_profiles(
     request: Request,
     tests_path: str | None = None,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> list[TestProfileResponse]:
-    """List execution profiles, optionally filtered by tests_path."""
+    """List execution profiles, optionally filtered by tests_path.
+
+    Non-admins see only the profiles they created (object-level authz).
+    """
     container = request.app.state.container
     profiles = await container.store.list_profiles(tests_path)
+    if current_user.role != UserRole.ADMIN:
+        profiles = [p for p in profiles if p.created_by == current_user.username]
     return [profile_to_response(p) for p in profiles]
 
 
@@ -372,10 +388,15 @@ async def update_profile(
     profile_id: str,
     req: TestProfileUpdateRequest,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> TestProfileResponse:
-    """Update an existing execution profile."""
+    """Update an existing execution profile (owner or admin only)."""
     container = request.app.state.container
+    # Owner check before mutating; a missing profile falls through so the service
+    # raises ProfileNotFound (preserving the 404 path and its coverage).
+    existing = await container.store.get_profile(profile_id)
+    if existing is not None:
+        _require_owner_access(existing.created_by, current_user)
     try:
         updated = await container.profile_service.update(profile_id, req)
     except ProfileNotFound:
@@ -387,10 +408,13 @@ async def update_profile(
 async def delete_profile(
     profile_id: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Delete an execution profile."""
+    """Delete an execution profile (owner or admin only)."""
     container = request.app.state.container
+    existing = await container.store.get_profile(profile_id)
+    if existing is not None:
+        _require_owner_access(existing.created_by, current_user)
     try:
         await container.profile_service.delete(profile_id)
     except ProfileNotFound:
@@ -732,11 +756,16 @@ async def create_schedule(
 async def list_schedules(
     request: Request,
     profile_id: str | None = None,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> list[TestScheduleResponse]:
-    """List all test schedules, optionally filtered by profile_id."""
+    """List test schedules, optionally filtered by profile_id.
+
+    Non-admins see only the schedules they created (object-level authz).
+    """
     container = request.app.state.container
     schedules = await container.store.list_schedules(profile_id)
+    if current_user.role != UserRole.ADMIN:
+        schedules = [s for s in schedules if s.created_by == current_user.username]
     return [schedule_to_response(s) for s in schedules]
 
 
@@ -744,13 +773,14 @@ async def list_schedules(
 async def get_schedule(
     schedule_id: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> TestScheduleResponse:
-    """Retrieve a single test schedule by ID."""
+    """Retrieve a single test schedule by ID (owner or admin only)."""
     container = request.app.state.container
     schedule = await container.store.get_schedule(schedule_id)
     if not schedule:
         raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found")
+    _require_owner_access(schedule.created_by, current_user)
     return schedule_to_response(schedule)
 
 
@@ -759,10 +789,15 @@ async def update_schedule(
     schedule_id: str,
     req: TestScheduleUpdateRequest,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> TestScheduleResponse:
-    """Update an existing test schedule."""
+    """Update an existing test schedule (owner or admin only)."""
     container = request.app.state.container
+    # Owner check before mutating; a missing schedule falls through so the
+    # service raises ScheduleNotFound (preserving the 404 path and its coverage).
+    existing = await container.store.get_schedule(schedule_id)
+    if existing is not None:
+        _require_owner_access(existing.created_by, current_user)
     try:
         updated = await container.schedule_service.update(schedule_id, req)
     except ScheduleNotFound:
@@ -776,10 +811,13 @@ async def update_schedule(
 async def delete_schedule(
     schedule_id: str,
     request: Request,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Delete a test schedule."""
+    """Delete a test schedule (owner or admin only)."""
     container = request.app.state.container
+    existing = await container.store.get_schedule(schedule_id)
+    if existing is not None:
+        _require_owner_access(existing.created_by, current_user)
     try:
         await container.schedule_service.delete(schedule_id)
     except ScheduleNotFound:

@@ -243,3 +243,167 @@ def test_non_admin_forbidden_actions(client: TestClient) -> None:
     # 4. Try to list users as "tester" (should return 403)
     list_resp = client.get("/users", headers=tester_headers)
     assert list_resp.status_code == 403
+
+
+# ── SEC-4 (extended): object-level authz for profiles & schedules ────────
+# Profiles and schedules record their creator, yet only runs enforced ownership
+# (SEC-4). A non-admin could list/read/modify/delete another user's profile or
+# schedule (IDOR). These real two-user flows reproduce that and turn red if the
+# ownership checks in the profile/schedule routes are removed.
+
+
+def _login(client: TestClient, username: str, password: str) -> dict[str, str]:
+    """Login *username* and return a Bearer auth header.
+
+    Clears the cookie jar so each request authenticates only via the returned
+    token — otherwise the login cookie would silently carry the last user's
+    identity across requests and mask an authz regression.
+    """
+    resp = client.post("/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    client.cookies.clear()
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+_USER_PW = "Str0ng-User-Pw!2026"
+
+
+@pytest.fixture
+def two_users(client: TestClient) -> tuple[dict[str, str], dict[str, str]]:
+    """Create two standard users (alice, bob); return their auth headers."""
+    admin = _login(client, "admin", ADMIN_PW)
+    for name in ("alice", "bob"):
+        resp = client.post(
+            "/users",
+            json={"username": name, "password": _USER_PW, "role": "user"},
+            headers=admin,
+        )
+        assert resp.status_code == 201, resp.text
+    return _login(client, "alice", _USER_PW), _login(client, "bob", _USER_PW)
+
+
+def _create_profile(client: TestClient, headers: dict[str, str], name: str) -> str:
+    resp = client.post(
+        "/profiles",
+        json={
+            "name": name,
+            "tests_path": "suite_demo",
+            "selected_files": [],
+            "selected_markers": [],
+            "extra_args": "",
+            "executor_mode": "subprocess",
+            "env": {},
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+_PROFILE_UPDATE = {
+    "name": "renamed",
+    "tests_path": "suite_demo",
+    "selected_files": [],
+    "selected_markers": [],
+    "extra_args": "",
+    "executor_mode": "subprocess",
+    "env": {},
+}
+
+
+def test_profile_idor_blocked_for_non_owner(
+    client: TestClient, two_users: tuple[dict[str, str], dict[str, str]]
+) -> None:
+    """A non-owner can neither see, modify nor delete another user's profile."""
+    alice, bob = two_users
+    pid = _create_profile(client, alice, "alice-profile")
+
+    # bob's list must not leak alice's profile; alice's own list still has it.
+    assert all(p["id"] != pid for p in client.get("/profiles", headers=bob).json())
+    assert any(p["id"] == pid for p in client.get("/profiles", headers=alice).json())
+
+    # bob cannot tamper with or delete it.
+    assert client.put(f"/profiles/{pid}", json=_PROFILE_UPDATE, headers=bob).status_code == 403
+    assert client.delete(f"/profiles/{pid}", headers=bob).status_code == 403
+
+    # alice's profile survived bob's attempts.
+    assert any(p["id"] == pid for p in client.get("/profiles", headers=alice).json())
+
+
+def test_profile_access_allowed_for_owner_and_admin(
+    client: TestClient, two_users: tuple[dict[str, str], dict[str, str]]
+) -> None:
+    """The owner and any admin retain full access to a profile."""
+    alice, _bob = two_users
+    pid = _create_profile(client, alice, "alice-profile")
+
+    # Owner can update.
+    assert client.put(f"/profiles/{pid}", json=_PROFILE_UPDATE, headers=alice).status_code == 200
+
+    # Admin sees every profile and can delete anyone's.
+    admin = _login(client, "admin", ADMIN_PW)
+    assert any(p["id"] == pid for p in client.get("/profiles", headers=admin).json())
+    assert client.delete(f"/profiles/{pid}", headers=admin).status_code == 200
+
+
+def _create_schedule(client: TestClient, headers: dict[str, str], profile_id: str) -> str:
+    resp = client.post(
+        "/schedules",
+        json={
+            "name": "sched",
+            "profile_id": profile_id,
+            "cron_expression": "0 3 * * *",
+            "enabled": True,
+            "timezone": "UTC",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+_SCHEDULE_UPDATE = {
+    "name": "renamed",
+    "profile_id": "",  # filled per-test with a real profile id
+    "cron_expression": "0 4 * * *",
+    "enabled": False,
+    "timezone": "UTC",
+}
+
+
+def test_schedule_idor_blocked_for_non_owner(
+    client: TestClient, two_users: tuple[dict[str, str], dict[str, str]]
+) -> None:
+    """A non-owner can neither see, modify nor delete another user's schedule."""
+    alice, bob = two_users
+    pid = _create_profile(client, alice, "alice-profile")
+    sid = _create_schedule(client, alice, pid)
+
+    # bob's list/get must not expose alice's schedule.
+    assert all(s["id"] != sid for s in client.get("/schedules", headers=bob).json())
+    assert client.get(f"/schedules/{sid}", headers=bob).status_code == 403
+
+    # bob cannot tamper with or delete it.
+    upd = {**_SCHEDULE_UPDATE, "profile_id": pid}
+    assert client.put(f"/schedules/{sid}", json=upd, headers=bob).status_code == 403
+    assert client.delete(f"/schedules/{sid}", headers=bob).status_code == 403
+
+    # alice still owns an intact schedule.
+    assert client.get(f"/schedules/{sid}", headers=alice).status_code == 200
+
+
+def test_schedule_access_allowed_for_owner_and_admin(
+    client: TestClient, two_users: tuple[dict[str, str], dict[str, str]]
+) -> None:
+    """The owner and any admin retain full access to a schedule."""
+    alice, _bob = two_users
+    pid = _create_profile(client, alice, "alice-profile")
+    sid = _create_schedule(client, alice, pid)
+
+    # Owner can read it back.
+    assert client.get(f"/schedules/{sid}", headers=alice).status_code == 200
+
+    # Admin sees every schedule and can delete anyone's.
+    admin = _login(client, "admin", ADMIN_PW)
+    assert any(s["id"] == sid for s in client.get("/schedules", headers=admin).json())
+    assert client.delete(f"/schedules/{sid}", headers=admin).status_code == 200
