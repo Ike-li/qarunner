@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import bcrypt
 import jwt
 
-from qarunner.config import Settings
+if TYPE_CHECKING:
+    from qarunner.config import Settings
 
 
 def hash_password(password: str) -> str:
@@ -28,24 +30,20 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(username: str, role: str) -> str:
-    """Generate a JWT access token."""
-    settings = Settings()
+def create_access_token(username: str, role: str, settings: Settings) -> str:
+    """Generate a JWT access token signed with the injected *settings*."""
     expire = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
     payload = {
         "sub": username,
         "role": role,
         "exp": expire,
     }
-    token = jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
-    return token
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 
-def decode_access_token(token: str) -> dict | None:
-    """Decode and validate a JWT access token."""
-    settings = Settings()
+def decode_access_token(token: str, settings: Settings) -> dict | None:
+    """Decode and validate a JWT access token against the injected *settings*."""
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-        return payload
+        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except jwt.InvalidTokenError:
         return None

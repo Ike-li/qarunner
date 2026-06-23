@@ -40,6 +40,7 @@ class Container:
     schedule_service: ScheduleService
     profile_service: ProfileService
     login_throttle: LoginThrottle
+    settings: Settings
 
 
 def create_container(settings: Settings | None = None) -> Container:
@@ -87,6 +88,7 @@ def create_container(settings: Settings | None = None) -> Container:
         schedule_service=schedule_service,
         profile_service=profile_service,
         login_throttle=login_throttle,
+        settings=cfg,
     )
 
 
@@ -108,7 +110,8 @@ async def get_current_user(request: Request, token: str | None = Depends(oauth2_
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_access_token(token)
+    container = request.app.state.container
+    payload = decode_access_token(token, container.settings)
     if not payload or "sub" not in payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -117,7 +120,6 @@ async def get_current_user(request: Request, token: str | None = Depends(oauth2_
         )
     username = payload["sub"]
 
-    container = request.app.state.container
     user_record = await container.store.get_user(username)
     if not user_record:
         raise HTTPException(

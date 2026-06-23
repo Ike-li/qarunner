@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from qarunner.api.app import create_app as _real_create_app
 from qarunner.api.deps import Container, get_current_admin, get_current_user
+from qarunner.config import Settings
 from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.profile_service import ProfileService
 from qarunner.core.schedule_service import ScheduleService
@@ -214,6 +215,7 @@ def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> 
         schedule_service=ScheduleService(store=store, scheduler=scheduler),  # type: ignore[arg-type]
         profile_service=ProfileService(store=store),  # type: ignore[arg-type]
         login_throttle=login_throttle or LoginThrottle(clock=FakeClock()),  # type: ignore[arg-type]
+        settings=Settings(),
     )
 
 
@@ -636,8 +638,8 @@ def test_lock_run() -> None:
 
 
 def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
 
     from datetime import UTC, timedelta
     old_date = datetime.now(UTC) - timedelta(days=40)
@@ -694,8 +696,8 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
 
     run = Run(
         id="run-stream",
@@ -1063,8 +1065,8 @@ def test_profile_crud_endpoints() -> None:
 
 
 def test_get_run_detailed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
 
     # Create runs and test file locations
     _make_run_in_store(container.store, id="run_standard")
@@ -1120,8 +1122,8 @@ def test_get_run_truncates_large_log(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """SEC-8: get_run returns only the bounded, marked tail of a large log."""
     from qarunner.api import routes
 
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
     monkeypatch.setattr(routes, "_RUN_LOG_MAX_BYTES", 20)
     _make_run_in_store(container.store, id="run_big")
     big_dir = tmp_path / "run_big"
@@ -1142,8 +1144,8 @@ def test_get_run_truncates_large_log(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_stream_run_logs_missing_and_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
 
     # Mock asyncio.sleep to return immediately so tests finish instantly
     import asyncio
@@ -1250,8 +1252,8 @@ def test_stream_disconnect_initial(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     """CONC-1: a client disconnect during the initial wait aborts the generator."""
     from unittest.mock import AsyncMock
 
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
     _make_run_in_store(container.store, id="run_disc_init", status=RunStatus.RUNNING)
     # No log file exists; without the disconnect check the initial loop would spin.
     monkeypatch.setattr(
@@ -1269,8 +1271,8 @@ def test_stream_disconnect_midstream(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """CONC-1: a disconnect during follow breaks the read loop (no orphaned handle)."""
     from unittest.mock import AsyncMock
 
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
     _make_run_in_store(container.store, id="run_disc_mid", status=RunStatus.RUNNING)
     run_dir = tmp_path / "run_disc_mid"
     run_dir.mkdir()
@@ -1292,8 +1294,8 @@ def test_stream_max_duration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     """CONC-1: the follow loop stops once the max-duration cap is exceeded."""
     from qarunner.api import routes
 
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
     monkeypatch.setattr(routes, "_SSE_MAX_FOLLOW_SECONDS", -1.0)
     _make_run_in_store(container.store, id="run_maxdur", status=RunStatus.RUNNING)
     run_dir = tmp_path / "run_maxdur"
@@ -1312,8 +1314,8 @@ def test_stream_tail_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     from qarunner.api import routes
 
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
     monkeypatch.setattr(routes, "_SSE_MAX_TAIL_BYTES", 4)
 
     async def _instant(delay):
@@ -1361,8 +1363,8 @@ def test_lock_run_nonexistent() -> None:
 
 
 def test_cleanup_runs_rmtree_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    container = _make_container()
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
 
     from datetime import UTC, timedelta
     old_date = datetime.now(UTC) - timedelta(days=40)

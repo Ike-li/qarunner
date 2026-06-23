@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from qarunner.config import Settings
 from qarunner.core.auth import (
     create_access_token,
     decode_access_token,
@@ -28,10 +29,11 @@ def test_jwt_generation_and_decoding() -> None:
     """Test that creating and decoding an access token works correctly."""
     username = "test_user"
     role = "admin"
-    token = create_access_token(username, role)
+    settings = Settings()
+    token = create_access_token(username, role, settings)
     assert isinstance(token, str)
 
-    payload = decode_access_token(token)
+    payload = decode_access_token(token, settings)
     assert payload is not None
     assert payload["sub"] == username
     assert payload["role"] == role
@@ -40,5 +42,6 @@ def test_jwt_generation_and_decoding() -> None:
 
 def test_decode_invalid_jwt() -> None:
     """Test that decoding an invalid token returns None."""
-    assert decode_access_token("not-a-valid-token") is None
-    assert decode_access_token("") is None
+    settings = Settings()
+    assert decode_access_token("not-a-valid-token", settings) is None
+    assert decode_access_token("", settings) is None

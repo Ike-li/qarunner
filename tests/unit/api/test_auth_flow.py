@@ -114,7 +114,7 @@ def test_get_me_invalid_token(client: TestClient) -> None:
 def test_get_me_user_not_found_in_db(client: TestClient) -> None:
     """Test that a valid JWT with a username not present in the DB raises 401 User not found."""
     # Generate token for user "nonexistent"
-    token = create_access_token("nonexistent", "user")
+    token = create_access_token("nonexistent", "user", Settings())
     resp = client.get(
         "/auth/me",
         headers={"Authorization": f"Bearer {token}"},

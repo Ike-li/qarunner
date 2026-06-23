@@ -29,7 +29,6 @@ from qarunner.api.schemas import (
     run_to_response,
     schedule_to_response,
 )
-from qarunner.config import Settings
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.errors import (
     InvalidScheduleRequest,
@@ -98,7 +97,9 @@ async def login(req: LoginRequest, request: Request) -> TokenResponse:
         )
 
     container.login_throttle.record_success(throttle_key)
-    token = create_access_token(user_record["username"], user_record["role"])
+    token = create_access_token(
+        user_record["username"], user_record["role"], container.settings
+    )
     return TokenResponse(access_token=token)
 
 
@@ -163,9 +164,11 @@ async def list_users(
 
 
 @router.get("/tests", response_model=list[str])
-async def list_tests(_current_user: User = Depends(get_current_user)) -> list[str]:
+async def list_tests(
+    request: Request, _current_user: User = Depends(get_current_user)
+) -> list[str]:
     """List all available test directories directly under tests_root."""
-    cfg = Settings()
+    cfg = request.app.state.container.settings
     tests_root = Path(cfg.tests_root).resolve()
     if not tests_root.is_dir():
         return []
@@ -180,11 +183,12 @@ async def list_tests(_current_user: User = Depends(get_current_user)) -> list[st
 
 @router.get("/tests/{suite_name}/tree")
 async def get_test_tree(
+    request: Request,
     suite_name: str,
     _current_user: User = Depends(get_current_user),
 ) -> list[dict]:
     """Recursively scan a test suite directory and return its file-tree structure."""
-    cfg = Settings()
+    cfg = request.app.state.container.settings
     from qarunner.core.paths import safe_subpath
     try:
         suite_path = safe_subpath(cfg.tests_root, suite_name)
@@ -232,12 +236,13 @@ async def get_test_tree(
 
 @router.get("/tests/{suite_name}/markers")
 async def get_test_markers(
+    request: Request,
     suite_name: str,
     _current_user: User = Depends(get_current_user),
 ) -> list[str]:
     """Statically parse pytest decorators under the suite using Python's AST."""
     import ast
-    cfg = Settings()
+    cfg = request.app.state.container.settings
     from qarunner.core.paths import safe_subpath
     try:
         suite_path = safe_subpath(cfg.tests_root, suite_name)
@@ -396,7 +401,7 @@ async def get_run(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(run, current_user)
 
-    cfg = Settings()
+    cfg = container.settings
     run_dir = Path(cfg.artifacts_root) / run_id
     stdout_file = run_dir / "stdout.log"
     stderr_file = run_dir / "stderr.log"
@@ -497,7 +502,7 @@ async def stream_run_logs(
 
     from qarunner.models import RunStatus
 
-    cfg = Settings()
+    cfg = container.settings
     stdout_file = Path(cfg.artifacts_root) / run_id / "stdout.log"
     terminal_states = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT)
 
@@ -600,7 +605,7 @@ async def cleanup_runs(
     import asyncio
     import shutil
 
-    cfg = Settings()
+    cfg = container.settings
     cleaned_count = 0
 
     for r in runs_to_cleanup:
