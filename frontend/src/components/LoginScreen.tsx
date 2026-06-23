@@ -72,17 +72,18 @@ export function LoginScreen({
 
         <form onSubmit={onSubmit} className={styles.form} style={{ padding: 0 }}>
           {loginError && (
-            <div className={styles.formErrorAlert} style={{ marginBottom: '1rem' }}>
-              <AlertTriangle size={16} />
+            <div className={styles.formErrorAlert} style={{ marginBottom: '1rem' }} role="alert">
+              <AlertTriangle size={16} aria-hidden="true" />
               <span>{loginError}</span>
             </div>
           )}
 
           <div className={styles.formField}>
-            <label className={styles.label}>
+            <label className={styles.label} htmlFor="login-username">
               <span>{t('username')}</span>
             </label>
             <input
+              id="login-username"
               type="text"
               className={styles.input}
               placeholder={t('usernamePlaceholder')}
@@ -95,10 +96,11 @@ export function LoginScreen({
           </div>
 
           <div className={styles.formField} style={{ marginTop: '0.75rem' }}>
-            <label className={styles.label}>
+            <label className={styles.label} htmlFor="login-password">
               <span>{t('password')}</span>
             </label>
             <input
+              id="login-password"
               type="password"
               className={styles.input}
               placeholder={t('passwordPlaceholder')}

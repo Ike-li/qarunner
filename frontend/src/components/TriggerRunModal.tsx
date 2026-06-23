@@ -111,14 +111,14 @@ export function TriggerRunModal({
 
         <form onSubmit={editingProfileId ? onUpdateProfile : onTriggerRun} className={styles.form}>
           {formError && (
-            <div className={styles.formErrorAlert}>
-              <AlertTriangle size={16} />
+            <div className={styles.formErrorAlert} role="alert">
+              <AlertTriangle size={16} aria-hidden="true" />
               <span>{t(formError as any) || formError}</span>
             </div>
           )}
 
           <div className={styles.formField}>
-            <label className={styles.label}>
+            <label className={styles.label} htmlFor="trigger-tests-path">
               <span>{t('targetDirectory')}</span>
               <span className={styles.requiredIndicator}>*</span>
             </label>
@@ -128,7 +128,8 @@ export function TriggerRunModal({
               </div>
             ) : (
               <div className={styles.selectWrapper}>
-                <select 
+                <select
+                  id="trigger-tests-path"
                   className={styles.select}
                   value={testsPath}
                   onChange={(e) => setTestsPath(e.target.value)}
@@ -149,9 +150,10 @@ export function TriggerRunModal({
           {/* 1. Saved Execution Profiles Selection Template */}
           {!editingProfileId && (
             <div className={styles.formField}>
-              <label className={styles.label}>{t('selectProfile')}</label>
+              <label className={styles.label} htmlFor="trigger-profile">{t('selectProfile')}</label>
               <div className={styles.profileSelectorContainer}>
                 <select
+                  id="trigger-profile"
                   className={styles.select}
                   value={selectedProfileId}
                   onChange={(e) => {
@@ -283,8 +285,9 @@ export function TriggerRunModal({
           </div>
 
           <div className={styles.formField}>
-            <label className={styles.label}>{t('pytestArgsLabel')}</label>
-            <input 
+            <label className={styles.label} htmlFor="trigger-args">{t('pytestArgsLabel')}</label>
+            <input
+              id="trigger-args"
               type="text"
               className={styles.input}
               placeholder={t('pytestArgsPlaceholder')}
@@ -353,8 +356,9 @@ export function TriggerRunModal({
 
           <div className={styles.formFieldRow}>
             <div className={styles.formField} style={{ flex: 1 }}>
-              <label className={styles.label}>{t('timeoutLabel')}</label>
-              <input 
+              <label className={styles.label} htmlFor="trigger-timeout">{t('timeoutLabel')}</label>
+              <input
+                id="trigger-timeout"
                 type="number"
                 className={styles.input}
                 placeholder={t('timeoutPlaceholder')}
@@ -368,9 +372,10 @@ export function TriggerRunModal({
             </div>
 
             <div className={styles.formField} style={{ flex: '0 0 auto', alignSelf: 'flex-start', paddingTop: '0.5rem' }}>
-              <label className={styles.label}>{t('allureReportsLabel')}</label>
+              <label className={styles.label} htmlFor="trigger-allure">{t('allureReportsLabel')}</label>
               <label className={styles.switchContainer}>
-                <input 
+                <input
+                  id="trigger-allure"
                   type="checkbox"
                   className={styles.switchInput}
                   checked={allureEnabled}

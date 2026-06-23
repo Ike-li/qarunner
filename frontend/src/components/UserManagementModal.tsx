@@ -114,16 +114,17 @@ export function UserManagementModal({
           </div>
 
           {newUserError && (
-            <div className={styles.formErrorAlert} style={{ margin: 0 }}>
-              <AlertTriangle size={16} />
+            <div className={styles.formErrorAlert} style={{ margin: 0 }} role="alert">
+              <AlertTriangle size={16} aria-hidden="true" />
               <span>{t(newUserError as TranslationKey) || newUserError}</span>
             </div>
           )}
 
           <div className={styles.userFormRow}>
             <div className={styles.formField}>
-              <label className={styles.label}>{t('username')}</label>
+              <label className={styles.label} htmlFor="user-new-username">{t('username')}</label>
               <input
+                id="user-new-username"
                 type="text"
                 className={styles.input}
                 placeholder="e.g. testing_lead"
@@ -135,8 +136,9 @@ export function UserManagementModal({
             </div>
 
             <div className={styles.formField}>
-              <label className={styles.label}>{t('password')}</label>
+              <label className={styles.label} htmlFor="user-new-password">{t('password')}</label>
               <input
+                id="user-new-password"
                 type="password"
                 className={styles.input}
                 placeholder="••••••••"
@@ -150,9 +152,10 @@ export function UserManagementModal({
 
           <div className={styles.userFormRow}>
             <div className={styles.formField}>
-              <label className={styles.label}>{t('systemAccessRole')}</label>
+              <label className={styles.label} htmlFor="user-new-role">{t('systemAccessRole')}</label>
               <div className={styles.selectWrapper}>
                 <select
+                  id="user-new-role"
                   className={styles.select}
                   value={newUserRole}
                   onChange={(e) => setNewUserRole(e.target.value as 'admin' | 'user')}
@@ -201,8 +204,9 @@ export function UserManagementModal({
 
           <div className={styles.retentionFormRow}>
             <div className={styles.formField} style={{ flex: '1' }}>
-              <label className={styles.label}>{lang === 'zh' ? '保留天数' : 'Retention Days'}</label>
+              <label className={styles.label} htmlFor="user-retention-days">{lang === 'zh' ? '保留天数' : 'Retention Days'}</label>
               <input
+                id="user-retention-days"
                 type="number"
                 min="1"
                 className={styles.input}

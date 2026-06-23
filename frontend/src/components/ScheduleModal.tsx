@@ -65,18 +65,19 @@ export function ScheduleModal({
           </div>
 
           {previewError && (
-            <div className={styles.formErrorAlert}>
-              <AlertTriangle size={16} />
+            <div className={styles.formErrorAlert} role="alert">
+              <AlertTriangle size={16} aria-hidden="true" />
               <span>{previewError}</span>
             </div>
           )}
 
           <div className={styles.formField}>
-            <label className={styles.label}>
+            <label className={styles.label} htmlFor="sched-name">
               <span>{lang === 'zh' ? '计划名称' : 'Schedule Name'}</span>
               <span className={styles.requiredIndicator}>*</span>
             </label>
             <input
+              id="sched-name"
               type="text"
               className={styles.input}
               value={schedName}
@@ -88,11 +89,12 @@ export function ScheduleModal({
 
           <div className={styles.formRow}>
             <div className={styles.formField} style={{ flex: 1 }}>
-              <label className={styles.label}>
+              <label className={styles.label} htmlFor="sched-expression">
                 <span>{lang === 'zh' ? 'Cron 表达式' : 'Cron Expression'}</span>
                 <span className={styles.requiredIndicator}>*</span>
               </label>
               <input
+                id="sched-expression"
                 type="text"
                 className={styles.input}
                 value={schedExpression}
@@ -106,11 +108,12 @@ export function ScheduleModal({
             </div>
 
             <div className={styles.formField} style={{ width: '150px' }}>
-              <label className={styles.label}>
+              <label className={styles.label} htmlFor="sched-timezone">
                 <span>{lang === 'zh' ? '时区' : 'Timezone'}</span>
               </label>
               <div className={styles.selectWrapper}>
                 <select
+                  id="sched-timezone"
                   className={styles.select}
                   value={schedTimezone}
                   onChange={(e) => setSchedTimezone(e.target.value)}
