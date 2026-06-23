@@ -371,12 +371,25 @@ class SqliteStore:
         return [_row_to_run(row) for row in rows]
 
     async def save_profile(self, profile: TestProfile) -> None:
+        # Row-preserving upsert (create + update). A plain INSERT OR REPLACE
+        # would DELETE the existing profile row on update, and the
+        # test_schedules FK ON DELETE CASCADE would then silently drop every
+        # bound schedule — so a mere profile rename wiped all its automation.
+        # ON CONFLICT(id) DO UPDATE edits the row in place, so the cascade only
+        # ever fires on a real delete_profile.
         async with self._connect() as db:
             await db.execute(
-                "INSERT OR REPLACE INTO test_profiles ("
+                "INSERT INTO test_profiles ("
                 "id, name, description, tests_path, selected_files, selected_markers, "
                 "extra_args, executor_mode, timeout, created_by, created_at, env_json"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "name=excluded.name, description=excluded.description, "
+                "tests_path=excluded.tests_path, selected_files=excluded.selected_files, "
+                "selected_markers=excluded.selected_markers, extra_args=excluded.extra_args, "
+                "executor_mode=excluded.executor_mode, timeout=excluded.timeout, "
+                "created_by=excluded.created_by, created_at=excluded.created_at, "
+                "env_json=excluded.env_json",
                 (
                     profile.id,
                     profile.name,

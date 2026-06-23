@@ -301,6 +301,45 @@ async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
     assert retrieved_after_cascade is None
 
 
+async def test_updating_a_profile_keeps_its_schedules(store: SqliteStore) -> None:
+    """Re-saving a profile (the update path) must NOT drop its schedules.
+
+    ``save_profile`` serves both create and update. A plain ``INSERT OR REPLACE``
+    deletes the existing profile row before re-inserting, and the
+    ``test_schedules`` FK ``ON DELETE CASCADE`` then silently removes every bound
+    schedule — so merely renaming a profile wiped all its automation. A
+    row-preserving upsert keeps the schedules; the cascade must fire only on a
+    real ``delete_profile`` (covered above).
+    """
+    profile = TestProfile(
+        id="profile-keep",
+        name="original",
+        tests_path="tests/",
+        created_by="alice",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    schedule = TestSchedule(
+        id="sched-keep",
+        name="Nightly",
+        profile_id="profile-keep",
+        cron_expression="0 2 * * *",
+        created_by="alice",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_schedule(schedule)
+    assert await store.get_schedule("sched-keep") is not None
+
+    # Update the profile in place (same id, new name).
+    await store.save_profile(profile.model_copy(update={"name": "renamed"}))
+
+    updated = await store.get_profile("profile-keep")
+    assert updated is not None
+    assert updated.name == "renamed"
+    # The schedule must survive a profile update.
+    assert await store.get_schedule("sched-keep") is not None
+
+
 async def test_sqlite_store_migration_env_json(tmp_path) -> None:
     # 1. Create legacy database schema without 'env_json' column in test_profiles
     import aiosqlite
