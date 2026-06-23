@@ -49,6 +49,11 @@ def test_admin_login_success(client: TestClient) -> None:
     data = resp.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+    # SEC-6: the token is also planted as an HttpOnly, SameSite=Strict cookie.
+    set_cookie = resp.headers["set-cookie"].lower()
+    assert "token=" in set_cookie
+    assert "httponly" in set_cookie
+    assert "samesite=strict" in set_cookie
 
 
 def test_login_invalid_credentials(client: TestClient) -> None:
@@ -81,19 +86,49 @@ def test_get_me_success_header(client: TestClient) -> None:
     assert data["role"] == "admin"
 
 
-def test_get_me_success_query_param(client: TestClient) -> None:
-    """Test retrieving the current user profile via the query-parameter token
-    fallback (e.g. for Allure reports)."""
+def test_get_me_success_cookie(client: TestClient) -> None:
+    """Login plants the HttpOnly cookie; a subsequent request with no
+    Authorization header authenticates via that cookie (SEC-6)."""
+    client.post(
+        "/auth/login",
+        json={"username": "admin", "password": ADMIN_PW},
+    )
+    # The TestClient jar now holds the cookie; send no Bearer header.
+    resp = client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["username"] == "admin"
+
+
+def test_get_me_query_param_rejected(client: TestClient) -> None:
+    """The ?token= URL fallback was removed (SEC-6): a token in the query string
+    must NOT authenticate, even when it is otherwise valid."""
     login_resp = client.post(
         "/auth/login",
         json={"username": "admin", "password": ADMIN_PW},
     )
     token = login_resp.json()["access_token"]
 
-    # Get /auth/me with query param ?token=...
+    # Drop the login cookie so we isolate the query-param path (otherwise the jar
+    # would authenticate us via the cookie and mask the rejection).
+    client.cookies.clear()
     resp = client.get(f"/auth/me?token={token}")
-    assert resp.status_code == 200
-    assert resp.json()["username"] == "admin"
+    assert resp.status_code == 401
+
+
+def test_logout_clears_cookie(client: TestClient) -> None:
+    """POST /auth/logout expires the cookie so the session no longer
+    authenticates (SEC-6)."""
+    client.post(
+        "/auth/login",
+        json={"username": "admin", "password": ADMIN_PW},
+    )
+    assert client.get("/auth/me").status_code == 200  # cookie works
+
+    logout_resp = client.post("/auth/logout")
+    assert logout_resp.status_code == 204
+
+    # Cookie expired and dropped from the jar → no credentials left.
+    assert client.get("/auth/me").status_code == 401
 
 
 def test_get_me_missing_token(client: TestClient) -> None:

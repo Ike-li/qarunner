@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import get_current_admin, get_current_user
@@ -90,12 +90,17 @@ async def health(request: Request) -> dict[str, str]:
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-async def login(req: LoginRequest, request: Request) -> TokenResponse:
+async def login(req: LoginRequest, request: Request, response: Response) -> TokenResponse:
     """Authenticate credentials and return a JWT access token.
 
     Brute-force protection (SEC-5): repeated failures for a (username, client IP)
     pair trigger an exponential-backoff lockout answered with HTTP 429; failures
     are audited (never the password).
+
+    The token is also planted as an HttpOnly, SameSite=Strict cookie (SEC-6) so
+    the browser carries it automatically for same-origin report/stream/download
+    requests — no token need ever appear in a URL — and page JS can never read
+    it (XSS). The body still returns the token for programmatic API clients.
     """
     container = request.app.state.container
     client_ip = _client_ip(request)
@@ -123,7 +128,37 @@ async def login(req: LoginRequest, request: Request) -> TokenResponse:
     token = create_access_token(
         user_record["username"], user_record["role"], container.settings
     )
+    response.set_cookie(
+        "token",
+        token,
+        max_age=container.settings.access_token_expire_minutes * 60,
+        httponly=True,
+        samesite="strict",
+        secure=container.settings.cookie_secure,
+        path="/",
+    )
     return TokenResponse(access_token=token)
+
+
+@router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(request: Request) -> Response:
+    """Clear the auth cookie (SEC-6).
+
+    Deliberately unauthenticated: an expired or otherwise-invalid session must
+    still be tearable down, and clearing a cookie leaks nothing. The delete must
+    echo the same path/SameSite/Secure attributes used at login or the browser
+    keeps the original cookie.
+    """
+    settings = request.app.state.container.settings
+    resp = Response(status_code=status.HTTP_204_NO_CONTENT)
+    resp.delete_cookie(
+        "token",
+        path="/",
+        httponly=True,
+        samesite="strict",
+        secure=settings.cookie_secure,
+    )
+    return resp
 
 
 @router.get("/auth/me", response_model=UserResponse)

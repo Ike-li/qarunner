@@ -97,10 +97,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 async def get_current_user(request: Request, token: str | None = Depends(oauth2_scheme)) -> User:
-    """FastAPI dependency to retrieve the current authenticated user via JWT."""
-    # If not in headers, fall back to query parameter (helps with direct browser report downloads)
-    if not token:
-        token = request.query_params.get("token")
+    """FastAPI dependency to retrieve the current authenticated user via JWT.
+
+    Credentials are accepted from the ``Authorization: Bearer`` header (API
+    clients) or the ``token`` cookie (browser; planted HttpOnly at login). The
+    ``?token=`` query-parameter fallback was removed (SEC-6): long-lived JWTs in
+    URLs leak into access logs, browser history and Referer headers. Same-origin
+    report/stream/download requests carry the cookie automatically, so no token
+    ever needs to appear in a URL.
+    """
     if not token:
         token = request.cookies.get("token")
 

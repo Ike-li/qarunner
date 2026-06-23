@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
+    # Secure attribute for the auth cookie (SEC-6). Off by default so local HTTP
+    # dev and the test client work; MUST be true in production (HTTPS) so the
+    # HttpOnly auth cookie never rides a plaintext connection.
+    cookie_secure: bool = False
     admin_user: str = "admin"
     # Initial admin password — required, no default (SEC-2).
     admin_password: str
