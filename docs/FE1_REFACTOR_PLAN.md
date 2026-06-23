@@ -4,6 +4,7 @@
 > 依据：`docs/REMEDIATION_PLAN.md` 前端维度 FE-1（XL）；FE-4/FE-3/FE-2 + SEC-6 客户端已落地
 > 目标分支：master
 > 深度档位：**混合**（展示组件 + 仅在 props 会爆炸处抽焦点 hook）
+> **状态：✅ 完成（2026-06-23）。App.tsx 3684 → 1404 行，6 阶段全提交，`npm run test:ui` 5/5 通过。实施结果见文末第 6 节。**
 
 ---
 
@@ -67,3 +68,29 @@ frontend/src/
 
 - 精确 `git add` 改动文件、分 Stage 提交、信息结尾带 `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`（pre-commit 有 gitleaks 钩子）。
 - 完成后更新整改进度记录（FE-1 进度 + 实际落地的组件清单）。
+
+## 6. 实施结果（✅ 完成 2026-06-23）
+
+**`App.tsx` 3684 → 1404 行。** 提交链：
+
+| Stage | Commit | 落地产物 |
+|---|---|---|
+| 1 | `ed3d6b9` | `types.ts`、`i18n.ts` |
+| 2 | `d9f138c` | `LoginScreen` `StatsCards` `TestFileTree` + `hooks/useFileTreeSelection` |
+| 3a | `9d4bb7a` | `ScheduleModal` `UserManagementModal` |
+| 3b | `94682c7` | `TriggerRunModal`（~408 行 body、41 props） |
+| 4 | `638ca4b` | `Header` `ProjectSidebar` `RunsTable` |
+| 5a | `88e44c6` | `hooks/useTerminalView.tsx`（10 终端 UI 状态 + 日志 helper） |
+| 5b | `b54d2fc` | `RunDetailsDrawer`（~447） `FullscreenTerminalOverlay`（~184） |
+
+**相对本计划的偏离（已记录）：**
+- **Stage 5 `useTerminalView` 用 `.tsx` 而非计划的 `.ts`**——`formatLogLine`/`renderFormattedLogs` 返回 JSX，须 `.tsx`。
+- **Stage 5b 未拆独立 `TerminalConsole`**——logs-tab 终端 console 内联在 `RunDetailsDrawer`，避免为仅此一处使用的块做重 prop 钻取；内层日志渲染树在 drawer 与 overlay 两处重复，与原 `App.tsx` 现状一致（纯搬运，不顺手 dedup）。
+- **全屏 overlay 独立成 `FullscreenTerminalOverlay.tsx`**——App 保留 `{isTerminalFullscreen && selectedRun && (...)}` 守卫逐字，渲染条件可证等价（优于折进 console 的「不可达边界」推理）。
+- **不变量守住**：SSE/轮询/autoscroll effect + `streamedStdout`/`isStreaming` + refs 全程留 `App.tsx` 未动（护 FE-3）；`App.module.css` 全程恒定 63.91kB（类名 hash 不变）。
+
+**终局验证 `[已端到端验证]`**：真后端（uvicorn:8000 强口令）+ vite（:5173）+ Chrome，`npm run test:ui` **5/5 通过**（覆盖 LoginScreen/Header/StatsCards/RunsTable/TriggerRunModal/UserManagementModal）。临时 spec 补验（已删不提交）ProjectSidebar + RunDetailsDrawer 自动开 + 终端区 + tab 切换 + FullscreenTerminalOverlay **通过**。每阶段门禁 `tsc --noEmit && vitest run && build` 全绿。
+
+> e2e 需后端拒绝弱口令 admin123（SEC-2），故 `tests-e2e/ui.spec.ts` 改读 `E2E_ADMIN_PASSWORD`（`94e8199`，默认仍 admin123 向后兼容）。跑法：起后端设强 `QARUNNER_ADMIN_PASSWORD` → `E2E_ADMIN_PASSWORD=<同值> npm run test:ui`。
+
+**唯一残留**：`ScheduleModal`（Stage 3a 旧提交、需先存方案才可交互）e2e 未覆盖，为 `[读代码推断]`（verbatim 搬运 + tsc + build）。FE-5（a11y）依赖 FE-1，现已解锁。
