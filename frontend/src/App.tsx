@@ -43,6 +43,10 @@ import {
 import styles from './App.module.css'
 import type { Run, UserProfile, Profile, Schedule, TreeNode } from './types'
 import { translations, type Lang, type TranslationKey } from './i18n'
+import { LoginScreen } from './components/LoginScreen'
+import { StatsCards } from './components/StatsCards'
+import { TestFileTree } from './components/TestFileTree'
+import { useFileTreeSelection } from './hooks/useFileTreeSelection'
 
 export default function App() {
   const [runs, setRuns] = useState<Run[]>([])
@@ -109,14 +113,21 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [scannedFilesTree, setScannedFilesTree] = useState<TreeNode[]>([])
   const [scannedMarkers, setScannedMarkers] = useState<string[]>([])
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([])
+  const {
+    selectedFiles,
+    setSelectedFiles,
+    expandedFolders,
+    setExpandedFolders,
+    getNodeCheckState,
+    handleToggleNode,
+    toggleFolder,
+  } = useFileTreeSelection()
   const [selectedMarkers, setSelectedMarkers] = useState<string[]>([])
   const [profileName, setProfileName] = useState('')
   const [profileDesc, setProfileDesc] = useState('')
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null)
   const [selectedProfileId, setSelectedProfileId] = useState<string>('')
-  const [expandedFolders, setExpandedFolders] = useState<string[]>([])
   
   // Custom Environment Variables & Retention States
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([])
@@ -1086,6 +1097,7 @@ export default function App() {
     ? ((passedRunsCount / completedRuns.length) * 100).toFixed(0) 
     : '0'
   const activeRunsCount = runs.filter(r => r.status === 'queued' || r.status === 'running').length
+  const failedRunsCount = runs.filter(r => r.status === 'failed' || (r.status === 'completed' && !r.passed)).length
 
   // Rendering 0: brief loader while the initial auth-cookie probe is in flight,
   // so an already-logged-in user doesn't flash the login screen on reload.
@@ -1102,190 +1114,20 @@ export default function App() {
   // Rendering 1: Login full-screen Glassmorphism if not authenticated
   if (!isAuthenticated) {
     return (
-      <div className={styles.loginOverlay}>
-        <div className={styles.ambientGlow1}></div>
-        <div className={styles.ambientGlow2}></div>
-
-        {/* Floating Switcher Controls inside Login Screen */}
-        <div style={{ position: 'absolute', top: '1.5rem', right: '1.5rem', display: 'flex', gap: '0.75rem', zIndex: 1000 }}>
-          <button 
-            type="button"
-            className={styles.actionIconButton} 
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-          <button 
-            type="button"
-            className={styles.actionIconButton} 
-            onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
-            title={lang === 'en' ? '切换为中文' : 'Switch to English'}
-          >
-            <span className={styles.langText}>{lang === 'en' ? 'ZH' : 'EN'}</span>
-          </button>
-        </div>
-
-        <div className={styles.loginCard}>
-          <div className={styles.loginLogoGroup}>
-            <div className={styles.loginLogoIcon}>
-              <Activity className={styles.pulseIcon} />
-            </div>
-            <div className={styles.loginLogoText}>
-              <h1>{t('platformTitle')}</h1>
-              <span>{t('platformSubtitle')}</span>
-            </div>
-          </div>
-
-          <form onSubmit={handleLoginSubmit} className={styles.form} style={{ padding: 0 }}>
-            {loginError && (
-              <div className={styles.formErrorAlert} style={{ marginBottom: '1rem' }}>
-                <AlertTriangle size={16} />
-                <span>{loginError}</span>
-              </div>
-            )}
-
-            <div className={styles.formField}>
-              <label className={styles.label}>
-                <span>{t('username')}</span>
-              </label>
-              <input 
-                type="text"
-                className={styles.input}
-                placeholder={t('usernamePlaceholder')}
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                disabled={loginLoading}
-                required
-                autoFocus
-              />
-            </div>
-
-            <div className={styles.formField} style={{ marginTop: '0.75rem' }}>
-              <label className={styles.label}>
-                <span>{t('password')}</span>
-              </label>
-              <input 
-                type="password"
-                className={styles.input}
-                placeholder={t('passwordPlaceholder')}
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                disabled={loginLoading}
-                required
-              />
-            </div>
-
-            <button 
-              type="submit" 
-              className={styles.submitButton}
-              style={{ marginTop: '1.75rem', justifyContent: 'center', width: '100%' }}
-              disabled={loginLoading}
-            >
-              {loginLoading ? (
-                <>
-                  <RotateCw size={16} className={styles.spinIcon} />
-                  <span>{t('authenticating')}</span>
-                </>
-              ) : (
-                <>
-                  <Lock size={16} />
-                  <span>{t('signIn')}</span>
-                </>
-              )}
-            </button>
-          </form>
-        </div>
-      </div>
-    )
-  }
-
-  // Helper to collect all file paths nested recursively under a node folder
-  const getAllFilesUnderNode = (node: TreeNode): string[] => {
-    if (!node.is_dir) {
-      return [node.path]
-    }
-    let paths: string[] = []
-    if (node.children) {
-      for (const child of node.children) {
-        paths = paths.concat(getAllFilesUnderNode(child))
-      }
-    }
-    return paths
-  }
-
-  // Get checkbox selection state of a tree node
-  const getNodeCheckState = (node: TreeNode): 'checked' | 'partial' | 'unchecked' => {
-    if (!node.is_dir) {
-      return selectedFiles.includes(node.path) ? 'checked' : 'unchecked'
-    }
-    const descendantFiles = getAllFilesUnderNode(node)
-    if (descendantFiles.length === 0) return 'unchecked'
-    const checkedCount = descendantFiles.filter(p => selectedFiles.includes(p)).length
-    if (checkedCount === descendantFiles.length) {
-      return 'checked'
-    } else if (checkedCount > 0) {
-      return 'partial'
-    }
-    return 'unchecked'
-  }
-
-  // Toggle selection of a folder node or individual test file
-  const handleToggleNode = (node: TreeNode) => {
-    const descendantFiles = getAllFilesUnderNode(node)
-    const currentState = getNodeCheckState(node)
-
-    if (currentState === 'checked') {
-      setSelectedFiles(prev => prev.filter(p => !descendantFiles.includes(p)))
-    } else {
-      setSelectedFiles(prev => {
-        const filtered = prev.filter(p => !descendantFiles.includes(p))
-        return [...filtered, ...descendantFiles]
-      })
-    }
-  }
-
-  // Recursive renderer for the folder/file test suite tree checkbox component
-  const renderTreeNode = (node: TreeNode, depth = 0) => {
-    const isFolder = node.is_dir
-    const isExpanded = expandedFolders.includes(node.path)
-    const checkState = getNodeCheckState(node)
-
-    return (
-      <div key={node.path} className={styles.treeNode} style={{ marginLeft: `${depth * 0.75}rem` }}>
-        <div className={styles.treeRow}>
-          {isFolder ? (
-            <button
-              type="button"
-              className={`${styles.treeExpandButton} ${isExpanded ? styles.treeExpandButtonExpanded : ''}`}
-              onClick={() => {
-                setExpandedFolders(prev =>
-                  prev.includes(node.path) ? prev.filter(p => p !== node.path) : [...prev, node.path]
-                )
-              }}
-            >
-              <ChevronRight size={14} />
-            </button>
-          ) : (
-            <div style={{ width: '16px' }} />
-          )}
-
-          <div className={styles.treeCheckboxWrapper} onClick={() => handleToggleNode(node)}>
-            <div className={`${styles.treeCheckbox} ${checkState === 'checked' ? styles.treeCheckboxChecked : checkState === 'partial' ? styles.treeCheckboxPartial : ''}`} />
-          </div>
-
-          <div className={`${styles.treeLabel} ${isFolder ? styles.treeNodeFolder : styles.treeNodeFile}`} onClick={() => handleToggleNode(node)}>
-            {isFolder ? <FolderGit2 size={14} className={styles.treeIcon} /> : <SlidersHorizontal size={12} className={styles.treeIcon} />}
-            <span>{node.name}</span>
-          </div>
-        </div>
-
-        {isFolder && isExpanded && node.children && (
-          <div className={styles.treeChildren}>
-            {node.children.map((child: TreeNode) => renderTreeNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
+      <LoginScreen
+        t={t}
+        theme={theme}
+        setTheme={setTheme}
+        lang={lang}
+        setLang={setLang}
+        loginError={loginError}
+        loginUsername={loginUsername}
+        setLoginUsername={setLoginUsername}
+        loginPassword={loginPassword}
+        setLoginPassword={setLoginPassword}
+        loginLoading={loginLoading}
+        onSubmit={handleLoginSubmit}
+      />
     )
   }
 
@@ -1479,49 +1321,13 @@ export default function App() {
       </header>
 
       {/* Stats Summary Cards */}
-      <section className={styles.statsContainer}>
-        <div className={styles.statCard}>
-          <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(99, 102, 241, 0.1)', color: '#818cf8' }}>
-            <Activity size={20} />
-          </div>
-          <div className={styles.statDetails}>
-            <span className={styles.statLabel}>{t('totalExecutions')}</span>
-            <h2 className={styles.statValue}>{totalRuns}</h2>
-          </div>
-        </div>
-
-        <div className={styles.statCard}>
-          <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
-            <CheckCircle2 size={20} />
-          </div>
-          <div className={styles.statDetails}>
-            <span className={styles.statLabel}>{t('successRate')}</span>
-            <h2 className={styles.statValue}>{overallSuccessRate}%</h2>
-          </div>
-        </div>
-
-        <div className={styles.statCard}>
-          <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
-            <XCircle size={20} />
-          </div>
-          <div className={styles.statDetails}>
-            <span className={styles.statLabel}>{t('failedRuns')}</span>
-            <h2 className={styles.statValue}>
-              {runs.filter(r => r.status === 'failed' || (r.status === 'completed' && !r.passed)).length}
-            </h2>
-          </div>
-        </div>
-
-        <div className={styles.statCard}>
-          <div className={`${styles.statIconWrapper} ${activeRunsCount > 0 ? styles.pulseGlow : ''}`} style={{ backgroundColor: activeRunsCount > 0 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.05)', color: '#f59e0b' }}>
-            <RotateCw size={20} className={activeRunsCount > 0 ? styles.spinIcon : ''} />
-          </div>
-          <div className={styles.statDetails}>
-            <span className={styles.statLabel}>{t('activeQueue')}</span>
-            <h2 className={styles.statValue}>{activeRunsCount}</h2>
-          </div>
-        </div>
-      </section>
+      <StatsCards
+        t={t}
+        totalRuns={totalRuns}
+        overallSuccessRate={overallSuccessRate}
+        failedRunsCount={failedRunsCount}
+        activeRunsCount={activeRunsCount}
+      />
 
       {/* Main Table section */}
       <main className={styles.mainContent}>
@@ -2647,7 +2453,13 @@ export default function App() {
                       {lang === 'zh' ? '无可用测试文件。' : 'No pytest files discovered.'}
                     </div>
                   ) : (
-                    scannedFilesTree.map(node => renderTreeNode(node))
+                    <TestFileTree
+                      nodes={scannedFilesTree}
+                      expandedFolders={expandedFolders}
+                      onToggleFolder={toggleFolder}
+                      getNodeCheckState={getNodeCheckState}
+                      onToggleNode={handleToggleNode}
+                    />
                   )}
                 </div>
               </div>
