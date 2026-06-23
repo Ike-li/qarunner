@@ -51,6 +51,26 @@
 
 ---
 
+### 🟠 BUG-2：更新 profile 会级联删光其全部 schedule（静默数据丢失）— [已端到端验证]
+
+**结论**：更新任意 profile（哪怕只是改名）会**静默删除**绑定到它的所有 test schedule。
+
+**发现方式**：在 BUG-1 修复的**真接口验证**中抓到——`PUT /profiles/{id}` 返回 200 后，owner 与 admin 对之前创建的 schedule 的 GET 都变 404，且访问日志里**无任何成功的 DELETE**。这正是单测（FakeStore）看不见、必须真表面验证的典型。
+
+**复现 + 机制确认**：
+- 隔离 API 复现：建 P2 + 其 schedule S2（S2 在=200）→ owner 仅改名更新 P2（200）→ S2 变 404。
+- 直接 SQL 机制确认：`PRAGMA foreign_keys=ON` 下对父行做 `INSERT OR REPLACE`，子行（`ON DELETE CASCADE`）从 1 删到 0。
+
+**根因**：`adapters/sqlite_store.py` `save_profile` 用 `INSERT OR REPLACE`（= 先 DELETE 旧行再 INSERT），叠加 `test_schedules.profile_id` 的 `ON DELETE CASCADE`（schema）+ `PRAGMA foreign_keys=ON`（`_connect`）。REPLACE 的 DELETE 触发 FK 级联，删光该 profile 的 schedule。`save_profile` 同时服务 create 与 update，故每次编辑都中招。
+
+**严重度**：🟠（数据丢失 / 正确性——非安全，但任一 profile 编辑即清空其自动化调度）。**注**：`delete_profile` 的级联删是**有意设计**（`test_schedule_crud_and_cascade` 验证），修复须保留它、只治 update 路径。
+
+**修复**：`save_profile` 改 `INSERT ... ON CONFLICT(id) DO UPDATE SET ...`（行保留 UPSERT，原地更新不删行）；级联只在真正的 `delete_profile` 触发。
+
+**回归测试**（`tests/unit/adapters/test_sqlite_store.py::test_updating_a_profile_keeps_its_schedules`，放 **SqliteStore 层**——FakeStore 不复刻 SQLite REPLACE/CASCADE 语义、抓不到）：建 profile + schedule，再 re-save profile，schedule 须存活。**未修代码上转红（`assert None is not None`）、修复后转绿** = 变异验证。
+
+---
+
 ## 本轮排查后判定干净的表面（按收敛规则记录）
 
 - **safe_subpath 路径穿越 / 软链逃逸** — [已端到端验证] 干净。`/tests/..%2f..%2fetc/tree` 等编码穿越 → 404；suite 内放指向 `/etc` 的软链 → tree 不跟随泄露。实现（`resolve()` + `is_relative_to`）稳。
