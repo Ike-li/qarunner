@@ -1,33 +1,21 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { classifyLogLine, formatDuration, matchesLogLevel } from './logUtils'
-import { 
-  Play, 
-  RotateCw, 
-  CheckCircle2, 
-  XCircle, 
+import {
+  RotateCw,
+  CheckCircle2,
+  XCircle,
   Clock,
   AlertTriangle,
-  ExternalLink, 
-  ChevronRight, 
-  FolderGit2, 
-  SlidersHorizontal, 
-  Activity, 
-  X, 
-  Copy, 
+  ExternalLink,
+  Activity,
+  X,
+  Copy,
   Check,
   Download,
   BarChart3,
-  Sparkles,
-  Users,
-  LogOut,
-  Lock,
-  Unlock,
   Cpu,
   Box,
   Terminal,
-  Sun,
-  Moon,
-  Pencil,
   Maximize2,
   ChevronsLeft,
   ChevronsRight,
@@ -44,6 +32,9 @@ import { LoginScreen } from './components/LoginScreen'
 import { StatsCards } from './components/StatsCards'
 import { useFileTreeSelection } from './hooks/useFileTreeSelection'
 import { TriggerRunModal } from './components/TriggerRunModal'
+import { Header } from './components/Header'
+import { ProjectSidebar } from './components/ProjectSidebar'
+import { RunsTable } from './components/RunsTable'
 import { ScheduleModal } from './components/ScheduleModal'
 import { UserManagementModal } from './components/UserManagementModal'
 
@@ -1237,87 +1228,19 @@ export default function App() {
       <div className={styles.ambientGlow2}></div>
 
       {/* Main navigation / header */}
-      <header className={styles.header}>
-        <div className={styles.logoGroup}>
-          <div className={styles.logoIcon}>
-            <Activity className={styles.pulseIcon} />
-          </div>
-          <div className={styles.logoText}>
-            <h1>{t('platformTitle')}</h1>
-            <span>{t('platformSubtitleFull')}</span>
-          </div>
-        </div>
-
-        <div className={styles.headerActions}>
-          {/* User profile capsule */}
-          {currentUser && (
-            <div className={styles.userProfileCapsule}>
-              <div className={styles.userAvatar}>
-                {currentUser.username.substring(0, 2).toUpperCase()}
-              </div>
-              <div className={styles.userInfo}>
-                <span className={styles.profileUsername}>{currentUser.username}</span>
-                <span className={`${styles.profileRoleTag} ${styles[`profileRole_${currentUser.role}`]}`}>
-                  {currentUser.role}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Admin User Management Button */}
-          {currentUser?.role === 'admin' && (
-            <button 
-              className={styles.manageUsersButton}
-              onClick={() => {
-                fetchUsers()
-                setIsUserModalOpen(true)
-              }}
-              title={t('managePlatformUsers')}
-            >
-              <Users size={16} />
-              <span>{t('users')}</span>
-            </button>
-          )}
-
-          {/* Theme Toggle */}
-          <button 
-            className={styles.actionIconButton} 
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-
-          {/* Language Toggle */}
-          <button 
-            className={styles.actionIconButton} 
-            onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
-            title={lang === 'en' ? '切换为中文' : 'Switch to English'}
-          >
-            <span className={styles.langText}>{lang === 'en' ? 'ZH' : 'EN'}</span>
-          </button>
-
-          <button 
-            className={styles.triggerButton}
-            onClick={() => {
-              fetchTests()
-              setIsTriggerModalOpen(true)
-            }}
-          >
-            <Play size={16} fill="currentColor" />
-            <span>{t('triggerRun')}</span>
-          </button>
-
-          {/* Logout Trigger */}
-          <button 
-            className={styles.logoutButton}
-            onClick={handleLogout}
-            title={t('signOut')}
-          >
-            <LogOut size={18} />
-          </button>
-        </div>
-      </header>
+      <Header
+        t={t}
+        currentUser={currentUser}
+        theme={theme}
+        setTheme={setTheme}
+        lang={lang}
+        setLang={setLang}
+        fetchUsers={fetchUsers}
+        setIsUserModalOpen={setIsUserModalOpen}
+        fetchTests={fetchTests}
+        setIsTriggerModalOpen={setIsTriggerModalOpen}
+        handleLogout={handleLogout}
+      />
 
       {/* Stats Summary Cards */}
       <StatsCards
@@ -1331,371 +1254,40 @@ export default function App() {
       {/* Main Table section */}
       <main className={styles.mainContent}>
         {/* Left Column: Project Sidebar */}
-        <div className={styles.sidebarCard}>
-          <div className={styles.sidebarHeader}>
-            <FolderGit2 size={16} className={styles.iconAccent} />
-            <h2>{t('workspaceSuites')}</h2>
-          </div>
-          <div className={styles.sidebarContent}>
-            {/* "All Suites" selector */}
-            <div 
-              className={`${styles.sidebarItem} ${selectedSuiteFilter === null ? styles.sidebarItemActive : ''}`}
-              onClick={() => setSelectedSuiteFilter(null)}
-            >
-              <div className={styles.sidebarItemMain}>
-                <Activity size={14} className={styles.sidebarIcon} />
-                <span>{t('allSuites')}</span>
-              </div>
-              <span className={styles.suiteCountBadge}>
-                {runs.length}
-              </span>
-            </div>
+        <ProjectSidebar
+          t={t}
+          lang={lang}
+          runs={runs}
+          tests={tests}
+          profiles={profiles}
+          schedules={schedules}
+          selectedSuiteFilter={selectedSuiteFilter}
+          setSelectedSuiteFilter={setSelectedSuiteFilter}
+          setTestsPath={setTestsPath}
+          setIsTriggerModalOpen={setIsTriggerModalOpen}
+          setSelectedRunId={setSelectedRunId}
+          getProfileRunStats={getProfileRunStats}
+          handleTriggerProfile={handleTriggerProfile}
+          handleOpenEditProfile={handleOpenEditProfile}
+          handleOpenScheduleModal={handleOpenScheduleModal}
+          handleDeleteProfile={handleDeleteProfile}
+        />
 
-            {/* Scanned test directories */}
-            {tests.length === 0 ? (
-              <div className={styles.sidebarEmpty}>
-                <p>{t('noSuitesScanned')}</p>
-              </div>
-            ) : (
-              tests.map((suite) => {
-                const isFiltered = selectedSuiteFilter === suite
-                const suiteRunsCount = runs.filter(r => r.tests_path === suite).length
-                const suiteProfiles = profiles.filter(p => p.tests_path === suite)
-                return (
-                  <div 
-                    key={suite}
-                    className={styles.sidebarItemContainer}
-                  >
-                    <div 
-                      className={`${styles.sidebarItemRow} ${isFiltered ? styles.sidebarItemRowActive : ''}`}
-                      onClick={() => setSelectedSuiteFilter(suite)}
-                    >
-                      <div className={styles.sidebarItemMain}>
-                        <FolderGit2 size={14} className={styles.sidebarIcon} />
-                        <span className={styles.suiteNameText} title={suite}>{suite}</span>
-                      </div>
-                      <div className={styles.sidebarItemActions} onClick={(e) => e.stopPropagation()}>
-                        <span className={styles.suiteCountBadge}>
-                          {suiteRunsCount}
-                        </span>
-                        <button 
-                          className={styles.quickPlayButton}
-                          title={t('quickTrigger')}
-                          onClick={() => {
-                            setTestsPath(suite)
-                            setIsTriggerModalOpen(true)
-                          }}
-                        >
-                          <Play size={10} fill="currentColor" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {suiteProfiles.length > 0 && (
-                      <div className={styles.nestedProfileList} onClick={(e) => e.stopPropagation()}>
-                        {suiteProfiles.map(profile => {
-                          const existingSched = schedules.find(s => s.profile_id === profile.id);
-                          const isSchedActive = existingSched?.enabled;
-
-                          // Compute dynamic run statistics
-                          const stats = getProfileRunStats(profile);
-                          const dots: React.ReactNode[] = [];
-
-                          // Pad with empty dots to keep layout consistent at 5 dots
-                          for (let i = 0; i < 5 - stats.last5.length; i++) {
-                            dots.push(
-                              <span 
-                                key={`empty-${i}`} 
-                                className={`${styles.historyDot} ${styles.dotEmpty}`} 
-                                title={lang === 'zh' ? '无执行记录' : 'No execution'} 
-                              />
-                            );
-                          }
-
-                          // Fill with recent execution colored dots
-                          stats.last5.forEach(run => {
-                            let dotClass = styles.dotEmpty;
-                            let tooltip = '';
-                            if (run.status === 'running' || run.status === 'queued') {
-                              dotClass = styles.dotRunning;
-                              tooltip = lang === 'zh' ? '运行中...' : 'Running...';
-                            } else if (run.status === 'completed' && run.passed) {
-                              dotClass = styles.dotPass;
-                              tooltip = lang === 'zh' 
-                                ? `已通过 (耗时: ${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}秒)\n${new Date(run.created_at).toLocaleString()}` 
-                                : `Passed (${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}s)\n${new Date(run.created_at).toLocaleString()}`;
-                            } else {
-                              dotClass = styles.dotFail;
-                              tooltip = lang === 'zh' 
-                                ? `未通过\n${new Date(run.created_at).toLocaleString()}` 
-                                : `Failed\n${new Date(run.created_at).toLocaleString()}`;
-                            }
-
-                            dots.push(
-                              <span 
-                                key={run.id} 
-                                className={`${styles.historyDot} ${dotClass}`} 
-                                title={tooltip}
-                                onClick={() => setSelectedRunId(run.id)}
-                              />
-                            );
-                          });
-
-                          return (
-                            <div key={profile.id} className={styles.nestedProfileItem} title={profile.description || ''}>
-                              {/* Row 1: Profile Main Info and Actions */}
-                              <div className={styles.nestedProfileMainRow}>
-                                <div className={styles.nestedProfileInfo}>
-                                  <SlidersHorizontal size={11} className={styles.nestedProfileIcon} />
-                                  <span className={styles.nestedProfileName}>{profile.name}</span>
-                                  {isSchedActive && (
-                                    <span className={styles.activeScheduleIndicator} title={lang === 'zh' ? `定时已启用: ${existingSched?.cron_expression}` : `Schedule active: ${existingSched?.cron_expression}`} />
-                                  )}
-                                </div>
-                                <div className={styles.nestedProfileActions}>
-                                  <button 
-                                    className={styles.nestedProfilePlayButton}
-                                    title={lang === 'zh' ? '立即执行' : 'Instant Run'}
-                                    onClick={() => handleTriggerProfile(profile)}
-                                  >
-                                    <Play size={8} fill="currentColor" />
-                                  </button>
-                                  <button 
-                                    className={styles.nestedProfileEditButton}
-                                    title={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
-                                    onClick={() => handleOpenEditProfile(profile)}
-                                  >
-                                    <Pencil size={8} />
-                                  </button>
-                                  <button 
-                                    className={`${styles.nestedProfileClockButton} ${isSchedActive ? styles.nestedProfileClockButtonActive : ''}`}
-                                    title={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
-                                    onClick={() => handleOpenScheduleModal(profile)}
-                                  >
-                                    <Clock size={8} />
-                                  </button>
-                                  <button 
-                                    className={styles.nestedProfileDeleteButton}
-                                    title={lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                                    onClick={(e) => handleDeleteProfile(profile.id, e)}
-                                  >
-                                    <X size={8} />
-                                  </button>
-                                </div>
-                              </div>
-
-                              {/* Row 2: Performance metrics and historical circles */}
-                              <div className={styles.nestedProfileStatsRow}>
-                                {stats.hasRuns ? (
-                                  <span className={`${styles.profilePassRateBadge} ${stats.passRate >= 80 ? styles.badgeHighPass : stats.passRate >= 50 ? styles.badgeMediumPass : styles.badgeLowPass}`}>
-                                    {stats.passRate}% {lang === 'zh' ? '通过率' : 'Pass'}
-                                  </span>
-                                ) : (
-                                  <span className={styles.profileNoRunsBadge}>
-                                    {lang === 'zh' ? '暂无记录' : 'No runs'}
-                                  </span>
-                                )}
-                                <div className={styles.profileHistoryDots} title={lang === 'zh' ? '最近 5 次执行历史 (从左至右: 较早 -> 最新，点击圆点可载入日志)' : 'Last 5 runs (left to right: older -> newest, click to load logs)'}>
-                                  {dots}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </div>
-
-        <div className={styles.tableCard}>
-          <div className={styles.tableHeader}>
-            <div className={styles.tableTitleGroup}>
-              <BarChart3 size={18} className={styles.iconMuted} />
-              <h2>{t('executionRecords')}</h2>
-            </div>
-
-            {/* Segmented Filter Tab */}
-            <div className={styles.logFilters}>
-              <button 
-                className={`${styles.logFilterButton} ${logFilterTab === 'All' ? styles.logFilterButtonActive : ''}`}
-                onClick={() => setLogFilterTab('All')}
-              >
-                <Activity size={12} />
-                <span>{lang === 'zh' ? '全部记录' : 'All Runs'}</span>
-              </button>
-              <button 
-                className={`${styles.logFilterButton} ${logFilterTab === 'Manual' ? styles.logFilterButtonActive : ''}`}
-                onClick={() => setLogFilterTab('Manual')}
-              >
-                <Users size={12} />
-                <span>{lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
-              </button>
-              <button 
-                className={`${styles.logFilterButton} ${logFilterTab === 'Scheduled' ? styles.logFilterButtonActive : ''}`}
-                onClick={() => setLogFilterTab('Scheduled')}
-              >
-                <Clock size={12} />
-                <span>{lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
-              </button>
-            </div>
-
-            <button 
-              className={styles.refreshIconButton} 
-              onClick={fetchRuns}
-              title={t('refreshLogs')}
-            >
-              <RotateCw size={16} />
-            </button>
-          </div>
-
-          {loading && runs.length === 0 ? (
-            <div className={styles.loadingState}>
-              <RotateCw size={36} className={styles.spinIcon} />
-              <p>{t('loadingHistory')}</p>
-            </div>
-          ) : runs.length === 0 ? (
-            <div className={styles.emptyState}>
-              <Sparkles size={48} className={styles.iconSparkle} />
-              <h3>{t('noRunsTitle')}</h3>
-              <p>{t('noRunsDesc')}</p>
-              <button 
-                className={styles.triggerButton}
-                onClick={() => setIsTriggerModalOpen(true)}
-                style={{ marginTop: '1.5rem' }}
-              >
-                <Play size={16} fill="currentColor" />
-                <span>{t('launchFirstRun')}</span>
-              </button>
-            </div>
-          ) : (
-            <div className={styles.tableWrapper}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>{t('runId')}</th>
-                    <th style={{ width: '50px', textAlign: 'center' }}><Lock size={12} /></th>
-                    <th>{t('targetSuite')}</th>
-                    <th>{t('status')}</th>
-                    <th>{t('engine')}</th>
-                    <th>{t('owner')}</th>
-                    <th>{t('results')}</th>
-                    <th>{t('passRate')}</th>
-                    <th>{t('duration')}</th>
-                    <th>{t('createdAt')}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRuns.map((run) => {
-                    const isSelected = run.id === selectedRunId
-                    return (
-                      <tr 
-                        key={run.id}
-                        className={`${styles.tableRow} ${isSelected ? styles.rowSelected : ''}`}
-                        onClick={() => setSelectedRunId(run.id)}
-                      >
-                        <td className={styles.cellId}>
-                          <code>{run.id.slice(0, 8)}</code>
-                        </td>
-                        <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                          <button
-                            type="button"
-                            className={`${styles.lockButton} ${run.locked ? styles.lockButtonActive : ''}`}
-                            onClick={(e) => handleToggleLock(run.id, e)}
-                            title={run.locked 
-                              ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)') 
-                              : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
-                            }
-                          >
-                            {run.locked ? (
-                              <Lock size={12} className={styles.lockIconActive} />
-                            ) : (
-                              <Unlock size={12} className={styles.lockIconInactive} />
-                            )}
-                          </button>
-                        </td>
-                        <td className={styles.cellPath}>
-                          <FolderGit2 size={15} className={styles.inlineIcon} />
-                          <span>{run.tests_path}</span>
-                        </td>
-                        <td>
-                          <span className={`${styles.badge} ${styles[`badge_${run.status}`]}`}>
-                            {run.status === 'queued' && <RotateCw size={12} className={styles.spinIcon} />}
-                            {run.status === 'running' && <Activity size={12} className={styles.pulseIcon} />}
-                            {run.status === 'completed' && run.passed && <CheckCircle2 size={12} />}
-                            {run.status === 'completed' && !run.passed && <XCircle size={12} />}
-                            {run.status === 'failed' && <XCircle size={12} />}
-                            {run.status === 'timeout' && <Clock size={12} />}
-                            <span className={styles.badgeText}>{t(`status_${run.status}`)}</span>
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`${styles.engineBadge} ${
-                            run.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
-                          }`}>
-                            {run.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
-                            <span>{t(`engine_${run.executor_mode}`)}</span>
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`${styles.ownerBadge} ${
-                            run.created_by === 'system' ? styles.ownerBadge_system :
-                            run.created_by === 'admin' ? styles.ownerBadge_admin : styles.ownerBadge_user
-                          }`}>
-                            {run.created_by}
-                          </span>
-                        </td>
-                        <td>
-                          {run.summary ? (
-                            <span className={styles.summaryStats}>
-                              <span className={styles.textPassed}>{run.summary.passed}</span>
-                              <span className={styles.statDivider}>/</span>
-                              <span className={styles.textFailed}>{run.summary.failed + run.summary.error}</span>
-                              <span className={styles.statDivider}>/</span>
-                              <span>{run.summary.total}</span>
-                            </span>
-                          ) : (
-                            <span className={styles.textMuted}>-</span>
-                          )}
-                        </td>
-                        <td>
-                          {run.summary ? (
-                            <div className={styles.progressContainer}>
-                              <div className={styles.progressBarWrapper}>
-                                <div 
-                                  className={`${styles.progressBar} ${run.passed ? styles.bgPassed : styles.bgFailed}`}
-                                  style={{ width: `${run.summary.pass_rate * 100}%` }}
-                                ></div>
-                              </div>
-                              <span className={styles.progressText}>
-                                {(run.summary.pass_rate * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                          ) : (
-                            <span className={styles.textMuted}>-</span>
-                          )}
-                        </td>
-                        <td className={styles.textMono}>
-                          {formatDuration(run.summary?.duration_ms)}
-                        </td>
-                        <td className={styles.textMuted}>
-                          {formatDate(run.created_at)}
-                        </td>
-                        <td className={styles.cellArrow}>
-                          <ChevronRight size={16} />
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <RunsTable
+          t={t}
+          lang={lang}
+          runs={runs}
+          filteredRuns={filteredRuns}
+          loading={loading}
+          logFilterTab={logFilterTab}
+          setLogFilterTab={setLogFilterTab}
+          selectedRunId={selectedRunId}
+          setSelectedRunId={setSelectedRunId}
+          setIsTriggerModalOpen={setIsTriggerModalOpen}
+          fetchRuns={fetchRuns}
+          handleToggleLock={handleToggleLock}
+          formatDate={formatDate}
+        />
       </main>
 
       {/* Drawer: Detailed Run Information */}
