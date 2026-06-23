@@ -107,6 +107,7 @@ export function TriggerRunModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="trigger-modal-title"
+        data-testid="trigger-modal"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
@@ -304,6 +305,7 @@ export function TriggerRunModal({
             <label className={styles.label} htmlFor="trigger-args">{t('pytestArgsLabel')}</label>
             <input
               id="trigger-args"
+              data-testid="trigger-args-input"
               type="text"
               className={styles.input}
               placeholder={t('pytestArgsPlaceholder')}
@@ -376,6 +378,7 @@ export function TriggerRunModal({
               <label className={styles.label} htmlFor="trigger-timeout">{t('timeoutLabel')}</label>
               <input
                 id="trigger-timeout"
+                data-testid="trigger-timeout-input"
                 type="number"
                 className={styles.input}
                 placeholder={t('timeoutPlaceholder')}
@@ -494,9 +497,10 @@ export function TriggerRunModal({
           </div>
 
           <div className={styles.formActions}>
-            <button 
-              type="button" 
+            <button
+              type="button"
               className={styles.cancelButton}
+              data-testid="trigger-cancel-button"
               onClick={() => onClose()}
             >
               {t('cancel')}

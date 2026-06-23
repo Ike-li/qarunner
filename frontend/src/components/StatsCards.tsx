@@ -14,7 +14,7 @@ interface StatsCardsProps {
 export function StatsCards({ t, totalRuns, overallSuccessRate, failedRunsCount, activeRunsCount }: StatsCardsProps) {
   return (
     <section className={styles.statsContainer}>
-      <div className={styles.statCard}>
+      <div className={styles.statCard} data-testid="stat-total">
         <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(99, 102, 241, 0.1)', color: '#818cf8' }}>
           <Activity size={20} />
         </div>
@@ -24,7 +24,7 @@ export function StatsCards({ t, totalRuns, overallSuccessRate, failedRunsCount, 
         </div>
       </div>
 
-      <div className={styles.statCard}>
+      <div className={styles.statCard} data-testid="stat-success-rate">
         <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
           <CheckCircle2 size={20} />
         </div>
@@ -34,7 +34,7 @@ export function StatsCards({ t, totalRuns, overallSuccessRate, failedRunsCount, 
         </div>
       </div>
 
-      <div className={styles.statCard}>
+      <div className={styles.statCard} data-testid="stat-failed">
         <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
           <XCircle size={20} />
         </div>
@@ -46,7 +46,7 @@ export function StatsCards({ t, totalRuns, overallSuccessRate, failedRunsCount, 
         </div>
       </div>
 
-      <div className={styles.statCard}>
+      <div className={styles.statCard} data-testid="stat-active">
         <div className={`${styles.statIconWrapper} ${activeRunsCount > 0 ? styles.pulseGlow : ''}`} style={{ backgroundColor: activeRunsCount > 0 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.05)', color: '#f59e0b' }}>
           <RotateCw size={20} className={activeRunsCount > 0 ? styles.spinIcon : ''} />
         </div>

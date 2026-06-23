@@ -45,7 +45,7 @@ export function RunsTable({
       <div className={styles.tableHeader}>
         <div className={styles.tableTitleGroup}>
           <BarChart3 size={18} className={styles.iconMuted} />
-          <h2>{t('executionRecords')}</h2>
+          <h2 data-testid="execution-records-title">{t('executionRecords')}</h2>
         </div>
 
         {/* Segmented Filter Tab */}

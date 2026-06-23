@@ -52,8 +52,8 @@ export function Header({
               {currentUser.username.substring(0, 2).toUpperCase()}
             </div>
             <div className={styles.userInfo}>
-              <span className={styles.profileUsername}>{currentUser.username}</span>
-              <span className={`${styles.profileRoleTag} ${styles[`profileRole_${currentUser.role}`]}`}>
+              <span className={styles.profileUsername} data-testid="profile-username">{currentUser.username}</span>
+              <span className={`${styles.profileRoleTag} ${styles[`profileRole_${currentUser.role}`]}`} data-testid="profile-role">
                 {currentUser.role}
               </span>
             </div>
@@ -62,8 +62,9 @@ export function Header({
 
         {/* Admin User Management Button */}
         {currentUser?.role === 'admin' && (
-          <button 
+          <button
             className={styles.manageUsersButton}
+            data-testid="open-users-button"
             onClick={() => {
               fetchUsers()
               setIsUserModalOpen(true)
@@ -95,8 +96,9 @@ export function Header({
           <span className={styles.langText}>{lang === 'en' ? 'ZH' : 'EN'}</span>
         </button>
 
-        <button 
+        <button
           className={styles.triggerButton}
+          data-testid="open-trigger-button"
           onClick={() => {
             fetchTests()
             setIsTriggerModalOpen(true)

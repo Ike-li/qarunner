@@ -64,6 +64,7 @@ export function UserManagementModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="user-modal-title"
+        data-testid="user-modal"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
@@ -72,7 +73,7 @@ export function UserManagementModal({
             <Users size={20} className={styles.iconAccent} />
             <h2 id="user-modal-title">{t('userManagementTitle')}</h2>
           </div>
-          <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'}>
+          <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'} data-testid="user-modal-close">
             <X size={20} />
           </button>
         </div>
@@ -103,7 +104,7 @@ export function UserManagementModal({
                 ) : (
                   usersList.map((usr) => (
                     <tr key={usr.username}>
-                      <td className={styles.tdUsername}>{usr.username}</td>
+                      <td className={styles.tdUsername} data-testid="user-row-username">{usr.username}</td>
                       <td>
                         <span className={`${styles.roleBadge} ${styles[`roleBadge_${usr.role}`]}`}>
                           {usr.role}
@@ -136,6 +137,7 @@ export function UserManagementModal({
               <label className={styles.label} htmlFor="user-new-username">{t('username')}</label>
               <input
                 id="user-new-username"
+                data-testid="user-new-username"
                 type="text"
                 className={styles.input}
                 placeholder="e.g. testing_lead"
@@ -150,6 +152,7 @@ export function UserManagementModal({
               <label className={styles.label} htmlFor="user-new-password">{t('password')}</label>
               <input
                 id="user-new-password"
+                data-testid="user-new-password"
                 type="password"
                 className={styles.input}
                 placeholder="••••••••"
@@ -185,6 +188,7 @@ export function UserManagementModal({
                 className={styles.submitButton}
                 style={{ width: '100%', height: '38px', justifyContent: 'center' }}
                 disabled={newUserLoading || !newUsername.trim() || !newPassword.trim()}
+                data-testid="user-add-submit"
               >
                 {newUserLoading ? (
                   <>

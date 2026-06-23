@@ -67,14 +67,14 @@ export function LoginScreen({
             <Activity className={styles.pulseIcon} />
           </div>
           <div className={styles.loginLogoText}>
-            <h1>{t('platformTitle')}</h1>
-            <span>{t('platformSubtitle')}</span>
+            <h1 data-testid="login-title">{t('platformTitle')}</h1>
+            <span data-testid="login-subtitle">{t('platformSubtitle')}</span>
           </div>
         </div>
 
         <form onSubmit={onSubmit} className={styles.form} style={{ padding: 0 }}>
           {loginError && (
-            <div className={styles.formErrorAlert} style={{ marginBottom: '1rem' }} role="alert">
+            <div className={styles.formErrorAlert} style={{ marginBottom: '1rem' }} role="alert" data-testid="login-error">
               <AlertTriangle size={16} aria-hidden="true" />
               <span>{loginError}</span>
             </div>
@@ -86,6 +86,7 @@ export function LoginScreen({
             </label>
             <input
               id="login-username"
+              data-testid="login-username"
               type="text"
               className={styles.input}
               placeholder={t('usernamePlaceholder')}
@@ -103,6 +104,7 @@ export function LoginScreen({
             </label>
             <input
               id="login-password"
+              data-testid="login-password"
               type="password"
               className={styles.input}
               placeholder={t('passwordPlaceholder')}
@@ -115,6 +117,7 @@ export function LoginScreen({
 
           <button
             type="submit"
+            data-testid="login-submit"
             className={styles.submitButton}
             style={{ marginTop: '1.75rem', justifyContent: 'center', width: '100%' }}
             disabled={loginLoading}
