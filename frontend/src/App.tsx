@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { classifyLogLine, formatDuration, matchesLogLevel } from './logUtils'
+import { formatDuration } from './logUtils'
 import {
   RotateCw,
   CheckCircle2,
@@ -31,6 +31,7 @@ import { translations, type Lang, type TranslationKey } from './i18n'
 import { LoginScreen } from './components/LoginScreen'
 import { StatsCards } from './components/StatsCards'
 import { useFileTreeSelection } from './hooks/useFileTreeSelection'
+import { useTerminalView } from './hooks/useTerminalView'
 import { TriggerRunModal } from './components/TriggerRunModal'
 import { Header } from './components/Header'
 import { ProjectSidebar } from './components/ProjectSidebar'
@@ -44,12 +45,34 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRunDetails, setSelectedRunDetails] = useState<Run | null>(null)
   const [detailsLoading, setDetailsLoading] = useState<boolean>(false)
-  const [drawerTab, setDrawerTab] = useState<'logs' | 'report'>('logs')
   const terminalRef = useRef<HTMLDivElement>(null)
   const [isTriggerModalOpen, setIsTriggerModalOpen] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [copySuccess, setCopySuccess] = useState(false)
-  const [logLevelFilter, setLogLevelFilter] = useState<'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS'>('ALL')
+  // Terminal/drawer UI preferences + log helpers (see hooks/useTerminalView)
+  const {
+    drawerTab,
+    setDrawerTab,
+    copySuccess,
+    logLevelFilter,
+    setLogLevelFilter,
+    isDrawerExpanded,
+    setIsDrawerExpanded,
+    isTerminalHeightExpanded,
+    setIsTerminalHeightExpanded,
+    terminalFontSize,
+    setTerminalFontSize,
+    logSearchQuery,
+    setLogSearchQuery,
+    isTerminalFullscreen,
+    setIsTerminalFullscreen,
+    isWordWrapEnabled,
+    setIsWordWrapEnabled,
+    isAutoScrollEnabled,
+    setIsAutoScrollEnabled,
+    copyToClipboard,
+    getFilteredLogs,
+    renderFormattedLogs,
+  } = useTerminalView()
 
   // Localization & Theme states
   const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('qarunner_lang') as Lang) || 'en')
@@ -126,16 +149,7 @@ export default function App() {
   const [streamedStdout, setStreamedStdout] = useState<string>('')
   const [isStreaming, setIsStreaming] = useState<boolean>(false)
 
-  // New Log & Drawer controls to resolve "logs are too small" issue
-  const [isDrawerExpanded, setIsDrawerExpanded] = useState<boolean>(false)
-  const [isTerminalHeightExpanded, setIsTerminalHeightExpanded] = useState<boolean>(false)
-  const [terminalFontSize, setTerminalFontSize] = useState<number>(13)
-  const [logSearchQuery, setLogSearchQuery] = useState<string>('')
-
-  // Fullscreen terminal features (Word Wrap, Auto Scroll lock, and element Ref)
-  const [isTerminalFullscreen, setIsTerminalFullscreen] = useState<boolean>(false)
-  const [isWordWrapEnabled, setIsWordWrapEnabled] = useState<boolean>(true)
-  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState<boolean>(true)
+  // Fullscreen terminal element ref (UI prefs live in useTerminalView)
   const fullscreenTerminalRef = useRef<HTMLDivElement>(null)
   const [isIframeLoading, setIsIframeLoading] = useState<boolean>(true)
 
@@ -1073,12 +1087,6 @@ export default function App() {
     return d.toLocaleString()
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-    setCopySuccess(true)
-    setTimeout(() => setCopySuccess(false), 2000)
-  }
-
   // Derived aggregates for Dashboard Header
   const totalRuns = runs.length
   const completedRuns = runs.filter(r => r.status === 'completed')
@@ -1152,25 +1160,6 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Log filtering helper (matchesLogLevel lives in ./logUtils, unit-tested)
-  const getFilteredLogs = (text: string) => {
-    if (!text) return '';
-    let lines = text.split('\n');
-
-    // First stage: Filter by log level
-    if (logLevelFilter !== 'ALL') {
-      lines = lines.filter(line => matchesLogLevel(line, logLevelFilter));
-    }
-
-    // Second stage: Filter by search query
-    if (logSearchQuery) {
-      const query = logSearchQuery.toLowerCase();
-      lines = lines.filter(line => line.toLowerCase().includes(query));
-    }
-
-    return lines.join('\n');
-  };
-
   const filteredStdout = selectedRun?.stdout ? getFilteredLogs(selectedRun.stdout) : ''
   const filteredStderr = selectedRun?.stderr ? getFilteredLogs(selectedRun.stderr) : ''
   const filteredStreamed = streamedStdout ? getFilteredLogs(streamedStdout) : ''
@@ -1198,27 +1187,6 @@ export default function App() {
       last5
     };
   };
-
-  // Map the (pure, unit-tested) line classification to its styled span.
-  const formatLogLine = (line: string) => {
-    const kind = classifyLogLine(line)
-    if (kind === 'header') return <span className={styles.logHeaderLine}>{line}</span>
-    if (kind === 'success') return <span className={styles.logSuccessLine}>{line}</span>
-    if (kind === 'error') return <span className={styles.logErrorLine}>{line}</span>
-    if (kind === 'warning') return <span className={styles.logWarningLine}>{line}</span>
-    return <span>{line}</span>
-  }
-
-  const renderFormattedLogs = (text: string) => {
-    if (!text) return null
-    const lines = text.split('\n')
-    return lines.map((line, idx) => (
-      <div key={idx} className={styles.terminalLineRow}>
-        <span className={styles.terminalLineNumber}>{idx + 1}</span>
-        <span className={styles.terminalLineContent}>{formatLogLine(line)}</span>
-      </div>
-    ))
-  }
 
   // Rendering 2: Full Dashboard View for Authenticated Users
   return (
