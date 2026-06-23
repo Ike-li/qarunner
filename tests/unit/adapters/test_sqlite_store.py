@@ -353,6 +353,57 @@ async def test_sqlite_store_migration_env_json(tmp_path) -> None:
     await store.close()
 
 
+async def _user_version(store: SqliteStore) -> int:
+    async with store._connect() as db, db.execute("PRAGMA user_version") as cursor:
+        rows = await cursor.fetchall()
+    return rows[0][0]
+
+
+async def test_fresh_initialize_records_baseline_version(tmp_path) -> None:
+    """ARCH-8: a fresh database is stamped with the baseline schema version."""
+    from qarunner.adapters.sqlite_store import _BASELINE_VERSION
+
+    store = SqliteStore(str(tmp_path / "versioned.db"))
+    await store.initialize()
+    assert await _user_version(store) == _BASELINE_VERSION
+    await store.close()
+
+
+async def test_forward_migration_runs_once_and_records_version(tmp_path, monkeypatch) -> None:
+    """ARCH-8: a versioned forward migration applies exactly once and bumps
+    PRAGMA user_version, so re-initialising is a no-op rather than a crash.
+
+    Without the version gate the ALTER would re-run on the second initialize and
+    raise "duplicate column name"; the recorded version is what prevents it.
+    """
+    from qarunner.adapters import sqlite_store
+
+    # Register a synthetic v2 migration beyond the v1 baseline.
+    monkeypatch.setattr(
+        sqlite_store,
+        "_MIGRATIONS",
+        ((2, ("ALTER TABLE runs ADD COLUMN arch8_probe TEXT NOT NULL DEFAULT 'x'",)),),
+    )
+
+    store = SqliteStore(str(tmp_path / "versioned.db"))
+    await store.initialize()  # baseline (v1) then the forward migration (v2)
+
+    async def _run_columns() -> list[str]:
+        async with store._connect() as db, db.execute("PRAGMA table_info(runs)") as cursor:
+            return [row[1] for row in await cursor.fetchall()]
+
+    assert "arch8_probe" in await _run_columns()
+    assert await _user_version(store) == 2
+
+    # Re-initialise: the migration is version-gated, so the ALTER does not re-run
+    # (a duplicate-column ALTER would raise) and the version is unchanged.
+    await store.initialize()
+    assert (await _run_columns()).count("arch8_probe") == 1
+    assert await _user_version(store) == 2
+
+    await store.close()
+
+
 async def test_sqlite_store_list_profiles_filter(store: SqliteStore) -> None:
     p1 = TestProfile(
         id="p1",

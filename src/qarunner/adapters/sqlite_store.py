@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS test_schedules (
 );
 """
 
+# The full baseline schema above (``_SCHEMA``) is recorded as user_version 1.
+_BASELINE_VERSION = 1
+
+# Forward migrations beyond the baseline (ARCH-8). Each ``(version, statements)``
+# entry is applied exactly once, in ascending order, advancing
+# ``PRAGMA user_version`` so a migration never re-runs. A database at
+# user_version >= 1 already holds the full baseline, so these are plain,
+# unconditional DDL — no column probing. To evolve the schema, append the next
+# ``(N, ("ALTER TABLE ...",))`` with ``N`` strictly increasing and forward-only.
+_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = ()
+
 
 class SqliteStore:
     """RunStore backed by aiosqlite, opening a fresh connection per operation.
@@ -117,9 +128,10 @@ class SqliteStore:
         The whole setup runs inside one ``BEGIN IMMEDIATE`` transaction so that
         concurrent first-starts (CONC-2) serialise on the write lock via
         busy_timeout instead of dead-locking on a read→write upgrade (which SQLite
-        surfaces as "database is locked" without honouring the timeout). Every
-        step is idempotent: ``CREATE ... IF NOT EXISTS``, tolerated ALTERs, and an
-        ``INSERT OR IGNORE`` seed.
+        surfaces as "database is locked" without honouring the timeout). Schema
+        changes are versioned through ``PRAGMA user_version`` (see
+        ``_run_migrations``) so each runs exactly once; the admin seed is an
+        idempotent ``INSERT OR IGNORE``.
         """
         from qarunner.config import Settings
         from qarunner.core.auth import hash_password
@@ -133,11 +145,7 @@ class SqliteStore:
         async with self._connect() as db:
             await self._enable_wal(db)
             await db.execute("BEGIN IMMEDIATE")
-            for raw_statement in _SCHEMA.split(";"):
-                statement = raw_statement.strip()
-                if statement:
-                    await db.execute(statement)
-            await self._migrate(db)
+            await self._run_migrations(db)
 
             async with db.execute("SELECT COUNT(*) FROM users") as cursor:
                 row = await cursor.fetchone()
@@ -156,14 +164,52 @@ class SqliteStore:
             await db.commit()
 
     @staticmethod
-    async def _migrate(db: aiosqlite.Connection) -> None:
-        """Apply idempotent ALTER migrations so legacy databases gain new columns.
+    async def _run_migrations(db: aiosqlite.Connection) -> None:
+        """Advance the schema to the latest version, recording progress in
+        ``PRAGMA user_version`` so every step runs exactly once (ARCH-8).
 
-        Runs inside ``initialize``'s transaction; the caller commits.
+        Runs inside ``initialize``'s ``BEGIN IMMEDIATE`` transaction; the caller
+        commits. Concurrent first-starts serialise on the write lock, so a loser
+        observes the bumped ``user_version`` and skips already-applied steps
+        (CONC-2).
+
+        ``user_version == 0`` means a brand-new *or* a legacy unversioned
+        database; the idempotent baseline (``CREATE ... IF NOT EXISTS`` plus an
+        add-missing-column backfill) adopts both and stamps ``_BASELINE_VERSION``.
+        From there each forward migration is plain, unconditional DDL.
+        """
+        async with db.execute("PRAGMA user_version") as cursor:
+            rows = await cursor.fetchall()
+        version = rows[0][0]
+
+        if version == 0:
+            for raw_statement in _SCHEMA.split(";"):
+                statement = raw_statement.strip()
+                if statement:
+                    await db.execute(statement)
+            await SqliteStore._baseline_backfill(db)
+            version = _BASELINE_VERSION
+            await db.execute(f"PRAGMA user_version = {version}")
+
+        for target, statements in _MIGRATIONS:
+            if target > version:
+                for ddl in statements:
+                    await db.execute(ddl)
+                version = target
+                await db.execute(f"PRAGMA user_version = {target}")
+
+    @staticmethod
+    async def _baseline_backfill(db: aiosqlite.Connection) -> None:
+        """Add any columns a legacy unversioned database is missing — the v1
+        baseline adoption step, invoked once when ``user_version`` is 0.
+
+        A brand-new database already has every column from ``_SCHEMA`` so each
+        check is a no-op; a legacy database gains the columns added since it was
+        created. Runs inside ``initialize``'s transaction; the caller commits.
         """
         async with db.execute("PRAGMA table_info(runs)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
-        run_migrations = [
+        run_column_adds = [
             (
                 "created_by",
                 "ALTER TABLE runs ADD COLUMN created_by TEXT NOT NULL DEFAULT 'system'",
@@ -175,7 +221,7 @@ class SqliteStore:
             ("env_json", "ALTER TABLE runs ADD COLUMN env_json TEXT NOT NULL DEFAULT '{}'"),
             ("locked", "ALTER TABLE runs ADD COLUMN locked INTEGER NOT NULL DEFAULT 0"),
         ]
-        for column, ddl in run_migrations:
+        for column, ddl in run_column_adds:
             if column not in columns:
                 await SqliteStore._safe_alter(db, "runs", column, ddl)
 
