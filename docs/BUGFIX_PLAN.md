@@ -91,7 +91,33 @@
 
 ---
 
-## 本轮排查后判定干净的表面（按收敛规则记录）
+## 第 3 轮发现（并发/数据 + DoS）
+
+### 🟠 BUG-4：运行中锁定 run，锁被 execute 末尾全行 save 覆写丢失 — [已端到端验证]
+
+**结论**：对一个 RUNNING 的 run 调 `PUT /runs/{id}/lock {locked:true}`，run 完成后 `locked` 变回 `false`——锁静默丢失。锁本用于防 cleanup 删除（`get_old_unlocked_runs` 滤 `locked=0`），丢锁后该 run 可被自动删。
+
+**真表面复现**：建慢 run（`time.sleep(4)`）→ 进 RUNNING → 运行中锁定（即时 `locked=True`、DB 也 True）→ 完成后 `GET` 显示 `locked=False`。
+
+**根因**：`core/orchestrator.py` `execute` 开头 `store.get(run_id)` 读一次 run（locked=False），全程用内存对象、末尾 `store.save()` 是**全行 `INSERT OR REPLACE`**；`lock_run` 走 `UPDATE ... SET locked`（targeted）。运行中加的锁被 execute 末尾全行 save 覆写回 false（lost-update；与 BUG-2 同属 `INSERT OR REPLACE` 覆写类）。
+
+**严重度**：🟠（锁丢失→受保护 run 被 cleanup 误删，数据丢失；任一 owner 在 run 运行中加锁即触发）。
+
+**修复**：`save()` 改 `INSERT ... ON CONFLICT(id) DO UPDATE SET <除 locked 外所有列>`——生命周期 re-save 永不动 `locked`，仅创建（INSERT）与 `lock_run`（targeted UPDATE）写它。镜像 BUG-2 的 UPSERT 修法、根除 race（无 TOCTOU）。
+
+**回归测试**（`tests/unit/adapters/test_sqlite_store.py::test_save_does_not_clobber_concurrent_lock`，store 层确定性复现：save→lock_run→re-save stale run）：`INSERT OR REPLACE` 下红（`assert False is True`）、UPSERT 后绿。真接口复验：运行中加锁完成后仍 `locked=True`。
+
+### 本轮判定干净 / 已落实的面
+- **junit XML entity 膨胀（SEC-7）** — [已端到端验证读码] 干净：`core/junit.py` 用 `defusedxml.ElementTree.parse` + 10MB 上限 + 捕获 `DefusedXmlException`。
+- **后台任务 GC（DATA-2）/ shutdown drain（DATA-4）** — 干净：`asyncio_scheduler` 用 `_tasks` set 持强引用 + done callback 记异常；`drain` 等待在途任务、超时取消。
+- **SQLite 并发（DATA-1）** — [已端到端验证] 干净：40 路并发混合读写（20 POST /runs + 20 GET /runs）全 2xx、服务端 0 错误，无 `database is locked`/`ProgrammingError`。per-op 连接 + busy_timeout + WAL 成立。
+
+### 后续项（[读代码推断]，记录未修）
+- **无界 run 创建（DoS）**：`POST /runs` 无速率限制，`asyncio_scheduler.schedule()` 对每个 run 立即建 asyncio Task，semaphore（默认 4）只限并发执行数、**不限排队 Task 数**。认证用户可大量 POST /runs → 无界 DB 行 + 无界排队 Task → 内存压力。属硬化缺口（需认证、执行仍受 max_concurrency 限），非离散可复现 bug；建议加每用户 run 配额 / 队列上限。
+
+---
+
+## 历史轮次判定干净的表面（按收敛规则记录）
 
 - **safe_subpath 路径穿越 / 软链逃逸** — [已端到端验证] 干净。`/tests/..%2f..%2fetc/tree` 等编码穿越 → 404；suite 内放指向 `/etc` 的软链 → tree 不跟随泄露。实现（`resolve()` + `is_relative_to`）稳。
 - **JWT / cookie / `?token=` / admin 边界** — [已端到端验证] 干净。无凭证 / 垃圾 token / `?token=` URL 旁路 → 全 401；普通用户打 `/users` → 403。SEC-5/SEC-6 实际生效。
