@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: qarunner-platform:dev
+    container_name: qarunner-backend-dev
+    user: root
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app/src
+      - QARUNNER_TESTS_ROOT=/app/external_tests
+      - QARUNNER_ARTIFACTS_ROOT=~/code/qa_platform_v2/artifacts
+      - QARUNNER_DB_PATH=~/code/qa_platform_v2/artifacts/qarunner.db
+      - QARUNNER_SECRET_KEY=${QARUNNER_SECRET_KEY:-dev_secret_key_placeholder_for_local_container_development_needs_to_be_64_chars}
+      - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:-admin123}
+      - QARUNNER_COOKIE_SECURE=false  # Disable cookie Secure flag for local http dev (SEC-6)
+      - WATCHFILES_FORCE_POLLING=true  # 兜底:bind mount 上 inotify 不传播时,强制 uvicorn --reload 走轮询
+    volumes:
+      - ./src:/app/src
+      - ./artifacts:~/code/qa_platform_v2/artifacts
+      - ./external_tests:/app/external_tests
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  frontend:
+    image: node:20-slim
+    container_name: qarunner-frontend-dev
+    working_dir: /app/frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules  # 匿名卷:容器独立 node_modules,隔离宿主 darwin 二进制(避免平台冲突 + 每次 up 重装)
+    environment:
+      - VITE_BACKEND_URL=http://backend:8000
+      - VITE_USE_POLLING=true  # Forces Vite filesystem polling to work beautifully on macOS Docker volumes
+    command: sh -c "npm install && npm run dev"

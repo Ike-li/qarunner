@@ -1,0 +1,34 @@
+FROM python:3.12-slim
+WORKDIR /app
+
+# Install system dependencies (Java JRE for Allure CLI, curl/wget, unzip, git, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-21-jre-headless \
+    wget \
+    unzip \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install Allure Commandline CLI (2.24.0)
+RUN wget -q https://github.com/allure-framework/allure2/releases/download/2.24.0/allure-2.24.0.zip \
+    && unzip -q allure-2.24.0.zip -d /opt/ \
+    && ln -s /opt/allure-2.24.0/bin/allure /usr/bin/allure \
+    && rm allure-2.24.0.zip
+
+# Install uv dependency manager
+RUN pip install --no-cache-dir uv
+
+# Pre-cache dependencies from the lockfile for reproducible builds and quick startup
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project \
+    && rm -rf /root/.cache
+
+# Place the synced virtualenv first on PATH
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Expose API port
+EXPOSE 8000
+
+# Run uvicorn server with hot reloading enabled
+CMD ["uvicorn", "qarunner.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

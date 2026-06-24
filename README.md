@@ -31,6 +31,33 @@ uv run uvicorn qarunner.api.app:app --reload
 For local HTTP dev the auth cookie stays non-`Secure` (`QARUNNER_COOKIE_SECURE`
 defaults to `false`). **Set it to `true` in production** — see below.
 
+## Local development with Docker (hot reload)
+
+`docker-compose.dev.yml` runs the API and the React app as **two separate
+containers with live reload**, so edits to `src/` or `frontend/src/` take effect
+without a rebuild. Use this for day-to-day development instead of the baked
+production image.
+
+```bash
+# Secrets are optional here — the dev compose ships safe placeholders
+# (admin password "admin123"); override via a local .env if you like.
+docker compose -f docker-compose.dev.yml up
+```
+
+- **Open the app at `http://localhost:5173`** — the Vite dev server, *not* port
+  8000. The backend API stays on `:8000`, but Vite proxies `/auth`, `/runs`,
+  `/tests`, `/profiles`, `/schedules`, and `/users` to it, so the browser sees a
+  single origin and the `SameSite=Strict` auth cookie (SEC-6) still rides along.
+  Hitting `:8000` directly in dev returns `404` at `/` — that container serves no SPA.
+- **Hot reload**: the frontend uses Vite HMR (filesystem polling via
+  `VITE_USE_POLLING`, to survive the macOS Docker bind mount); the backend runs
+  `uvicorn --reload` with `WATCHFILES_FORCE_POLLING` as a fallback for when
+  inotify events don't cross the mount. `frontend/node_modules` is an anonymous
+  volume, so the container's Linux binaries never collide with the host's.
+- **Don't use a bare `docker compose up` for development** — with no `-f` flag it
+  starts the *production* `docker-compose.yml` (baked SPA on `:8000`, zero hot
+  reload).
+
 ## Production deployment (Docker Compose)
 
 The bundled `Dockerfile.platform` builds a single image that serves **both the
