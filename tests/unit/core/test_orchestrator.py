@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from qarunner.core.orchestrator import RunOrchestrator
+from qarunner.core.runners.playwright_runner import PlaywrightRunner
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.errors import UnknownRunner, UnsafeArguments, UnsafePath
@@ -36,6 +37,7 @@ def _make_orchestrator(
     """Helper to build an orchestrator wired to fakes."""
     registry = RunnerRegistry()
     registry.register(PytestRunner())
+    registry.register(PlaywrightRunner())
 
     if process_handler is None:
 
@@ -822,3 +824,62 @@ class TestWorkspaceJail:
         await orch.execute(run.id)
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.FAILED
+
+class TestPlaywrightRunnerExecution:
+    @pytest.mark.asyncio
+    async def test_playwright_runner_compilation_and_execution(self):
+        from qarunner.models import CollectResult, TestSummary
+        preset = CollectResult(
+            summary=TestSummary(
+                total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=100, pass_rate=100.0
+            ),
+            cases=[]
+        )
+        orch = _make_orchestrator(collector_preset=preset)
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            selected_files=["test_home.spec.ts"],
+            extra_args="--headed"
+        )
+        run = await orch.create(req)
+        assert run.runner == "playwright"
+
+        captured_cmd = None
+        captured_env = None
+
+        def playwright_handler(cmd, cwd, env, timeout):
+            nonlocal captured_cmd, captured_env
+            captured_cmd = cmd
+            captured_env = env
+            return ProcessResult(exit_code=0, stdout="Playwright OK", stderr="", duration_ms=100)
+
+        orch._process.handler = playwright_handler
+
+        await orch.execute(run.id)
+        
+        stored = await orch._store.get(run.id)
+        assert stored.error is None
+        assert stored.status == RunStatus.COMPLETED
+        
+        assert captured_cmd == [
+            "npx",
+            "playwright",
+            "test",
+            "--reporter=junit",
+            "--headed",
+            "test_home.spec.ts",
+        ]
+        assert captured_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"] == f"/artifacts/{run.id}/results/junit.xml"
+
+    @pytest.mark.asyncio
+    async def test_playwright_runner_unsafe_selected_file(self):
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            selected_files=["-unsafe-flag"],
+        )
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+

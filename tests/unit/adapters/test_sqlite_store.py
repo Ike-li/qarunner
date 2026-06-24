@@ -746,6 +746,33 @@ async def test_concurrent_initialize_seeds_one_admin(tmp_path) -> None:
         await s2.close()
 
 
+def test_row_to_profile_legacy() -> None:
+    from qarunner.adapters.sqlite_store import _row_to_profile
+    # A fake 12-column row resembling a legacy database row:
+    # id, name, description, tests_path, selected_files, selected_markers, extra_args, executor_mode, timeout, created_by, created_at, env_json
+    fake_row = (
+        "id-123",            # 0: id
+        "Legacy Profile",    # 1: name
+        "Desc",              # 2: description
+        "suite_a",           # 3: tests_path
+        '["f1.py"]',         # 4: selected_files
+        '["m1"]',            # 5: selected_markers
+        "--args",            # 6: extra_args
+        "subprocess",        # 7: executor_mode
+        100,                 # 8: timeout
+        "user1",             # 9: created_by
+        "2026-06-24T12:00:00Z", # 10: created_at
+        '{"ENV_VAR": "val"}' # 11: env_json
+    )
+    profile = _row_to_profile(fake_row)
+    assert profile.id == "id-123"
+    assert profile.runner == "pytest"  # Default value for legacy row
+    assert profile.selected_files == ["f1.py"]
+    assert profile.selected_markers == ["m1"]
+    assert profile.env == {"ENV_VAR": "val"}
+
+
+
 
 
 

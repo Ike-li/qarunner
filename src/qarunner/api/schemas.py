@@ -24,6 +24,7 @@ class TestProfileResponse(BaseModel):
     name: str
     description: str | None = None
     tests_path: str
+    runner: str = "pytest"
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
@@ -40,6 +41,7 @@ class TestProfileCreateRequest(BaseModel):
     name: str
     description: str | None = None
     tests_path: str
+    runner: str = "pytest"
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
@@ -54,6 +56,7 @@ class TestProfileUpdateRequest(BaseModel):
     name: str
     description: str | None = None
     tests_path: str
+    runner: str = "pytest"
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
@@ -241,3 +244,16 @@ def schedule_to_response(schedule: TestSchedule) -> TestScheduleResponse:
         created_at=schedule.created_at,
     )
 
+class LinkTestSuiteRequest(BaseModel):
+    """Payload to link a local directory path as a test suite."""
+
+    path: str
+
+
+class LinkTestSuiteResponse(BaseModel):
+    """Response of linking a local directory path."""
+
+    success: bool
+    suite_name: str
+    is_accessible: bool
+    message: str

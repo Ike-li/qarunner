@@ -1714,4 +1714,106 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
         assert resp.status_code == 404
 
 
+def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+
+    # Path to link
+    local_project = tmp_path / "my-local-project"
+    local_project.mkdir()
+
+    container = _make_container()
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        # 1. Success case
+        resp = client.post("/tests/link", json={"path": str(local_project)})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["suite_name"] == "my-local-project"
+        assert body["is_accessible"] is True
+        assert "Successfully linked" in body["message"]
+
+        # Check if symlink exists
+        symlink_path = tests_root / "my-local-project"
+        assert symlink_path.is_symlink()
+        assert symlink_path.resolve() == local_project.resolve()
+
+        # 2. Link again (tests overwrite/clear of existing symlink)
+        resp2 = client.post("/tests/link", json={"path": str(local_project)})
+        assert resp2.status_code == 200
+
+        # 3. Link non-existent directory (tests is_accessible=False branch)
+        fake_project = tmp_path / "non-existent-project"
+        resp3 = client.post("/tests/link", json={"path": str(fake_project)})
+        assert resp3.status_code == 200
+        body3 = resp3.json()
+        assert body3["success"] is True
+        assert body3["is_accessible"] is False
+        assert "is not accessible" in body3["message"]
+
+        # 4. Invalid path empty suite_name error (e.g., path is root "/")
+        resp_invalid = client.post("/tests/link", json={"path": "/"})
+        assert resp_invalid.status_code == 400
+        assert "unable to extract directory name" in resp_invalid.json()["detail"]
+
+        # 5. tests_root.mkdir exception
+        # Make is_dir return False for tests_root, and mock mkdir to raise exception
+        monkeypatch.setattr(Path, "is_dir", lambda self: False if self == tests_root else True)
+        def mock_mkdir_err(*args, **kwargs):
+            raise OSError("mkdir failed")
+        monkeypatch.setattr(Path, "mkdir", mock_mkdir_err)
+        resp_mkdir = client.post("/tests/link", json={"path": str(local_project)})
+        assert resp_mkdir.status_code == 500
+        assert "Failed to create tests_root" in resp_mkdir.json()["detail"]
+        monkeypatch.undo()
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+
+        # 6. Failed to clear existing (unlink error)
+        def mock_unlink_err(*args, **kwargs):
+            raise OSError("unlink failed")
+        monkeypatch.setattr(Path, "unlink", mock_unlink_err)
+        # Force is_symlink to return True for my-local-project to trigger unlink
+        original_is_symlink = Path.is_symlink
+        monkeypatch.setattr(Path, "is_symlink", lambda self: True if self.name == "my-local-project" else original_is_symlink(self))
+        resp_unlink = client.post("/tests/link", json={"path": str(local_project)})
+        assert resp_unlink.status_code == 500
+        assert "Failed to clear existing" in resp_unlink.json()["detail"]
+        monkeypatch.undo()
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+
+        # 7. Failed to clear existing (rmtree error for existing directory)
+        # Create a real folder under tests_root where symlink should go
+        fake_dir = tests_root / "fake_dir"
+        fake_dir.mkdir(exist_ok=True)
+        def mock_rmtree_err(*args, **kwargs):
+            raise OSError("rmtree failed")
+        monkeypatch.setattr("shutil.rmtree", mock_rmtree_err)
+        resp_rmtree = client.post("/tests/link", json={"path": "/some/path/fake_dir"})
+        assert resp_rmtree.status_code == 500
+        assert "Failed to clear existing" in resp_rmtree.json()["detail"]
+        monkeypatch.undo()
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+
+        # 8. Failed to create symlink (os.symlink error)
+        def mock_symlink_err(*args, **kwargs):
+            raise OSError("symlink failed")
+        monkeypatch.setattr("os.symlink", mock_symlink_err)
+        resp_symlink = client.post("/tests/link", json={"path": str(local_project)})
+        assert resp_symlink.status_code == 500
+        assert "Failed to create symlink" in resp_symlink.json()["detail"]
+        monkeypatch.undo()
+        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+
+        # 9. Successful rmtree clear branch (when existing entry is a real directory)
+        real_dir = tests_root / "real-dir-to-link"
+        real_dir.mkdir(exist_ok=True)
+        target_dir = tmp_path / "real-dir-to-link"
+        target_dir.mkdir(exist_ok=True)
+        resp_dir_ok = client.post("/tests/link", json={"path": str(target_dir)})
+        assert resp_dir_ok.status_code == 200
+        assert (tests_root / "real-dir-to-link").is_symlink()
+
 

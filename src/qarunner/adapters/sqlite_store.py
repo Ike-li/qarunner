@@ -87,6 +87,7 @@ _BASELINE_VERSION = 1
 # ``(N, ("ALTER TABLE ...",))`` with ``N`` strictly increasing and forward-only.
 _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
     (2, ("ALTER TABLE runs ADD COLUMN worker_node_id TEXT;",)),
+    (3, ("ALTER TABLE test_profiles ADD COLUMN runner TEXT NOT NULL DEFAULT 'pytest';",)),
 )
 
 
@@ -402,12 +403,12 @@ class SqliteStore:
         async with self._connect() as db:
             await db.execute(
                 "INSERT INTO test_profiles ("
-                "id, name, description, tests_path, selected_files, selected_markers, "
+                "id, name, description, tests_path, runner, selected_files, selected_markers, "
                 "extra_args, executor_mode, timeout, created_by, created_at, env_json"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "name=excluded.name, description=excluded.description, "
-                "tests_path=excluded.tests_path, selected_files=excluded.selected_files, "
+                "tests_path=excluded.tests_path, runner=excluded.runner, selected_files=excluded.selected_files, "
                 "selected_markers=excluded.selected_markers, extra_args=excluded.extra_args, "
                 "executor_mode=excluded.executor_mode, timeout=excluded.timeout, "
                 "created_by=excluded.created_by, created_at=excluded.created_at, "
@@ -417,6 +418,7 @@ class SqliteStore:
                     profile.name,
                     profile.description,
                     profile.tests_path,
+                    profile.runner,
                     json.dumps(profile.selected_files),
                     json.dumps(profile.selected_markers),
                     profile.extra_args,
@@ -432,7 +434,7 @@ class SqliteStore:
     async def get_profile(self, profile_id: str) -> TestProfile | None:
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, name, description, tests_path, selected_files, selected_markers, "
+                "SELECT id, name, description, tests_path, runner, selected_files, selected_markers, "
                 "extra_args, executor_mode, timeout, created_by, created_at, env_json "
                 "FROM test_profiles WHERE id = ?",
                 (profile_id,),
@@ -446,14 +448,14 @@ class SqliteStore:
         async with self._connect() as db:
             if tests_path:
                 cursor = await db.execute(
-                    "SELECT id, name, description, tests_path, selected_files, selected_markers, "
+                    "SELECT id, name, description, tests_path, runner, selected_files, selected_markers, "
                     "extra_args, executor_mode, timeout, created_by, created_at, env_json "
                     "FROM test_profiles WHERE tests_path = ? ORDER BY created_at DESC",
                     (tests_path,),
                 )
             else:
                 cursor = await db.execute(
-                    "SELECT id, name, description, tests_path, selected_files, selected_markers, "
+                    "SELECT id, name, description, tests_path, runner, selected_files, selected_markers, "
                     "extra_args, executor_mode, timeout, created_by, created_at, env_json "
                     "FROM test_profiles ORDER BY created_at DESC"
                 )
@@ -662,19 +664,42 @@ def _row_to_run(row: aiosqlite.Row) -> Run:
 
 
 def _row_to_profile(row: aiosqlite.Row) -> TestProfile:
-    env_data = json.loads(row[11]) if len(row) > 11 and row[11] else {}
+    if len(row) > 12:
+        # DB row has runner column (index 4)
+        runner_val = row[4]
+        selected_files_val = json.loads(row[5])
+        selected_markers_val = json.loads(row[6])
+        extra_args_val = row[7]
+        executor_mode_val = row[8]
+        timeout_val = row[9]
+        created_by_val = row[10]
+        created_at_val = _iso_to_dt(row[11])
+        env_data = json.loads(row[12]) if row[12] else {}
+    else:
+        # Backward compatibility for old columns count (12 columns, no runner)
+        runner_val = "pytest"
+        selected_files_val = json.loads(row[4])
+        selected_markers_val = json.loads(row[5])
+        extra_args_val = row[6]
+        executor_mode_val = row[7]
+        timeout_val = row[8]
+        created_by_val = row[9]
+        created_at_val = _iso_to_dt(row[10])
+        env_data = json.loads(row[11]) if row[11] else {}
+
     return TestProfile(
         id=row[0],
         name=row[1],
         description=row[2],
         tests_path=row[3],
-        selected_files=json.loads(row[4]),
-        selected_markers=json.loads(row[5]),
-        extra_args=row[6],
-        executor_mode=row[7],
-        timeout=row[8],
-        created_by=row[9],
-        created_at=_iso_to_dt(row[10]),
+        runner=runner_val,
+        selected_files=selected_files_val,
+        selected_markers=selected_markers_val,
+        extra_args=extra_args_val,
+        executor_mode=executor_mode_val,
+        timeout=timeout_val,
+        created_by=created_by_val,
+        created_at=created_at_val,
         env=env_data,
     )
 

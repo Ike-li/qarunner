@@ -23,6 +23,7 @@ from qarunner.core.auth import decode_access_token
 from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.profile_service import ProfileService
+from qarunner.core.runners.playwright_runner import PlaywrightRunner
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.core.schedule_service import ScheduleService
@@ -60,6 +61,7 @@ def create_container(settings: Settings | None = None) -> Container:
 
     registry = RunnerRegistry()
     registry.register(PytestRunner())
+    registry.register(PlaywrightRunner())
 
     orchestrator = RunOrchestrator(
         registry=registry,

@@ -60,6 +60,7 @@ class TestProfile(BaseModel):
     name: str
     description: str | None = None
     tests_path: str
+    runner: str = "pytest"
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""

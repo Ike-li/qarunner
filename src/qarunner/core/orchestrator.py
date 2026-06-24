@@ -58,7 +58,7 @@ _JAIL_IGNORE_NAMES = frozenset(
 )
 
 
-def _compile_args(req: RunRequest, tests_dir: str) -> list[str]:
+def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") -> list[str]:
     """Compile a validated pytest argv list from *req*.
 
     Rejects argv-injection vectors: dangerous flags supplied via ``args`` or
@@ -66,6 +66,18 @@ def _compile_args(req: RunRequest, tests_dir: str) -> list[str]:
     start with ``-``, or are not ``.py`` files. Raises ``UnsafeArguments``
     (a ``UnsafePath`` subclass) on violation.
     """
+    # -- playwright branch --
+    if runner_name == "playwright":
+        extra_tokens = shlex.split(req.extra_args) if req.extra_args.strip() else []
+        compiled: list[str] = list(req.args)
+        compiled.extend(extra_tokens)
+        for selected in req.selected_files:
+            if selected.startswith("-"):
+                raise UnsafeArguments(f"selected file {selected!r} must not start with '-'")
+            safe_subpath(tests_dir, selected)
+            compiled.append(selected)
+        return compiled
+
     extra_tokens = shlex.split(req.extra_args) if req.extra_args.strip() else []
 
     for token in list(req.args) + extra_tokens:
@@ -173,7 +185,7 @@ class RunOrchestrator:
         run_id = self._ids.new_id()
         now = self._clock.now()
 
-        compiled_args = _compile_args(req, tests_dir)
+        compiled_args = _compile_args(req, tests_dir, runner_name=runner.name)
         safe_env = _sanitize_env(req.env)
 
         run = Run(
@@ -291,10 +303,15 @@ class RunOrchestrator:
             if run.executor_mode == "docker" and self._process_docker is not None:
                 runner_to_use = self._process_docker
 
+            # playwright: JUnit output via env var, not CLI flag
+            proc_env = dict(run.env)
+            if runner.name == "playwright":
+                proc_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"] = f"{results_dir}/junit.xml"
+
             proc: ProcessResult = await runner_to_use.run(
                 cmd,
                 cwd=exec_cwd,
-                env=run.env,
+                env=proc_env,
                 timeout=timeout,
                 stdout_file=stdout_file,
                 stderr_file=stderr_file,

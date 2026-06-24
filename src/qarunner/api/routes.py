@@ -26,6 +26,8 @@ from qarunner.api.schemas import (
     UserCreateRequest,
     UserListResponse,
     UserResponse,
+    LinkTestSuiteRequest,
+    LinkTestSuiteResponse,
     profile_to_response,
     run_to_response,
     schedule_to_response,
@@ -258,6 +260,78 @@ async def list_tests(
         return paths
 
     return await asyncio.to_thread(_scan_tests)
+
+
+@router.post("/tests/link", response_model=LinkTestSuiteResponse)
+async def link_test_suite(
+    request: Request,
+    payload: LinkTestSuiteRequest,
+    _current_user: User = Depends(get_current_user),
+) -> LinkTestSuiteResponse:
+    """Create a symlink under tests_root pointing to the specified local directory path."""
+    import os
+    import shutil
+    cfg = request.app.state.container.settings
+    tests_root = Path(cfg.tests_root).resolve()
+
+    if not tests_root.is_dir():
+        try:
+            tests_root.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create tests_root directory: {str(e)}",
+            )
+
+    target_path = Path(payload.path)
+    suite_name = target_path.name
+    if not suite_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path: unable to extract directory name.",
+        )
+
+    link_path = tests_root / suite_name
+
+    # Clear existing if it exists
+    if link_path.exists() or link_path.is_symlink():
+        try:
+            if link_path.is_symlink() or link_path.is_file():
+                link_path.unlink()
+            else:
+                shutil.rmtree(link_path)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to clear existing test suite entry: {str(e)}",
+            )
+
+    try:
+        os.symlink(payload.path, link_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create symlink: {str(e)}",
+        )
+
+    # Verify if target path is resolved and is an accessible directory
+    is_accessible = link_path.is_dir()
+
+    if is_accessible:
+        message = f"Successfully linked '{suite_name}'!"
+    else:
+        message = (
+            f"Symlink created under external_tests, but the target path '{payload.path}' "
+            "is not accessible in this container environment. "
+            "Please make sure you have mapped this volume inside docker-compose.yml."
+        )
+
+    return LinkTestSuiteResponse(
+        success=True,
+        suite_name=suite_name,
+        is_accessible=is_accessible,
+        message=message,
+    )
 
 
 @router.get("/tests/{suite_name}/tree")

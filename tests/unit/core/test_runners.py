@@ -3,9 +3,35 @@
 import pytest
 
 from qarunner.core.runners.base import BuildContext
+from qarunner.core.runners.playwright_runner import PlaywrightRunner
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.errors import UnknownRunner
+
+
+class TestPlaywrightRunner:
+    """PlaywrightRunner.build_command produces correct CLI args."""
+
+    def test_name(self):
+        runner = PlaywrightRunner()
+        assert runner.name == "playwright"
+
+    def test_basic_command(self):
+        runner = PlaywrightRunner()
+        ctx = BuildContext(
+            tests_dir="/work/tests",
+            results_dir="/artifacts/run-001/results",
+            executable="npx",
+            args=["tests/test_demo.spec.ts"],
+        )
+        cmd = runner.build_command(ctx)
+        assert cmd == [
+            "npx",
+            "playwright",
+            "test",
+            "--reporter=junit",
+            "tests/test_demo.spec.ts",
+        ]
 
 
 class TestPytestRunner:
