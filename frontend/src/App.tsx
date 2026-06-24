@@ -13,6 +13,8 @@ import { ProjectSidebar } from './components/ProjectSidebar'
 import { RunsTable } from './components/RunsTable'
 import { RunDetailsDrawer } from './components/RunDetailsDrawer'
 import { FullscreenTerminalOverlay } from './components/FullscreenTerminalOverlay'
+import { FullscreenReportOverlay } from './components/FullscreenReportOverlay'
+
 import { ScheduleModal } from './components/ScheduleModal'
 import { UserManagementModal } from './components/UserManagementModal'
 
@@ -42,7 +44,10 @@ export default function App() {
     setLogSearchQuery,
     isTerminalFullscreen,
     setIsTerminalFullscreen,
+    isReportFullscreen,
+    setIsReportFullscreen,
     isWordWrapEnabled,
+
     setIsWordWrapEnabled,
     isAutoScrollEnabled,
     setIsAutoScrollEnabled,
@@ -128,7 +133,7 @@ export default function App() {
 
   // Fullscreen terminal element ref (UI prefs live in useTerminalView)
   const fullscreenTerminalRef = useRef<HTMLDivElement>(null)
-  const [isIframeLoading, setIsIframeLoading] = useState<boolean>(true)
+
 
   // Reset profile editing states when modal is closed
   useEffect(() => {
@@ -1005,14 +1010,10 @@ export default function App() {
       setDrawerTab('logs')
       setLogSearchQuery('')
       setIsTerminalFullscreen(false)
-      setIsIframeLoading(true)
     }
   }, [selectedRunId])
 
-  // Reset iframe loading state when drawer tab changes to ensure smooth loading transitions
-  useEffect(() => {
-    setIsIframeLoading(true)
-  }, [drawerTab])
+
 
   // Create refs to capture latest state values for starvation-free polling
   const runsRef = useRef(runs)
@@ -1261,18 +1262,19 @@ export default function App() {
         isTerminalHeightExpanded={isTerminalHeightExpanded}
         setIsTerminalHeightExpanded={setIsTerminalHeightExpanded}
         setIsTerminalFullscreen={setIsTerminalFullscreen}
+        setIsReportFullscreen={setIsReportFullscreen}
+
         copySuccess={copySuccess}
         copyToClipboard={copyToClipboard}
         downloadLogs={downloadLogs}
         renderFormattedLogs={renderFormattedLogs}
-        formatDate={formatDate}
-        isIframeLoading={isIframeLoading}
-        setIsIframeLoading={setIsIframeLoading}
+         formatDate={formatDate}
         terminalRef={terminalRef}
       />
 
       {/* Fullscreen Terminal Overlay */}
       {isTerminalFullscreen && selectedRun && (
+
         <FullscreenTerminalOverlay
           t={t}
           lang={lang}
@@ -1302,6 +1304,16 @@ export default function App() {
           fullscreenTerminalRef={fullscreenTerminalRef}
         />
       )}
+
+      {/* Fullscreen Report Overlay */}
+      {isReportFullscreen && selectedRun && (
+        <FullscreenReportOverlay
+          lang={lang}
+          selectedRun={selectedRun}
+          setIsReportFullscreen={setIsReportFullscreen}
+        />
+      )}
+
 
       {/* Modal: Trigger Run */}
       {isTriggerModalOpen && (

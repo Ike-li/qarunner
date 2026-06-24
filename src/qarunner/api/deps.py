@@ -75,6 +75,7 @@ def create_container(settings: Settings | None = None) -> Container:
         executable=executable,
         process_docker=docker_process,
         default_timeout=cfg.default_timeout_seconds,
+        worker_node_id=cfg.worker_node_id,
     )
 
     schedule_port = ApschedulerSchedulePort(store=store, orchestrator=orchestrator)

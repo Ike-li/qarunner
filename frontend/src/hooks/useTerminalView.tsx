@@ -22,10 +22,12 @@ export function useTerminalView() {
   const [terminalFontSize, setTerminalFontSize] = useState<number>(13)
   const [logSearchQuery, setLogSearchQuery] = useState<string>('')
 
-  // Fullscreen terminal features (Word Wrap, Auto Scroll lock)
+  // Fullscreen terminal & report features (Word Wrap, Auto Scroll lock, Fullscreen Report)
   const [isTerminalFullscreen, setIsTerminalFullscreen] = useState<boolean>(false)
+  const [isReportFullscreen, setIsReportFullscreen] = useState<boolean>(false)
   const [isWordWrapEnabled, setIsWordWrapEnabled] = useState<boolean>(true)
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState<boolean>(true)
+
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
@@ -89,6 +91,8 @@ export function useTerminalView() {
     setLogSearchQuery,
     isTerminalFullscreen,
     setIsTerminalFullscreen,
+    isReportFullscreen,
+    setIsReportFullscreen,
     isWordWrapEnabled,
     setIsWordWrapEnabled,
     isAutoScrollEnabled,

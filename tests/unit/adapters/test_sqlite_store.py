@@ -400,12 +400,14 @@ async def _user_version(store: SqliteStore) -> int:
 
 async def test_fresh_initialize_records_baseline_version(tmp_path) -> None:
     """ARCH-8: a fresh database is stamped with the baseline schema version."""
-    from qarunner.adapters.sqlite_store import _BASELINE_VERSION
+    from qarunner.adapters.sqlite_store import _BASELINE_VERSION, _MIGRATIONS
 
     store = SqliteStore(str(tmp_path / "versioned.db"))
     await store.initialize()
-    assert await _user_version(store) == _BASELINE_VERSION
+    expected_version = max([_BASELINE_VERSION] + [ver for ver, _ in _MIGRATIONS])
+    assert await _user_version(store) == expected_version
     await store.close()
+
 
 
 async def test_forward_migration_runs_once_and_records_version(tmp_path, monkeypatch) -> None:
@@ -609,6 +611,26 @@ async def test_mark_interrupted_runs(store: SqliteStore) -> None:
 async def test_mark_interrupted_runs_returns_zero_when_none(store: SqliteStore) -> None:
     await store.save(_make_run(id="c1", status=RunStatus.COMPLETED))
     assert await store.mark_interrupted_runs() == 0
+
+
+async def test_mark_interrupted_runs_with_worker_node_id(store: SqliteStore) -> None:
+    await store.save(_make_run(id="q1", status=RunStatus.QUEUED, worker_node_id="node-a"))
+    await store.save(_make_run(id="q2", status=RunStatus.QUEUED, worker_node_id="node-b"))
+    await store.save(_make_run(id="r1", status=RunStatus.RUNNING, worker_node_id="node-a"))
+    await store.save(_make_run(id="r2", status=RunStatus.RUNNING, worker_node_id="node-b"))
+
+    # Fail runs on node-a only
+    count = await store.mark_interrupted_runs(worker_node_id="node-a")
+    assert count == 2
+
+    # Verify node-a runs became FAILED
+    assert (await store.get("q1")).status == RunStatus.FAILED
+    assert (await store.get("r1")).status == RunStatus.FAILED
+
+    # Verify node-b runs are unaffected
+    assert (await store.get("q2")).status == RunStatus.QUEUED
+    assert (await store.get("r2")).status == RunStatus.RUNNING
+
 
 
 async def test_claim_schedule_run_leader_election(store: SqliteStore) -> None:

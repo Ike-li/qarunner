@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
     healthcheck:
       # Readiness: /health returns 200 only when the DB round-trips (DEP-4).
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3

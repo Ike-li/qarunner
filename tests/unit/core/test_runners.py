@@ -28,6 +28,8 @@ class TestPytestRunner:
             "/usr/bin/python3",
             "-m",
             "pytest",
+            "-o",
+            "addopts=",
             "--junitxml=/artifacts/run-001/results/junit.xml",
             "--alluredir=/artifacts/run-001/results/allure-results",
         ]

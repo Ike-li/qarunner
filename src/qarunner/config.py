@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import field_validator
+import socket
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
 
 # Known placeholder / weak values that must never reach a running instance.
 # Settings refuses to start if QARUNNER_SECRET_KEY / QARUNNER_ADMIN_PASSWORD match
@@ -69,6 +71,10 @@ class Settings(BaseSettings):
     # still executing after this are cancelled (and recovered as FAILED on the
     # next start by crash_recovery_on_startup), so the process can exit promptly.
     shutdown_drain_timeout_seconds: float = 30.0
+    worker_node_id: str = Field(default_factory=socket.gethostname)
+    allow_subprocess_for_non_admins: bool = True
+
+
 
     @field_validator("secret_key")
     @classmethod

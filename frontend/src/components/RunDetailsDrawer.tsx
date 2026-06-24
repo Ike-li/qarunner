@@ -3,6 +3,7 @@ import {
   ChevronsLeft, ChevronsRight, ChevronUp, Clock, Copy, Cpu, Download,
   ExternalLink, Maximize2, RotateCw, Search, Terminal, X, XCircle, ZoomIn, ZoomOut,
 } from 'lucide-react'
+import { useState } from 'react'
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react'
 import styles from '../App.module.css'
 import { useDialogA11y } from '../hooks/useDialogA11y'
@@ -35,13 +36,14 @@ interface RunDetailsDrawerProps {
   isTerminalHeightExpanded: boolean
   setIsTerminalHeightExpanded: (value: boolean) => void
   setIsTerminalFullscreen: (value: boolean) => void
+  setIsReportFullscreen: (value: boolean) => void
   copySuccess: boolean
+
+
   copyToClipboard: (text: string) => void
   downloadLogs: (runId: string) => void
   renderFormattedLogs: (text: string) => ReactNode
   formatDate: (isoStr: string | null) => string
-  isIframeLoading: boolean
-  setIsIframeLoading: (value: boolean) => void
   terminalRef: RefObject<HTMLDivElement>
 }
 
@@ -75,15 +77,20 @@ export function RunDetailsDrawer({
   isTerminalHeightExpanded,
   setIsTerminalHeightExpanded,
   setIsTerminalFullscreen,
+  setIsReportFullscreen,
   copySuccess,
+
+
   copyToClipboard,
   downloadLogs,
   renderFormattedLogs,
   formatDate,
-  isIframeLoading,
-  setIsIframeLoading,
   terminalRef,
 }: RunDetailsDrawerProps) {
+  const [isTopCollapsed, setIsTopCollapsed] = useState(false)
+
+
+
   const dialogRef = useDialogA11y({
     isOpen: !!selectedRun,
     onClose: () => {
@@ -115,6 +122,15 @@ export function RunDetailsDrawer({
             <button
               className={styles.drawerExpandButton}
               tabIndex={selectedRun ? undefined : -1}
+              onClick={() => setIsTopCollapsed(!isTopCollapsed)}
+              title={isTopCollapsed ? (lang === 'zh' ? "显示顶部详情" : "Show Top Details") : (lang === 'zh' ? "折叠顶部详情" : "Collapse Top Details")}
+              aria-label={isTopCollapsed ? (lang === 'zh' ? "显示顶部详情" : "Show Top Details") : (lang === 'zh' ? "折叠顶部详情" : "Collapse Top Details")}
+            >
+              {isTopCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+            </button>
+            <button
+              className={styles.drawerExpandButton}
+              tabIndex={selectedRun ? undefined : -1}
               onClick={() => setIsDrawerExpanded(!isDrawerExpanded)}
               title={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
               aria-label={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
@@ -138,62 +154,66 @@ export function RunDetailsDrawer({
         {selectedRun && (
           <div className={styles.drawerContent}>
             {/* Top Big Status Badge */}
-            <div className={styles.drawerStatusSection}>
-              <span className={`${styles.drawerBadge} ${styles[`badge_${selectedRun.status}`]}`}>
-                {selectedRun.status === 'queued' && <RotateCw size={16} className={styles.spinIcon} />}
-                {selectedRun.status === 'running' && <Activity size={16} className={styles.pulseIcon} />}
-                {selectedRun.status === 'completed' && selectedRun.passed && <CheckCircle2 size={16} />}
-                {selectedRun.status === 'completed' && !selectedRun.passed && <XCircle size={16} />}
-                {selectedRun.status === 'failed' && <XCircle size={16} />}
-                {selectedRun.status === 'timeout' && <Clock size={16} />}
-                <span>{t(`status_${selectedRun.status}`).toUpperCase()}</span>
-              </span>
-              {selectedRun.status === 'completed' && (
-                <span className={selectedRun.passed ? styles.textSuccessGlow : styles.textDangerGlow}>
-                  {selectedRun.passed ? t('allTestsPassed') : t('suiteFailed')}
+            {!isTopCollapsed && (
+              <div className={styles.drawerStatusSection}>
+                <span className={`${styles.drawerBadge} ${styles[`badge_${selectedRun.status}`]}`}>
+                  {selectedRun.status === 'queued' && <RotateCw size={16} className={styles.spinIcon} />}
+                  {selectedRun.status === 'running' && <Activity size={16} className={styles.pulseIcon} />}
+                  {selectedRun.status === 'completed' && selectedRun.passed && <CheckCircle2 size={16} />}
+                  {selectedRun.status === 'completed' && !selectedRun.passed && <XCircle size={16} />}
+                  {selectedRun.status === 'failed' && <XCircle size={16} />}
+                  {selectedRun.status === 'timeout' && <Clock size={16} />}
+                  <span>{t(`status_${selectedRun.status}`).toUpperCase()}</span>
                 </span>
-              )}
-            </div>
+                {selectedRun.status === 'completed' && (
+                  <span className={selectedRun.passed ? styles.textSuccessGlow : styles.textDangerGlow}>
+                    {selectedRun.passed ? t('allTestsPassed') : t('suiteFailed')}
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Info Matrix grid */}
-            <div className={styles.infoGrid}>
-              <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('runner')}</span>
-                <span className={styles.infoValue}>{selectedRun.runner}</span>
+            {!isTopCollapsed && (
+              <div className={styles.infoGrid}>
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>{t('runner')}</span>
+                  <span className={styles.infoValue}>{selectedRun.runner}</span>
+                </div>
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>{t('exitCode')}</span>
+                  <span className={styles.infoValue}>
+                    {selectedRun.exit_code !== null ? selectedRun.exit_code : '-'}
+                  </span>
+                </div>
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>{t('triggeredBy')}</span>
+                  <span className={`${styles.ownerBadge} ${
+                    selectedRun.created_by === 'system' ? styles.ownerBadge_system :
+                    selectedRun.created_by === 'admin' ? styles.ownerBadge_admin : styles.ownerBadge_user
+                  }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
+                    {selectedRun.created_by}
+                  </span>
+                </div>
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>{t('environment')}</span>
+                  <span className={`${styles.engineBadge} ${
+                    selectedRun.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
+                  }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
+                    {selectedRun.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
+                    <span>{t(`engine_${selectedRun.executor_mode}`)}</span>
+                  </span>
+                </div>
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>{t('created')}</span>
+                  <span className={styles.infoValue}>{formatDate(selectedRun.created_at)}</span>
+                </div>
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>{t('finished')}</span>
+                  <span className={styles.infoValue}>{formatDate(selectedRun.finished_at)}</span>
+                </div>
               </div>
-              <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('exitCode')}</span>
-                <span className={styles.infoValue}>
-                  {selectedRun.exit_code !== null ? selectedRun.exit_code : '-'}
-                </span>
-              </div>
-              <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('triggeredBy')}</span>
-                <span className={`${styles.ownerBadge} ${
-                  selectedRun.created_by === 'system' ? styles.ownerBadge_system :
-                  selectedRun.created_by === 'admin' ? styles.ownerBadge_admin : styles.ownerBadge_user
-                }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
-                  {selectedRun.created_by}
-                </span>
-              </div>
-              <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('environment')}</span>
-                <span className={`${styles.engineBadge} ${
-                  selectedRun.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
-                }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
-                  {selectedRun.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
-                  <span>{t(`engine_${selectedRun.executor_mode}`)}</span>
-                </span>
-              </div>
-              <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('created')}</span>
-                <span className={styles.infoValue}>{formatDate(selectedRun.created_at)}</span>
-              </div>
-              <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('finished')}</span>
-                <span className={styles.infoValue}>{formatDate(selectedRun.finished_at)}</span>
-              </div>
-            </div>
+            )}
 
             {/* Tab Selector Segmented Control */}
             <div className={styles.drawerTabs}>
@@ -426,37 +446,36 @@ export function RunDetailsDrawer({
               <>
                 {/* Dynamic summary chart block */}
                 {selectedRun.summary ? (
-                  <div className={styles.summaryBreakdown}>
-                    <h4>{t('testOutcomes')}</h4>
-                    <div className={styles.summaryGrid}>
-                      <div className={styles.summaryBox} style={{ borderLeftColor: '#10b981' }}>
-                        <span className={styles.summaryBoxLabel}>{t('passed')}</span>
-                        <span className={`${styles.summaryBoxValue} ${styles.textPassed}`}>
-                          {selectedRun.summary.passed}
-                        </span>
-                      </div>
-                      <div className={styles.summaryBox} style={{ borderLeftColor: '#ef4444' }}>
-                        <span className={styles.summaryBoxLabel}>{t('failed')}</span>
-                        <span className={`${styles.summaryBoxValue} ${styles.textFailed}`}>
-                          {selectedRun.summary.failed}
-                        </span>
-                      </div>
-                      <div className={styles.summaryBox} style={{ borderLeftColor: '#f59e0b' }}>
-                        <span className={styles.summaryBoxLabel}>{t('error')}</span>
-                        <span className={`${styles.summaryBoxValue} ${styles.textError}`}>
-                          {selectedRun.summary.error}
-                        </span>
-                      </div>
-                      <div className={styles.summaryBox} style={{ borderLeftColor: '#6b7280' }}>
-                        <span className={styles.summaryBoxLabel}>{t('skipped')}</span>
-                        <span className={`${styles.summaryBoxValue} ${styles.textSkipped}`}>
-                          {selectedRun.summary.skipped}
-                        </span>
-                      </div>
+                  <div className={styles.compactSummaryBar}>
+                    <div className={styles.compactSummaryMetrics}>
+                      <span className={`${styles.compactMetric} ${styles.compactMetricPassed}`}>
+                        <CheckCircle2 size={12} />
+                        <span>{t('passed')}:</span>
+                        <strong>{selectedRun.summary.passed}</strong>
+                      </span>
+                      <span className={`${styles.compactMetric} ${styles.compactMetricFailed}`}>
+                        <XCircle size={12} />
+                        <span>{t('failed')}:</span>
+                        <strong>{selectedRun.summary.failed}</strong>
+                      </span>
+                      <span className={`${styles.compactMetric} ${styles.compactMetricError}`}>
+                        <AlertTriangle size={12} />
+                        <span>{t('error')}:</span>
+                        <strong>{selectedRun.summary.error}</strong>
+                      </span>
+                      <span className={`${styles.compactMetric} ${styles.compactMetricSkipped}`}>
+                        <Clock size={12} />
+                        <span>{t('skipped')}:</span>
+                        <strong>{selectedRun.summary.skipped}</strong>
+                      </span>
+                      <span className={styles.compactMetricDuration}>
+                        <Clock size={12} />
+                        <span>{t('durationLabel')}: {formatDuration(selectedRun.summary.duration_ms)}</span>
+                      </span>
                     </div>
 
                     {/* Multi-segmented single bar chart */}
-                    <div className={styles.segmentBar}>
+                    <div className={styles.compactSegmentBar}>
                       {selectedRun.summary.passed > 0 && (
                         <div 
                           className={styles.segmentPassed} 
@@ -486,10 +505,6 @@ export function RunDetailsDrawer({
                         ></div>
                       )}
                     </div>
-                    <div className={styles.durationBreakdown}>
-                      <Clock size={14} />
-                      <span>{t('durationLabel')}: {formatDuration(selectedRun.summary.duration_ms)}</span>
-                    </div>
                   </div>
                 ) : (
                   <div className={styles.summaryPlaceholder}>
@@ -499,42 +514,31 @@ export function RunDetailsDrawer({
                   </div>
                 )}
 
-                {/* Action: Open Allure Report (Inline Iframe Integration) */}
+                {/* Premium Allure Report Portal Actions */}
                 {selectedRun.report?.html_generated && selectedRun.report?.allure_report_file ? (
-                  <div className={styles.reportIframeContainer}>
-                    <div className={styles.reportIframeHeader}>
-                      <div className={styles.reportIframeTitle}>
-                        <BarChart3 size={14} style={{ color: '#a855f7' }} />
-                        <span>{lang === 'zh' ? 'Allure 交互式测试报告' : 'Allure Interactive Test Report'}</span>
-                      </div>
-                      <div className={styles.reportIframeHeaderActions}>
-                        <a 
-                          href={`/runs/${selectedRun.id}/report`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={styles.terminalCopyButton}
-                          style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem' }}
-                          title={lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
-                        >
-                          <ExternalLink size={10} />
-                          <span>{lang === 'zh' ? '新窗口打开' : 'New Window'}</span>
-                        </a>
-                      </div>
+                  <div className={styles.reportPortalCardCompact}>
+                    <div className={styles.portalActions} style={{ marginTop: 0 }}>
+                      <button
+                        type="button"
+                        className={styles.portalBtnPrimary}
+                        onClick={() => setIsReportFullscreen(true)}
+                        title={lang === 'zh' ? '全屏查看测试报告' : 'View Test Report in Fullscreen'}
+                      >
+                        <Maximize2 size={14} />
+                        <span>{lang === 'zh' ? '全屏查看报告' : 'Fullscreen Report'}</span>
+                      </button>
+
+                      <a 
+                        href={`/runs/${selectedRun.id}/report`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={styles.portalBtnSecondary}
+                        title={lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
+                      >
+                        <ExternalLink size={14} />
+                        <span>{lang === 'zh' ? '在新窗口打开' : 'Open in New Window'}</span>
+                      </a>
                     </div>
-
-                    {isIframeLoading && (
-                      <div className={styles.reportIframeLoading}>
-                        <RotateCw size={24} className={styles.spinIcon} style={{ color: '#06b6d4' }} />
-                        <span>{lang === 'zh' ? '正在载入测试报告资源...' : 'Loading Allure report resources...'}</span>
-                      </div>
-                    )}
-
-                    <iframe
-                      src={`/runs/${selectedRun.id}/report`}
-                      className={styles.reportIframe}
-                      onLoad={() => setIsIframeLoading(false)}
-                      title="Allure Report"
-                    />
                   </div>
                 ) : (
                   <div className={styles.reportPlaceholder}>

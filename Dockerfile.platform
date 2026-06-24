@@ -30,10 +30,12 @@ RUN wget -q https://github.com/allure-framework/allure2/releases/download/2.24.0
 # `uv sync --frozen` installs the exact pinned versions and fails if the lock is
 # stale, instead of letting `pip install .` re-resolve bare specifiers.
 COPY pyproject.toml uv.lock ./
-COPY src/ ./src/
 RUN pip install --no-cache-dir uv \
-    && uv sync --frozen --no-dev \
+    && uv sync --frozen --no-dev --no-install-project \
     && rm -rf /root/.cache
+COPY src/ ./src/
+RUN uv sync --frozen --no-dev
+
 # Put the synced virtualenv first on PATH so CMD's uvicorn resolves to it.
 ENV PATH="/app/.venv/bin:$PATH"
 

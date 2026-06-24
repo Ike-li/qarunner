@@ -166,4 +166,6 @@ class Run(BaseModel):
     finished_at: datetime | None = None
     env: dict[str, str] = Field(default_factory=dict)
     locked: bool = False
+    worker_node_id: str | None = None
+
 

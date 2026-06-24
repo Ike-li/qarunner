@@ -17,6 +17,8 @@ class PytestRunner:
             ctx.executable,
             "-m",
             "pytest",
+            "-o",
+            "addopts=",
             f"--junitxml={ctx.results_dir}/junit.xml",
             f"--alluredir={ctx.results_dir}/allure-results",
         ]

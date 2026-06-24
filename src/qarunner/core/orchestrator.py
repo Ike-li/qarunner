@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shlex
 import sys
@@ -141,6 +142,7 @@ class RunOrchestrator:
         executable: str,
         process_docker: ProcessRunner | None = None,
         default_timeout: int = 1800,
+        worker_node_id: str = "default-node",
     ) -> None:
         self._registry = registry
         self._store = store
@@ -155,6 +157,7 @@ class RunOrchestrator:
         self._artifacts_root = artifacts_root
         self._executable = executable or sys.executable
         self._default_timeout = default_timeout
+        self._worker_node_id = worker_node_id
 
     # ── create ────────────────────────────────────────────────────────────
 
@@ -185,6 +188,7 @@ class RunOrchestrator:
             executor_mode=req.executor_mode,
             created_at=now,
             env=safe_env,
+            worker_node_id=self._worker_node_id,
         )
         await self._store.save(run)
 
@@ -249,7 +253,8 @@ class RunOrchestrator:
                     return to_ignore
 
                 if Path(tests_dir).exists():
-                    shutil.copytree(
+                    await asyncio.to_thread(
+                        shutil.copytree,
                         tests_dir,
                         jail_dir,
                         symlinks=True,
@@ -298,7 +303,9 @@ class RunOrchestrator:
 
 
             # 4. Collect results (always)
-            collected: CollectResult | None = self._collector.collect(results_dir)
+            collected: CollectResult | None = await asyncio.to_thread(
+                self._collector.collect, results_dir
+            )
 
             # 5. Generate report (never let failures propagate)
             report: ReportRef = await self._reporter.generate(
@@ -344,8 +351,9 @@ class RunOrchestrator:
         finally:
             if "jail_created" in locals() and jail_created:
                 try:
-                    import shutil
-                    shutil.rmtree(jail_dir, ignore_errors=True)
+                    await asyncio.to_thread(
+                        shutil.rmtree, jail_dir, ignore_errors=True
+                    )
                     logger.info("Workspace Jail cleaned up at %s", jail_dir)
                 except Exception as clean_exc:
                     logger.warning(

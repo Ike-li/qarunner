@@ -11,6 +11,7 @@ clock is injected so lock expiry is deterministic under test.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -44,7 +45,8 @@ class LoginThrottle:
     threshold: int = 5
     base_seconds: float = 60.0
     max_seconds: float = 900.0
-    _attempts: dict[str, _Attempt] = field(default_factory=dict)
+    # Bounded to 10,000 identities to prevent memory-exhaustion (DoS)
+    _attempts: OrderedDict[str, _Attempt] = field(default_factory=OrderedDict)
 
     def check(self, key: str) -> None:
         """Raise ``LoginLockedOut`` if *key* is currently locked.
@@ -53,7 +55,13 @@ class LoginThrottle:
         prior lockout count retained) so the next attempt starts fresh.
         """
         attempt = self._attempts.get(key)
-        if attempt is None or attempt.locked_until == 0.0:
+        if attempt is None:
+            return
+        
+        # Move key to end to mark as recently used
+        self._attempts.move_to_end(key)
+
+        if attempt.locked_until == 0.0:
             return
         remaining = attempt.locked_until - self.clock.now().timestamp()
         if remaining > 0:
@@ -63,7 +71,16 @@ class LoginThrottle:
 
     def record_failure(self, key: str) -> None:
         """Count a failed attempt for *key*, locking it once at the threshold."""
-        attempt = self._attempts.setdefault(key, _Attempt())
+        attempt = self._attempts.get(key)
+        if attempt is None:
+            # Enforce max cap of 10,000 to prevent memory-exhaustion DoS
+            if len(self._attempts) >= 10000:
+                self._attempts.popitem(last=False)  # discard oldest (LRU)
+            attempt = _Attempt()
+            self._attempts[key] = attempt
+        else:
+            self._attempts.move_to_end(key)
+
         attempt.failures += 1
         if attempt.failures >= self.threshold:
             window = min(self.base_seconds * (2**attempt.lockouts), self.max_seconds)
@@ -74,3 +91,4 @@ class LoginThrottle:
     def record_success(self, key: str) -> None:
         """Clear all failure/lock state for *key* after a successful login."""
         self._attempts.pop(key, None)
+

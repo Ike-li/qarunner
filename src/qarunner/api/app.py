@@ -29,7 +29,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # worker killing runs still executing in its siblings.
     recover = getattr(container.store, "mark_interrupted_runs", None)
     if settings.crash_recovery_on_startup and recover is not None:
-        interrupted = await recover()
+        interrupted = await recover(worker_node_id=settings.worker_node_id)
+
         if interrupted:
             logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
     await container.scheduler.start()

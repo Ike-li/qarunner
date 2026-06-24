@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -248,12 +249,15 @@ async def list_tests(
     if not tests_root.is_dir():
         return []
 
-    paths: list[str] = []
-    for entry in tests_root.iterdir():
-        if entry.is_dir() and not entry.name.startswith(".") and not entry.name.startswith("__"):
-            paths.append(entry.name)
-    paths.sort()
-    return paths
+    def _scan_tests() -> list[str]:
+        paths: list[str] = []
+        for entry in tests_root.iterdir():
+            if entry.is_dir() and not entry.name.startswith(".") and not entry.name.startswith("__"):
+                paths.append(entry.name)
+        paths.sort()
+        return paths
+
+    return await asyncio.to_thread(_scan_tests)
 
 
 @router.get("/tests/{suite_name}/tree")
@@ -306,7 +310,7 @@ async def get_test_tree(
             logger.warning("Failed to scan test directory %s", current_path, exc_info=True)
         return nodes
 
-    return walk_dir(suite_dir, suite_dir)
+    return await asyncio.to_thread(walk_dir, suite_dir, suite_dir)
 
 
 @router.get("/tests/{suite_name}/markers")
@@ -328,30 +332,32 @@ async def get_test_markers(
     if not suite_dir.is_dir():
         return []
 
-    markers = set()
-    for py_file in suite_dir.glob("**/*.py"):
-        if py_file.name.startswith(".") or py_file.name.startswith("__"):
-            continue
-        try:
-            content = py_file.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(content, filename=str(py_file))
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-                    for decorator in node.decorator_list:
-                        dec_node = decorator
-                        if isinstance(dec_node, ast.Call):
-                            dec_node = dec_node.func
+    def _parse_markers() -> list[str]:
+        markers = set()
+        for py_file in suite_dir.glob("**/*.py"):
+            if py_file.name.startswith(".") or py_file.name.startswith("__"):
+                continue
+            try:
+                content = py_file.read_text(encoding="utf-8", errors="replace")
+                tree = ast.parse(content, filename=str(py_file))
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                        for decorator in node.decorator_list:
+                            dec_node = decorator
+                            if isinstance(dec_node, ast.Call):
+                                dec_node = dec_node.func
 
-                        if isinstance(dec_node, ast.Attribute) and dec_node.attr != "mark":
-                            inner = dec_node.value
-                            if isinstance(inner, ast.Attribute) and inner.attr == "mark":
-                                val_inner = inner.value
-                                if isinstance(val_inner, ast.Name) and val_inner.id == "pytest":
-                                    markers.add(dec_node.attr)
-        except (OSError, SyntaxError, ValueError):
-            logger.warning("Failed to parse markers from %s", py_file, exc_info=True)
+                            if isinstance(dec_node, ast.Attribute) and dec_node.attr != "mark":
+                                inner = dec_node.value
+                                if isinstance(inner, ast.Attribute) and inner.attr == "mark":
+                                    val_inner = inner.value
+                                    if isinstance(val_inner, ast.Name) and val_inner.id == "pytest":
+                                        markers.add(dec_node.attr)
+            except (OSError, SyntaxError, ValueError):
+                logger.warning("Failed to parse markers from %s", py_file, exc_info=True)
+        return sorted(list(markers))
 
-    return sorted(list(markers))
+    return await asyncio.to_thread(_parse_markers)
 
 
 @router.post("/profiles", status_code=201, response_model=TestProfileResponse)
@@ -430,6 +436,15 @@ async def create_run(
 ) -> RunResponse:
     """Create a new test run and return its initial state."""
     container = request.app.state.container
+    if (
+        req.executor_mode == "subprocess"
+        and current_user.role != UserRole.ADMIN
+        and not container.settings.allow_subprocess_for_non_admins
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Subprocess execution mode is restricted to administrators.",
+        )
     try:
         run = await container.orchestrator.create(req, created_by=current_user.username)
     except UnknownRunner as e:
@@ -437,6 +452,7 @@ async def create_run(
     except UnsafePath as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return run_to_response(run)
+
 
 
 @router.get("/runs", response_model=RunListResponse)
@@ -500,13 +516,13 @@ async def get_run(
             stdout_file = run_dir_fallback / "stdout.log"
             stderr_file = run_dir_fallback / "stderr.log"
 
-    stdout_content = None
-    stderr_content = None
+    def _read_logs(stdout_path: Path, stderr_path: Path) -> tuple[str | None, str | None]:
+        stdout_val = _read_log_tail(stdout_path) if stdout_path.exists() else None
+        stderr_val = _read_log_tail(stderr_path) if stderr_path.exists() else None
+        return stdout_val, stderr_val
 
-    if stdout_file.exists():
-        stdout_content = _read_log_tail(stdout_file)
-    if stderr_file.exists():
-        stderr_content = _read_log_tail(stderr_file)
+    stdout_content, stderr_content = await asyncio.to_thread(_read_logs, stdout_file, stderr_file)
+
 
     res = run_to_response(run)
     res.stdout = stdout_content
@@ -707,6 +723,9 @@ async def cleanup_runs(
         if run_dir.exists():
             try:
                 await asyncio.to_thread(shutil.rmtree, run_dir)
+                # Set report reference to None in DB to prevent broken links
+                updated_run = r.model_copy(update={"report": None})
+                await container.store.save(updated_run)
                 cleaned_count += 1
             except OSError:
                 logger.warning("Failed to remove run directory %s", run_dir, exc_info=True)

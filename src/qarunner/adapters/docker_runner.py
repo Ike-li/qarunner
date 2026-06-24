@@ -151,30 +151,40 @@ class DockerRunner:
 
             container = await asyncio.to_thread(_start_container)
 
-            # Polling-based log streamer to write logs in real-time
+            # Streaming-based log streamer to write logs in real-time
             async def log_streamer():
-                while True:
+                def _stream(is_stdout: bool):
                     try:
+                        filepath = stdout_file if is_stdout else stderr_file
                         container.reload()
-                    except DockerException:
-                        logger.debug("Container reload failed; ending log stream", exc_info=True)
-                        break
-                    try:
-                        out_bytes = container.logs(stdout=True, stderr=False)
-                        err_bytes = container.logs(stdout=False, stderr=True)
-                        if stdout_file:
-                            os.makedirs(os.path.dirname(stdout_file), exist_ok=True)
-                            with open(stdout_file, "wb") as f:
-                                f.write(out_bytes)
-                        if stderr_file:
-                            os.makedirs(os.path.dirname(stderr_file), exist_ok=True)
-                            with open(stderr_file, "wb") as f:
-                                f.write(err_bytes)
-                    except (DockerException, OSError):
+                        try:
+                            stream = container.logs(
+                                stream=True,
+                                follow=True,
+                                stdout=is_stdout,
+                                stderr=not is_stdout,
+                            )
+                        except TypeError:
+                            stream = container.logs(
+                                stdout=is_stdout,
+                                stderr=not is_stdout,
+                            )
+                        chunks = [stream] if isinstance(stream, bytes) else stream
+                        if filepath:
+                            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                            with open(filepath, "ab") as f:
+                                for chunk in chunks:
+                                    f.write(chunk)
+                                    f.flush()
+                        else:
+                            for _ in chunks:
+                                pass
+                    except Exception:
                         logger.warning("Failed to stream container logs to file", exc_info=True)
-                    if getattr(container, "status", "") != "running":
-                        break
-                    await asyncio.sleep(1.0)
+
+                stdout_fut = asyncio.to_thread(_stream, True)
+                stderr_fut = asyncio.to_thread(_stream, False)
+                await asyncio.gather(stdout_fut, stderr_fut, return_exceptions=True)
 
             log_task = asyncio.create_task(log_streamer())
 

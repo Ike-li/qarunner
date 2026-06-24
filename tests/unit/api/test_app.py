@@ -206,6 +206,7 @@ def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
         monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
 
         async def seed() -> None:
+            import socket
             store = SqliteStore(db_path)
             await store.initialize()
             await store.save(
@@ -216,6 +217,7 @@ def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
                     created_by="system",
                     tests_path="x",
                     created_at=datetime.now(UTC),
+                    worker_node_id=socket.gethostname(),
                 )
             )
             await store.close()

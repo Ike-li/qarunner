@@ -31,6 +31,7 @@ def _make_orchestrator(
     collector_preset=None,
     report_preset=None,
     tests_root="/work/tests",
+    worker_node_id="default-node",
 ):
     """Helper to build an orchestrator wired to fakes."""
     registry = RunnerRegistry()
@@ -63,6 +64,7 @@ def _make_orchestrator(
         artifacts_root="/artifacts",
         executable="/usr/bin/python3",
         default_timeout=600,
+        worker_node_id=worker_node_id,
     )
 
 
@@ -87,6 +89,14 @@ class TestCreate:
         assert run.status == RunStatus.QUEUED
         assert run.id == "id-001"
         assert run.runner == "pytest"
+        assert run.worker_node_id == "default-node"
+
+    @pytest.mark.asyncio
+    async def test_create_binds_worker_node_id(self):
+        orch = _make_orchestrator(worker_node_id="custom-node-123")
+        req = RunRequest(tests_path="sample")
+        run = await orch.create(req)
+        assert run.worker_node_id == "custom-node-123"
 
     @pytest.mark.asyncio
     async def test_create_persists_to_store(self):
@@ -95,6 +105,7 @@ class TestCreate:
         run = await orch.create(req)
         stored = await orch._store.get(run.id)
         assert stored.id == run.id
+        assert stored.worker_node_id == "default-node"
 
     @pytest.mark.asyncio
     async def test_create_schedules_execution(self):
@@ -596,10 +607,16 @@ class TestWorkspaceJail:
             captured_cwd.append(cwd)
             return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
 
+        class NoopScheduler:
+            scheduled = 0
+            def schedule(self, coro):
+                self.scheduled += 1
+                coro.close()
+
         orch = RunOrchestrator(
             registry=registry,
             store=InMemoryRunStore(),
-            scheduler=FakeScheduler(),
+            scheduler=NoopScheduler(),
             process=FakeProcessRunner(handler=handler),
             collector=FakeResultCollector(preset=None),
             reporter=FakeAllureReporter(preset=None),
@@ -643,10 +660,16 @@ class TestWorkspaceJail:
             captured_cwd.append(cwd)
             return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
 
+        class NoopScheduler:
+            scheduled = 0
+            def schedule(self, coro):
+                self.scheduled += 1
+                coro.close()
+
         orch = RunOrchestrator(
             registry=registry,
             store=InMemoryRunStore(),
-            scheduler=FakeScheduler(),
+            scheduler=NoopScheduler(),
             process=FakeProcessRunner(handler=handler),
             collector=FakeResultCollector(preset=None),
             reporter=FakeAllureReporter(preset=None),

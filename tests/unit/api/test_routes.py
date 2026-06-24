@@ -169,7 +169,7 @@ class FakeStore:
     async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool:
         return True
 
-    async def mark_interrupted_runs(self) -> int:
+    async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         return 0
 
     async def initialize(self) -> None:
@@ -309,6 +309,37 @@ def test_create_run_unsafe_path_400() -> None:
     with TestClient(app) as client:
         resp = client.post("/runs", json={"tests_path": "../../etc", "runner": "pytest"})
     assert resp.status_code == 400
+
+
+def test_create_run_subprocess_non_admin_allowed_by_default() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"})
+    assert resp.status_code == 202
+
+
+def test_create_run_subprocess_non_admin_restricted() -> None:
+    container = _make_container()
+    container.settings.allow_subprocess_for_non_admins = False
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"})
+    assert resp.status_code == 400
+    assert "restricted" in resp.json()["detail"].lower()
+
+
+def test_create_run_subprocess_admin_always_allowed() -> None:
+    container = _make_container()
+    container.settings.allow_subprocess_for_non_admins = False
+    app = create_app(container)
+    _override_user(app, "admin_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"})
+    assert resp.status_code == 202
+
 
 
 # ── GET /runs ──────────────────────────────────────────────────────────
@@ -700,6 +731,11 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         created_at=old_date,
         finished_at=old_date,
         locked=False,
+        report=ReportRef(
+            allure_results_dir="run-old/results",
+            allure_report_file="run-old/report.html",
+            html_generated=True,
+        ),
     )
 
     # 2. Old locked run (should NOT be physically deleted)
@@ -727,7 +763,6 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save(run_old))
     loop.run_until_complete(container.store.save(run_old_locked))
-    loop.close()
 
     app = create_app(container)
     with TestClient(app) as client:
@@ -739,6 +774,12 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Check physical existence on disk
         assert not dir_old.exists()
         assert dir_locked.exists()
+
+        # Check that the run's report attribute was updated to None in the SQLite store
+        updated_run_old = loop.run_until_complete(container.store.get("run-old"))
+        assert updated_run_old.report is None
+
+    loop.close()
 
 
 def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

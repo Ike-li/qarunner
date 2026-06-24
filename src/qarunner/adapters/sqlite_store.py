@@ -85,7 +85,10 @@ _BASELINE_VERSION = 1
 # user_version >= 1 already holds the full baseline, so these are plain,
 # unconditional DDL — no column probing. To evolve the schema, append the next
 # ``(N, ("ALTER TABLE ...",))`` with ``N`` strictly increasing and forward-only.
-_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = ()
+_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
+    (2, ("ALTER TABLE runs ADD COLUMN worker_node_id TEXT;",)),
+)
+
 
 
 class SqliteStore:
@@ -326,8 +329,8 @@ class SqliteStore:
                 "INSERT INTO runs "
                 "(id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "status=excluded.status, runner=excluded.runner, "
                 "created_by=excluded.created_by, tests_path=excluded.tests_path, "
@@ -336,7 +339,8 @@ class SqliteStore:
                 "summary_json=excluded.summary_json, report_json=excluded.report_json, "
                 "exit_code=excluded.exit_code, error=excluded.error, "
                 "created_at=excluded.created_at, started_at=excluded.started_at, "
-                "finished_at=excluded.finished_at, env_json=excluded.env_json",
+                "finished_at=excluded.finished_at, env_json=excluded.env_json, "
+                "worker_node_id=excluded.worker_node_id",
                 (
                     run.id,
                     run.status.value,
@@ -356,8 +360,10 @@ class SqliteStore:
                     _dt_to_iso(run.finished_at),
                     json.dumps(run.env),
                     1 if run.locked else 0,
+                    run.worker_node_id,
                 ),
             )
+
             await db.commit()
 
     async def get(self, run_id: str) -> Run:
@@ -365,7 +371,7 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id "
                 "FROM runs WHERE id = ?",
                 (run_id,),
             )
@@ -379,11 +385,12 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id "
                 "FROM runs ORDER BY created_at DESC"
             )
             rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
+
 
     async def save_profile(self, profile: TestProfile) -> None:
         # Row-preserving upsert (create + update). A plain INSERT OR REPLACE
@@ -468,7 +475,7 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id "
                 "FROM runs "
                 "WHERE finished_at <= ? AND locked = 0 "
                 "AND status IN ('completed', 'failed', 'timeout')",
@@ -477,7 +484,7 @@ class SqliteStore:
             rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
 
-    async def mark_interrupted_runs(self) -> int:
+    async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         """Fail runs left QUEUED/RUNNING by a previous process (crash recovery).
 
         Their in-process task died with the old process and can never resume,
@@ -485,18 +492,33 @@ class SqliteStore:
         """
         now_iso = datetime.now(UTC).isoformat()
         async with self._connect() as db:
-            cursor = await db.execute(
-                "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE status IN (?, ?)",
-                (
-                    RunStatus.FAILED.value,
-                    "interrupted by server restart",
-                    now_iso,
-                    RunStatus.QUEUED.value,
-                    RunStatus.RUNNING.value,
-                ),
-            )
+            if worker_node_id is not None:
+                cursor = await db.execute(
+                    "UPDATE runs SET status = ?, error = ?, finished_at = ? "
+                    "WHERE status IN (?, ?) AND worker_node_id = ?",
+                    (
+                        RunStatus.FAILED.value,
+                        "interrupted by server restart",
+                        now_iso,
+                        RunStatus.QUEUED.value,
+                        RunStatus.RUNNING.value,
+                        worker_node_id,
+                    ),
+                )
+            else:
+                cursor = await db.execute(
+                    "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE status IN (?, ?)",
+                    (
+                        RunStatus.FAILED.value,
+                        "interrupted by server restart",
+                        now_iso,
+                        RunStatus.QUEUED.value,
+                        RunStatus.RUNNING.value,
+                    ),
+                )
             await db.commit()
             return cursor.rowcount
+
 
     async def delete_profile(self, profile_id: str) -> bool:
         async with self._connect() as db:
@@ -614,6 +636,7 @@ def _row_to_run(row: aiosqlite.Row) -> Run:
     report_data = json.loads(row[10]) if row[10] else None
     env_data = json.loads(row[16]) if len(row) > 16 and row[16] else {}
     locked_val = bool(row[17]) if len(row) > 17 and row[17] else False
+    worker_node_val = row[18] if len(row) > 18 else None
     return Run(
         id=row[0],
         status=RunStatus(row[1]),
@@ -633,7 +656,9 @@ def _row_to_run(row: aiosqlite.Row) -> Run:
         finished_at=_iso_to_dt(row[15]),
         env=env_data,
         locked=locked_val,
+        worker_node_id=worker_node_val,
     )
+
 
 
 def _row_to_profile(row: aiosqlite.Row) -> TestProfile:

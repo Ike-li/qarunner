@@ -111,3 +111,15 @@ def test_retry_after_rounds_up(remaining: float) -> None:
     import math
 
     assert _retry_after(throttle, KEY) == max(1, math.ceil(remaining))
+
+
+def test_lru_eviction_at_max_capacity() -> None:
+    throttle = _throttle()
+    # Populate throttle to max capacity of 10000
+    for i in range(10000):
+        throttle.record_failure(f"user_{i}")
+    # Adding one more should evict the oldest (user_0)
+    throttle.record_failure("user_new")
+    assert "user_0" not in throttle._attempts
+    assert "user_new" in throttle._attempts
+
