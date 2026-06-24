@@ -9,7 +9,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - QARUNNER_TESTS_ROOT=/app/external_tests
+      - QARUNNER_TESTS_ROOT=${PWD}/external_tests
       - QARUNNER_ARTIFACTS_ROOT=${PWD}/artifacts
       - QARUNNER_DB_PATH=${PWD}/artifacts/qarunner.db
       # Required — provide via a local .env (see .env.example); compose fails
@@ -18,7 +18,7 @@ services:
       - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:?set QARUNNER_ADMIN_PASSWORD (see .env.example)}
     volumes:
       - ./artifacts:${PWD}/artifacts
-      - ./external_tests:/app/external_tests:ro # Read-only mount of local test files if present
+      - ${PWD}/external_tests:${PWD}/external_tests:ro # source==target so the DooD executor's host bind resolves
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     healthcheck:
