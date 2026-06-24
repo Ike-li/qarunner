@@ -49,6 +49,7 @@ export interface Profile {
   name: string
   description: string | null
   tests_path: string
+  runner: string
   selected_files: string[]
   selected_markers: string[]
   extra_args: string

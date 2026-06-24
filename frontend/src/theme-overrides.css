@@ -1,0 +1,23 @@
+/*
+ * Linear-style theme: override Semi UI's blue `primary` token with a neutral
+ * near-black (light) / near-white (dark). `!important` ensures these win over
+ * Semi's own declarations regardless of CSS load order. Status/semantic colors
+ * (success green, danger red, warning orange) are left untouched.
+ */
+:root, body {
+  --semi-color-primary: #18181b !important;
+  --semi-color-primary-hover: #000000 !important;
+  --semi-color-primary-active: #000000 !important;
+  --semi-color-primary-light-default: rgba(24, 24, 27, 0.08) !important;
+  --semi-color-primary-light-hover: rgba(24, 24, 27, 0.12) !important;
+  --semi-color-primary-light-active: rgba(24, 24, 27, 0.16) !important;
+}
+
+body[theme-mode='dark'] {
+  --semi-color-primary: #fafafa !important;
+  --semi-color-primary-hover: #ffffff !important;
+  --semi-color-primary-active: #e4e4e7 !important;
+  --semi-color-primary-light-default: rgba(250, 250, 250, 0.10) !important;
+  --semi-color-primary-light-hover: rgba(250, 250, 250, 0.16) !important;
+  --semi-color-primary-light-active: rgba(250, 250, 250, 0.20) !important;
+}

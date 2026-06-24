@@ -5,6 +5,7 @@ import type { Run, UserProfile, Profile, Schedule, TreeNode } from './types'
 import { translations, type Lang, type TranslationKey } from './i18n'
 import { LoginScreen } from './components/LoginScreen'
 import { StatsCards } from './components/StatsCards'
+import { AddSuiteModal } from './components/AddSuiteModal'
 import { useFileTreeSelection } from './hooks/useFileTreeSelection'
 import { useTerminalView } from './hooks/useTerminalView'
 import { TriggerRunModal } from './components/TriggerRunModal'
@@ -29,6 +30,8 @@ export default function App() {
   const [detailsLoading, setDetailsLoading] = useState<boolean>(false)
   const terminalRef = useRef<HTMLDivElement>(null)
   const [isTriggerModalOpen, setIsTriggerModalOpen] = useState(false)
+  const [isAddSuiteModalOpen, setIsAddSuiteModalOpen] = useState(false)
+  const [selectedRunner, setSelectedRunner] = useState('pytest')
   const [loading, setLoading] = useState(true)
   // Terminal/drawer UI preferences + log helpers (see hooks/useTerminalView)
   const {
@@ -37,8 +40,6 @@ export default function App() {
     copySuccess,
     logLevelFilter,
     setLogLevelFilter,
-    isDrawerExpanded,
-    setIsDrawerExpanded,
     isTerminalHeightExpanded,
     setIsTerminalHeightExpanded,
     terminalFontSize,
@@ -165,6 +166,11 @@ export default function App() {
   const [previewNextRuns, setPreviewNextRuns] = useState<string[]>([])
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [logFilterTab, setLogFilterTab] = useState<'All' | 'Manual' | 'Scheduled'>('All')
+  // RunsTable 工具栏筛选状态(Semi UI 迁移新增):Run ID 搜索 + 状态/引擎/执行人下拉
+  const [searchRunId, setSearchRunId] = useState('')
+  const [filterStatus, setFilterStatus] = useState('ALL')
+  const [filterEngine, setFilterEngine] = useState('ALL')
+  const [filterOwner, setFilterOwner] = useState('ALL')
 
   // Reset all client-side session state. Used on user logout and on any 401
   // (the auth cookie is gone/expired, so fall back to the login screen).
@@ -430,7 +436,7 @@ export default function App() {
   const handleTriggerProfile = useCallback(async (profile: Profile) => {
     const payload = {
       tests_path: profile.tests_path,
-      runner: 'pytest',
+      runner: profile.runner || 'pytest',
       args: [],
       allure: true,
       timeout: profile.timeout,
@@ -625,7 +631,7 @@ export default function App() {
     // Clear args array to rely entirely on selective compilation via backend orchestrator
     const payload = {
       tests_path: testsPath,
-      runner: 'pytest',
+      runner: selectedRunner,
       args: [],
       allure: allureEnabled,
       timeout: timeoutSeconds === '' ? null : Number(timeoutSeconds),
@@ -1082,6 +1088,12 @@ export default function App() {
     : '0'
   const activeRunsCount = runs.filter(r => r.status === 'queued' || r.status === 'running').length
   const failedRunsCount = runs.filter(r => r.status === 'failed' || (r.status === 'completed' && !r.passed)).length
+  const manualRunsCount = runs.filter(r => r.created_by !== 'system:schedule').length
+  const scheduledRunsCount = runs.filter(r => r.created_by === 'system:schedule').length
+  // Aggregate test-case counts across every run's summary (runs without a summary contribute 0).
+  const passedTestCases = runs.reduce((sum, r) => sum + (r.summary?.passed ?? 0), 0)
+  const failedTestCases = runs.reduce((sum, r) => sum + (r.summary ? r.summary.failed + r.summary.error : 0), 0)
+  const totalTestCases = runs.reduce((sum, r) => sum + (r.summary?.total ?? 0), 0)
 
   // Rendering 0: brief loader while the initial auth-cookie probe is in flight,
   // so an already-logged-in user doesn't flash the login screen on reload.
@@ -1119,6 +1131,9 @@ export default function App() {
     )
   }
 
+  // Distinct run owners for the RunsTable owner-filter dropdown.
+  const uniqueOwners = [...new Set(runs.map(r => r.created_by))].sort()
+
   // Filter runs by selected suite in left sidebar if active, and by creator type for scheduling segmentation
   const filteredRuns = runs.filter(r => {
     // 1. Suite filter
@@ -1126,10 +1141,23 @@ export default function App() {
       return false
     }
     // 2. Tab filter
-    if (logFilterTab === 'Manual') {
-      return r.created_by !== 'system:schedule'
-    } else if (logFilterTab === 'Scheduled') {
-      return r.created_by === 'system:schedule'
+    if (logFilterTab === 'Manual' && r.created_by === 'system:schedule') {
+      return false
+    } else if (logFilterTab === 'Scheduled' && r.created_by !== 'system:schedule') {
+      return false
+    }
+    // 3. Toolbar filters
+    if (searchRunId && !r.id.toLowerCase().includes(searchRunId.toLowerCase())) {
+      return false
+    }
+    if (filterStatus !== 'ALL' && r.status !== filterStatus) {
+      return false
+    }
+    if (filterEngine !== 'ALL' && r.executor_mode !== filterEngine) {
+      return false
+    }
+    if (filterOwner !== 'ALL' && r.created_by !== filterOwner) {
+      return false
     }
     return true
   })
@@ -1205,7 +1233,12 @@ export default function App() {
       <StatsCards
         t={t}
         totalRuns={totalRuns}
+        manualRunsCount={manualRunsCount}
+        scheduledRunsCount={scheduledRunsCount}
         overallSuccessRate={overallSuccessRate}
+        passedTestCases={passedTestCases}
+        failedTestCases={failedTestCases}
+        totalTestCases={totalTestCases}
         failedRunsCount={failedRunsCount}
         activeRunsCount={activeRunsCount}
       />
@@ -1230,6 +1263,7 @@ export default function App() {
           handleOpenEditProfile={handleOpenEditProfile}
           handleOpenScheduleModal={handleOpenScheduleModal}
           handleDeleteProfile={handleDeleteProfile}
+          setIsAddSuiteModalOpen={setIsAddSuiteModalOpen}
         />
 
         <RunsTable
@@ -1246,6 +1280,15 @@ export default function App() {
           fetchRuns={fetchRuns}
           handleToggleLock={handleToggleLock}
           formatDate={formatDate}
+          searchRunId={searchRunId}
+          setSearchRunId={setSearchRunId}
+          filterStatus={filterStatus}
+          setFilterStatus={setFilterStatus}
+          filterEngine={filterEngine}
+          setFilterEngine={setFilterEngine}
+          filterOwner={filterOwner}
+          setFilterOwner={setFilterOwner}
+          uniqueOwners={uniqueOwners}
         />
       </main>
 
@@ -1263,8 +1306,6 @@ export default function App() {
         detailsLoading={detailsLoading}
         drawerTab={drawerTab}
         setDrawerTab={setDrawerTab}
-        isDrawerExpanded={isDrawerExpanded}
-        setIsDrawerExpanded={setIsDrawerExpanded}
         setSelectedRunId={setSelectedRunId}
         logSearchQuery={logSearchQuery}
         setLogSearchQuery={setLogSearchQuery}
@@ -1338,6 +1379,8 @@ export default function App() {
           tests={tests}
           testsPath={testsPath}
           setTestsPath={setTestsPath}
+          selectedRunner={selectedRunner}
+          setSelectedRunner={setSelectedRunner}
           selectedProfileId={selectedProfileId}
           setSelectedProfileId={setSelectedProfileId}
           profiles={profiles}
@@ -1373,6 +1416,15 @@ export default function App() {
           onDeleteProfile={handleDeleteProfile}
         />
       )}
+
+      {/* Modal: Add Test Suite */}
+      <AddSuiteModal
+        isOpen={isAddSuiteModalOpen}
+        onClose={() => setIsAddSuiteModalOpen(false)}
+        lang={lang}
+        apiFetch={apiFetch}
+        onSuiteLinked={fetchTests}
+      />
 
       {/* Modal: Schedule Manager */}
       {isScheduleModalOpen && scheduleProfile && (

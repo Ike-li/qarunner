@@ -7,7 +7,8 @@ import {
   IconEdit,
   IconClock,
   IconDelete,
-  IconSetting
+  IconSetting,
+  IconPlus
 } from '@douyinfe/semi-icons'
 import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
@@ -31,6 +32,7 @@ interface ProjectSidebarProps {
   handleOpenEditProfile: (profile: Profile) => void
   handleOpenScheduleModal: (profile: Profile) => void
   handleDeleteProfile: (profileId: string, e?: MouseEvent) => void
+  setIsAddSuiteModalOpen: (value: boolean) => void
 }
 
 /** Left column: "All Suites" selector + per-suite cards with nested saved-profile
@@ -53,12 +55,37 @@ export function ProjectSidebar({
   handleOpenEditProfile,
   handleOpenScheduleModal,
   handleDeleteProfile,
+  setIsAddSuiteModalOpen,
 }: ProjectSidebarProps) {
   return (
     <div className={styles.sidebarCard}>
-      <div className={styles.sidebarHeader}>
-        <IconFolder style={{ color: 'var(--semi-color-primary)', marginRight: '8px', fontSize: '18px' }} />
-        <h2>{t('workspaceSuites')}</h2>
+      <div className={styles.sidebarHeader} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <IconFolder style={{ color: 'var(--semi-color-primary)', marginRight: '8px', fontSize: '18px' }} />
+          <h2>{t('workspaceSuites')}</h2>
+        </div>
+        <Tooltip content={lang === 'zh' ? '添加测试套件 / 绑定项目' : 'Add Test Suite / Link Project'}>
+          <Button
+            size="small"
+            theme="light"
+            type="primary"
+            shape="circle"
+            icon={<IconPlus style={{ fontSize: '12px' }} />}
+            onClick={(e) => {
+              e.stopPropagation()
+              setIsAddSuiteModalOpen(true)
+            }}
+            style={{
+              width: '20px',
+              height: '20px',
+              minWidth: '20px',
+              padding: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          />
+        </Tooltip>
       </div>
       <div className={styles.sidebarContent}>
         {/* "All Suites" selector */}
@@ -206,6 +233,21 @@ export function ProjectSidebar({
                             <div className={styles.nestedProfileInfo}>
                               <IconSetting style={{ fontSize: '12px', color: 'var(--semi-color-text-2)', marginRight: '4px' }} />
                               <span className={styles.nestedProfileName}>{profile.name}</span>
+                              <Tag
+                                size="small"
+                                color={(profile.runner || 'pytest') === 'playwright' ? 'blue' : 'green'}
+                                type="light"
+                                style={{
+                                  fontSize: '10px',
+                                  marginLeft: '6px',
+                                  padding: '0 4px',
+                                  borderRadius: '4px',
+                                  height: '16px',
+                                  lineHeight: '14px',
+                                }}
+                              >
+                                {profile.runner || 'pytest'}
+                              </Tag>
                               {isSchedActive && (
                                 <Tooltip content={lang === 'zh' ? `定时已启用: ${existingSched?.cron_expression}` : `Schedule active: ${existingSched?.cron_expression}`}>
                                   <span className={styles.activeScheduleIndicator} />

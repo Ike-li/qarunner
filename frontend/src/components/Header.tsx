@@ -37,7 +37,7 @@ export function Header({
     <header className={styles.header}>
       <div className={styles.logoGroup}>
         <div className={styles.logoIcon}>
-          <Activity className={styles.pulseIcon} />
+          <Activity />
         </div>
         <div className={styles.logoText}>
           <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: 'var(--semi-color-text-0)' }}>{t('platformTitle')}</h1>
@@ -48,8 +48,8 @@ export function Header({
       <div className={styles.headerActions} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
         {/* User profile capsule */}
         {currentUser && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 12px', borderRadius: '20px', backgroundColor: 'var(--semi-color-fill-0)', border: '1px solid var(--semi-color-border)' }}>
-            <Avatar size="small" color={currentUser.role === 'admin' ? 'blue' : 'amber'} style={{ fontSize: '11px', fontWeight: 600 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 10px', borderRadius: '8px', backgroundColor: 'var(--semi-color-fill-0)', border: '1px solid var(--semi-color-border)' }}>
+            <Avatar size="small" color="grey" style={{ fontSize: '11px', fontWeight: 600 }}>
               {currentUser.username.substring(0, 2).toUpperCase()}
             </Avatar>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.2 }}>
@@ -58,7 +58,7 @@ export function Header({
               </span>
               <Tag
                 size="small"
-                color={currentUser.role === 'admin' ? 'blue' : 'amber'}
+                color="grey"
                 style={{ fontSize: '10px', height: '16px', padding: '0 4px', marginTop: '2px', textTransform: 'capitalize' }}
                 data-testid="profile-role"
               >

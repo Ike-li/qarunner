@@ -1,5 +1,5 @@
 import React from 'react'
-import { Table, Tag, Progress, Button, Radio, RadioGroup, Tooltip, Spin } from '@douyinfe/semi-ui'
+import { Table, Tag, Progress, Button, Radio, RadioGroup, Tooltip, Spin, Input, Select } from '@douyinfe/semi-ui'
 import {
   IconLock,
   IconUnlock,
@@ -12,7 +12,8 @@ import {
   IconBox,
   IconServer,
   IconBolt,
-  IconPlay
+  IconPlay,
+  IconSearch
 } from '@douyinfe/semi-icons'
 import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
@@ -35,6 +36,15 @@ interface RunsTableProps {
   fetchRuns: () => void
   handleToggleLock: (runId: string, e: React.MouseEvent) => void
   formatDate: (isoStr: string | null) => string
+  searchRunId: string
+  setSearchRunId: (value: string) => void
+  filterStatus: string
+  setFilterStatus: (value: string) => void
+  filterEngine: string
+  setFilterEngine: (value: string) => void
+  filterOwner: string
+  setFilterOwner: (value: string) => void
+  uniqueOwners: string[]
 }
 
 /**
@@ -56,6 +66,15 @@ export function RunsTable({
   fetchRuns,
   handleToggleLock,
   formatDate,
+  searchRunId,
+  setSearchRunId,
+  filterStatus,
+  setFilterStatus,
+  filterEngine,
+  setFilterEngine,
+  filterOwner,
+  setFilterOwner,
+  uniqueOwners,
 }: RunsTableProps) {
 
   const columns = [
@@ -126,7 +145,7 @@ export function RunsTable({
       dataIndex: 'executor_mode',
       key: 'executor_mode',
       render: (mode: Run['executor_mode']) => (
-        <Tag color="violet" size="large">
+        <Tag color="grey" size="large">
           {mode === 'docker' ? <IconBox style={{ marginRight: '4px' }} /> : <IconServer style={{ marginRight: '4px' }} />}
           {t(`engine_${mode}`)}
         </Tag>
@@ -137,11 +156,7 @@ export function RunsTable({
       dataIndex: 'created_by',
       key: 'created_by',
       render: (text: string) => {
-        let color: any = 'default'
-        if (text === 'system' || text.startsWith('system:')) color = 'teal'
-        else if (text === 'admin') color = 'red'
-        else color = 'indigo'
-        return <Tag color={color} size="large">{text}</Tag>
+        return <Tag color="grey" size="large">{text}</Tag>
       }
     },
     {
@@ -216,6 +231,15 @@ export function RunsTable({
     }
   }
 
+  const resetFilters = () => {
+    setSearchRunId('')
+    setFilterStatus('ALL')
+    setFilterEngine('ALL')
+    setFilterOwner('ALL')
+  }
+
+  const isFilterActive = !!(searchRunId || filterStatus !== 'ALL' || filterEngine !== 'ALL' || filterOwner !== 'ALL')
+
   return (
     <div className={styles.tableCard}>
       <div className={styles.tableHeader} style={{ flexWrap: 'wrap', gap: '1rem' }}>
@@ -258,6 +282,73 @@ export function RunsTable({
           aria-label={t('refreshLogs')}
           title={t('refreshLogs')}
         />
+      </div>
+
+      {/* 搜索与过滤工具栏 */}
+      <div className={styles.filterToolbar}>
+        {/* Run ID 搜索输入框 */}
+        <Input
+          prefix={<IconSearch style={{ color: 'var(--semi-color-text-3)' }} />}
+          placeholder={t('searchRunIdPlaceholder')}
+          value={searchRunId}
+          onChange={value => setSearchRunId(value)}
+          showClear
+          style={{ width: '220px' }}
+        />
+
+        {/* 状态筛选下拉框 */}
+        <Select
+          value={filterStatus}
+          onChange={value => setFilterStatus(value as string)}
+          style={{ width: '150px' }}
+          placeholder={t('filterStatusPlaceholder')}
+        >
+          <Select.Option value="ALL">{t('filterStatusPlaceholder')}</Select.Option>
+          <Select.Option value="queued">{t('status_queued')}</Select.Option>
+          <Select.Option value="running">{t('status_running')}</Select.Option>
+          <Select.Option value="completed">{t('status_completed')}</Select.Option>
+          <Select.Option value="failed">{t('status_failed')}</Select.Option>
+          <Select.Option value="timeout">{t('status_timeout')}</Select.Option>
+        </Select>
+
+        {/* 引擎筛选下拉框 */}
+        <Select
+          value={filterEngine}
+          onChange={value => setFilterEngine(value as string)}
+          style={{ width: '150px' }}
+          placeholder={t('filterEnginePlaceholder')}
+        >
+          <Select.Option value="ALL">{t('filterEnginePlaceholder')}</Select.Option>
+          <Select.Option value="subprocess">{t('engine_subprocess')}</Select.Option>
+          <Select.Option value="docker">{t('engine_docker')}</Select.Option>
+        </Select>
+
+        {/* 执行人筛选下拉框 */}
+        <Select
+          value={filterOwner}
+          onChange={value => setFilterOwner(value as string)}
+          style={{ width: '150px' }}
+          placeholder={t('filterOwnerPlaceholder')}
+        >
+          <Select.Option value="ALL">{t('filterOwnerPlaceholder')}</Select.Option>
+          {uniqueOwners.map(owner => (
+            <Select.Option key={owner} value={owner}>
+              {owner}
+            </Select.Option>
+          ))}
+        </Select>
+
+        {/* 一键清除筛选 */}
+        {isFilterActive && (
+          <Button
+            type="warning"
+            theme="borderless"
+            onClick={resetFilters}
+            style={{ marginLeft: 'auto' }}
+          >
+            {t('clearFilters')}
+          </Button>
+        )}
       </div>
 
       {loading && runs.length === 0 ? (

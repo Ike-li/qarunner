@@ -14,6 +14,8 @@ interface TriggerRunModalProps {
   tests: string[]
   testsPath: string
   setTestsPath: (value: string) => void
+  selectedRunner: string
+  setSelectedRunner: (value: string) => void
   selectedProfileId: string
   setSelectedProfileId: (value: string) => void
   profiles: Profile[]
@@ -60,6 +62,8 @@ export function TriggerRunModal({
   tests,
   testsPath,
   setTestsPath,
+  selectedRunner,
+  setSelectedRunner,
   selectedProfileId,
   setSelectedProfileId,
   profiles,
@@ -148,6 +152,26 @@ export function TriggerRunModal({
           </span>
         </div>
 
+        {/* Runner Engine */}
+        <div className={styles.formField}>
+          <label className={styles.label} htmlFor="trigger-runner">
+            <span>Runner</span>
+            <span className={styles.requiredIndicator}>*</span>
+          </label>
+          <Select
+            id="trigger-runner"
+            value={selectedRunner}
+            onChange={(val) => setSelectedRunner(val as string)}
+            style={{ width: '100%' }}
+          >
+            <Select.Option value="pytest">pytest</Select.Option>
+            <Select.Option value="playwright">playwright</Select.Option>
+          </Select>
+          <span className={styles.fieldHelp}>
+            {lang === 'zh' ? '选择测试执行引擎（Pytest 或 Playwright）' : 'Choose the test runner engine (Pytest or Playwright)'}
+          </span>
+        </div>
+
         {/* 1. Saved Execution Profiles Selection Template */}
         {!editingProfileId && (
           <div className={styles.formField}>
@@ -164,6 +188,7 @@ export function TriggerRunModal({
                     if (prof) {
                       setSelectedFiles(prof.selected_files || [])
                       setSelectedMarkers(prof.selected_markers || [])
+                      setSelectedRunner(prof.runner || 'pytest')
                       setCustomArgs(prof.extra_args || '')
                       setExecutorMode(prof.executor_mode || 'subprocess')
                       setTimeoutSeconds(prof.timeout || '')
@@ -175,6 +200,7 @@ export function TriggerRunModal({
                     // Reset to default / manual
                     setSelectedFiles([])
                     setSelectedMarkers([])
+                    setSelectedRunner('pytest')
                     setCustomArgs('')
                     setExecutorMode('subprocess')
                     setTimeoutSeconds('')
@@ -188,6 +214,7 @@ export function TriggerRunModal({
                   setSelectedProfileId('')
                   setSelectedFiles([])
                   setSelectedMarkers([])
+                  setSelectedRunner('pytest')
                   setCustomArgs('')
                   setExecutorMode('subprocess')
                   setTimeoutSeconds('')

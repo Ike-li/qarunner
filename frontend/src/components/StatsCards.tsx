@@ -5,37 +5,63 @@ import type { TranslationKey } from '../i18n'
 interface StatsCardsProps {
   t: (key: TranslationKey) => string
   totalRuns: number
+  manualRunsCount: number
+  scheduledRunsCount: number
   overallSuccessRate: string
+  passedTestCases: number
+  failedTestCases: number
+  totalTestCases: number
   failedRunsCount: number
   activeRunsCount: number
 }
 
 /** Dashboard header summary cards: total / success-rate / failed / active-queue. */
-export function StatsCards({ t, totalRuns, overallSuccessRate, failedRunsCount, activeRunsCount }: StatsCardsProps) {
+export function StatsCards({
+  t,
+  totalRuns,
+  manualRunsCount,
+  scheduledRunsCount,
+  overallSuccessRate,
+  passedTestCases,
+  failedTestCases,
+  totalTestCases,
+  failedRunsCount,
+  activeRunsCount
+}: StatsCardsProps) {
   return (
     <section className={styles.statsContainer}>
       <div className={styles.statCard} data-testid="stat-total">
-        <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(99, 102, 241, 0.1)', color: '#818cf8' }}>
+        <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(113, 113, 122, 0.1)', color: '#71717a' }}>
           <Activity size={20} />
         </div>
         <div className={styles.statDetails}>
           <span className={styles.statLabel}>{t('totalExecutions')}</span>
           <h2 className={styles.statValue}>{totalRuns}</h2>
+          <span className={styles.statSubLabel}>
+            {t('manualRuns')}: {manualRunsCount} | {t('scheduledRuns')}: {scheduledRunsCount}
+          </span>
         </div>
       </div>
 
       <div className={styles.statCard} data-testid="stat-success-rate">
-        <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
+        <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(113, 113, 122, 0.1)', color: '#71717a' }}>
           <CheckCircle2 size={20} />
         </div>
         <div className={styles.statDetails}>
           <span className={styles.statLabel}>{t('successRate')}</span>
           <h2 className={styles.statValue}>{overallSuccessRate}%</h2>
+          <span className={styles.statSubLabel}>
+            <span style={{ color: 'var(--semi-color-success)', fontWeight: 600 }}>{t('passedCases')}: {passedTestCases}</span>
+            <span style={{ color: 'var(--semi-color-text-3)', margin: '0 4px' }}>|</span>
+            <span style={{ color: 'var(--semi-color-danger)', fontWeight: 600 }}>{t('failedCases')}: {failedTestCases}</span>
+            <span style={{ color: 'var(--semi-color-text-3)', margin: '0 4px' }}>|</span>
+            <span style={{ color: 'var(--semi-color-text-2)' }}>{t('totalCases')}: {totalTestCases}</span>
+          </span>
         </div>
       </div>
 
       <div className={styles.statCard} data-testid="stat-failed">
-        <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
+        <div className={styles.statIconWrapper} style={{ backgroundColor: 'rgba(113, 113, 122, 0.1)', color: '#71717a' }}>
           <XCircle size={20} />
         </div>
         <div className={styles.statDetails}>
@@ -47,7 +73,7 @@ export function StatsCards({ t, totalRuns, overallSuccessRate, failedRunsCount, 
       </div>
 
       <div className={styles.statCard} data-testid="stat-active">
-        <div className={`${styles.statIconWrapper} ${activeRunsCount > 0 ? styles.pulseGlow : ''}`} style={{ backgroundColor: activeRunsCount > 0 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.05)', color: '#f59e0b' }}>
+        <div className={styles.statIconWrapper} style={{ backgroundColor: activeRunsCount > 0 ? 'rgba(113, 113, 122, 0.16)' : 'rgba(113, 113, 122, 0.07)', color: '#71717a' }}>
           <RotateCw size={20} className={activeRunsCount > 0 ? styles.spinIcon : ''} />
         </div>
         <div className={styles.statDetails}>

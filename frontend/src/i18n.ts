@@ -138,6 +138,7 @@ export const translations = {
     failedCreateUser: "Failed to create user.",
     failedTriggerRun: "Failed to trigger run.",
     workspaceSuites: "Workspace Suites",
+    newProfile: "New Profile",
     quickTrigger: "Quick Trigger",
     clearFilter: "Clear Filter",
     noSuitesScanned: "No suites found",
@@ -150,7 +151,17 @@ export const translations = {
     profileDescPlaceholder: "Profile description (optional)",
     selectProfile: "Load Named Profile Template",
     customArgsTitle: "Extra Pytest Command Parameters",
-    noProfilesConfigured: "No saved profiles for this suite"
+    noProfilesConfigured: "No saved profiles for this suite",
+    searchRunIdPlaceholder: "Search Run ID...",
+    filterStatusPlaceholder: "All Statuses",
+    filterEnginePlaceholder: "All Engines",
+    filterOwnerPlaceholder: "All Operators",
+    clearFilters: "Clear Filters",
+    manualRuns: "Manual",
+    scheduledRuns: "Scheduled",
+    passedCases: "Passed",
+    failedCases: "Failed",
+    totalCases: "Total"
   },
   zh: {
     platformTitle: "qarunner",
@@ -286,6 +297,7 @@ export const translations = {
     failedCreateUser: "创建用户失败。",
     failedTriggerRun: "启动运行失败。",
     workspaceSuites: "项目测试套件",
+    newProfile: "新建执行方案",
     quickTrigger: "快速运行",
     clearFilter: "清除筛选",
     noSuitesScanned: "未扫描到套件",
@@ -298,7 +310,17 @@ export const translations = {
     profileDescPlaceholder: "方案描述 (可选)",
     selectProfile: "加载预设执行方案",
     customArgsTitle: "附加 Pytest 命令行参数",
-    noProfilesConfigured: "该套件暂无配置方案"
+    noProfilesConfigured: "该套件暂无配置方案",
+    searchRunIdPlaceholder: "搜索运行 ID...",
+    filterStatusPlaceholder: "全部状态",
+    filterEnginePlaceholder: "全部执行引擎",
+    filterOwnerPlaceholder: "全部执行人",
+    clearFilters: "清除筛选",
+    manualRuns: "手动",
+    scheduledRuns: "定时",
+    passedCases: "成功",
+    failedCases: "失败",
+    totalCases: "总用例"
   }
 } as const;
 

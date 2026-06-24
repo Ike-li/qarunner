@@ -17,7 +17,6 @@ export function useTerminalView() {
   const [logLevelFilter, setLogLevelFilter] = useState<'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS'>('ALL')
 
   // Log & drawer controls to resolve "logs are too small" issue
-  const [isDrawerExpanded, setIsDrawerExpanded] = useState<boolean>(false)
   const [isTerminalHeightExpanded, setIsTerminalHeightExpanded] = useState<boolean>(false)
   const [terminalFontSize, setTerminalFontSize] = useState<number>(13)
   const [logSearchQuery, setLogSearchQuery] = useState<string>('')
@@ -81,8 +80,6 @@ export function useTerminalView() {
     copySuccess,
     logLevelFilter,
     setLogLevelFilter,
-    isDrawerExpanded,
-    setIsDrawerExpanded,
     isTerminalHeightExpanded,
     setIsTerminalHeightExpanded,
     terminalFontSize,
