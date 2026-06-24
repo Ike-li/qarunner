@@ -5,19 +5,21 @@ services:
       dockerfile: Dockerfile.platform
     image: qarunner-platform:latest
     container_name: qarunner-platform
+    user: root
     ports:
       - "8000:8000"
     environment:
       - QARUNNER_TESTS_ROOT=/app/external_tests
-      - QARUNNER_ARTIFACTS_ROOT=/app/artifacts
-      - QARUNNER_DB_PATH=/app/artifacts/qarunner.db
+      - QARUNNER_ARTIFACTS_ROOT=${PWD}/artifacts
+      - QARUNNER_DB_PATH=${PWD}/artifacts/qarunner.db
       # Required — provide via a local .env (see .env.example); compose fails
       # to start if unset. Never hard-code real secrets here (SEC-2).
       - QARUNNER_SECRET_KEY=${QARUNNER_SECRET_KEY:?set QARUNNER_SECRET_KEY (see .env.example)}
       - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:?set QARUNNER_ADMIN_PASSWORD (see .env.example)}
     volumes:
-      - platform-artifacts:/app/artifacts
+      - ./artifacts:${PWD}/artifacts
       - ./external_tests:/app/external_tests:ro # Read-only mount of local test files if present
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     healthcheck:
       # Readiness: /health returns 200 only when the DB round-trips (DEP-4).
@@ -32,5 +34,3 @@ services:
           cpus: "2.0"
           memory: 2G
 
-volumes:
-  platform-artifacts:
