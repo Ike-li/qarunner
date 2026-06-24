@@ -13,6 +13,8 @@
     "test:ui:report": "playwright show-report"
   },
   "dependencies": {
+    "@douyinfe/semi-icons": "^2.100.0",
+    "@douyinfe/semi-ui": "^2.100.0",
     "lucide-react": "^0.395.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

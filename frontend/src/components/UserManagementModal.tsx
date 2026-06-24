@@ -1,7 +1,7 @@
 import type { FormEvent } from 'react'
-import { AlertTriangle, Plus, RotateCw, Trash2, Users, X } from 'lucide-react'
+import { Plus, RotateCw, Trash2, Users } from 'lucide-react'
+import { Modal, Banner, Table, Tag, Input, Select, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
-import { useDialogA11y } from '../hooks/useDialogA11y'
 import type { Lang, TranslationKey } from '../i18n'
 import type { UserProfile } from '../types'
 
@@ -54,230 +54,232 @@ export function UserManagementModal({
   apiFetch,
   fetchRuns,
 }: UserManagementModalProps) {
-  const dialogRef = useDialogA11y({ isOpen: true, onClose })
+  
+  const columns = [
+    {
+      title: t('username'),
+      dataIndex: 'username',
+      key: 'username',
+      render: (text: string) => (
+        <strong style={{ color: 'var(--semi-color-text-0)' }} data-testid="user-row-username">
+          {text}
+        </strong>
+      ),
+    },
+    {
+      title: t('role'),
+      dataIndex: 'role',
+      key: 'role',
+      render: (role: string) => (
+        <Tag color={role === 'admin' ? 'blue' : 'amber'} type="solid" style={{ textTransform: 'capitalize' }}>
+          {role}
+        </Tag>
+      ),
+    },
+    {
+      title: t('registeredAt'),
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (created_at: string) => (
+        <span style={{ color: 'var(--semi-color-text-2)' }}>
+          {formatDate(created_at)}
+        </span>
+      ),
+    },
+  ]
+
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
-      <div
-        ref={dialogRef}
-        className={styles.modal}
-        style={{ width: '640px' }}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="user-modal-title"
-        data-testid="user-modal"
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className={styles.modalHeader}>
-          <div className={styles.modalTitleGroup}>
-            <Users size={20} className={styles.iconAccent} />
-            <h2 id="user-modal-title">{t('userManagementTitle')}</h2>
-          </div>
-          <button className={styles.modalCloseButton} onClick={onClose} aria-label={lang === 'zh' ? '关闭' : 'Close'} data-testid="user-modal-close">
-            <X size={20} />
-          </button>
+    <Modal
+      visible={true}
+      onCancel={onClose}
+      footer={null}
+      width={720}
+      bodyStyle={{ maxHeight: '80vh', overflowY: 'auto', padding: '20px' }}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Users size={20} style={{ color: 'var(--semi-color-primary)' }} />
+          <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>
+            {t('userManagementTitle')}
+          </h3>
         </div>
-
+      }
+    >
+      <div data-testid="user-modal" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {/* Section 1: User Directory List */}
-        <div className={styles.userListSection}>
-          <div className={styles.sectionHeader}>
-            <h3>{t('platformDirectory')}</h3>
-            {usersLoading && <RotateCw size={14} className={styles.spinIcon} />}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>{t('platformDirectory')}</h4>
           </div>
 
-          <div className={styles.userTableWrapper}>
-            <table className={styles.userTable}>
-              <thead>
-                <tr>
-                  <th>{t('username')}</th>
-                  <th>{t('role')}</th>
-                  <th>{t('registeredAt')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {usersList.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '1.5rem' }}>
-                      {t('noUsersRegistered')}
-                    </td>
-                  </tr>
-                ) : (
-                  usersList.map((usr) => (
-                    <tr key={usr.username}>
-                      <td className={styles.tdUsername} data-testid="user-row-username">{usr.username}</td>
-                      <td>
-                        <span className={`${styles.roleBadge} ${styles[`roleBadge_${usr.role}`]}`}>
-                          {usr.role}
-                        </span>
-                      </td>
-                      <td className={styles.tdDate}>{formatDate(usr.created_at)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          <Table
+            columns={columns}
+            dataSource={usersList}
+            loading={usersLoading}
+            pagination={false}
+            size="small"
+            rowKey="username"
+            style={{ border: '1px solid var(--semi-color-border)', borderRadius: '8px' }}
+          />
         </div>
 
         {/* Section 2: Register New User Form */}
-        <form onSubmit={onCreateUser} className={styles.userCreateSection}>
-          <div className={styles.sectionHeader}>
-            <h3>{t('registerNewUser')}</h3>
-          </div>
+        <form onSubmit={onCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid var(--semi-color-border)', paddingTop: '20px' }}>
+          <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', fontWeight: 600 }}>{t('registerNewUser')}</h4>
 
           {newUserError && (
-            <div className={styles.formErrorAlert} style={{ margin: 0 }} role="alert">
-              <AlertTriangle size={16} aria-hidden="true" />
-              <span>{t(newUserError as TranslationKey) || newUserError}</span>
-            </div>
+            <Banner
+              type="danger"
+              description={t(newUserError as TranslationKey) || newUserError}
+              style={{ borderRadius: '8px' }}
+              closeIcon={null}
+            />
           )}
 
-          <div className={styles.userFormRow}>
-            <div className={styles.formField}>
-              <label className={styles.label} htmlFor="user-new-username">{t('username')}</label>
-              <input
-                id="user-new-username"
-                data-testid="user-new-username"
-                type="text"
-                className={styles.input}
-                placeholder="e.g. testing_lead"
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                disabled={newUserLoading}
-                required
-              />
-            </div>
-
-            <div className={styles.formField}>
-              <label className={styles.label} htmlFor="user-new-password">{t('password')}</label>
-              <input
-                id="user-new-password"
-                data-testid="user-new-password"
-                type="password"
-                className={styles.input}
-                placeholder="••••••••"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                disabled={newUserLoading}
-                required
-              />
-            </div>
-          </div>
-
-          <div className={styles.userFormRow}>
-            <div className={styles.formField}>
-              <label className={styles.label} htmlFor="user-new-role">{t('systemAccessRole')}</label>
-              <div className={styles.selectWrapper}>
-                <select
-                  id="user-new-role"
-                  className={styles.select}
-                  value={newUserRole}
-                  onChange={(e) => setNewUserRole(e.target.value as 'admin' | 'user')}
+          <Row gutter={16}>
+            <Col span={12}>
+              <div className={styles.formField}>
+                <label className={styles.label} htmlFor="user-new-username">{t('username')}</label>
+                <Input
+                  id="user-new-username"
+                  data-testid="user-new-username"
+                  placeholder="e.g. testing_lead"
+                  value={newUsername}
+                  onChange={(val) => setNewUsername(val)}
                   disabled={newUserLoading}
                   required
-                >
-                  <option value="user">{t('userStandardAccess')}</option>
-                  <option value="admin">{t('administratorFullControls')}</option>
-                </select>
+                />
               </div>
-            </div>
+            </Col>
 
-            <div className={styles.formField} style={{ justifyContent: 'flex-end' }}>
-              <button
-                type="submit"
-                className={styles.submitButton}
-                style={{ width: '100%', height: '38px', justifyContent: 'center' }}
+            <Col span={12}>
+              <div className={styles.formField}>
+                <label className={styles.label} htmlFor="user-new-password">{t('password')}</label>
+                <Input
+                  id="user-new-password"
+                  data-testid="user-new-password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={newPassword}
+                  onChange={(val) => setNewPassword(val)}
+                  disabled={newUserLoading}
+                  required
+                />
+              </div>
+            </Col>
+          </Row>
+
+          <Row gutter={16} style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <Col span={12}>
+              <div className={styles.formField}>
+                <label className={styles.label} htmlFor="user-new-role">{t('systemAccessRole')}</label>
+                <Select
+                  id="user-new-role"
+                  value={newUserRole}
+                  onChange={(val) => setNewUserRole(val as 'admin' | 'user')}
+                  disabled={newUserLoading}
+                  style={{ width: '100%' }}
+                >
+                  <Select.Option value="user">{t('userStandardAccess')}</Select.Option>
+                  <Select.Option value="admin">{t('administratorFullControls')}</Select.Option>
+                </Select>
+              </div>
+            </Col>
+
+            <Col span={12}>
+              <Button
+                htmlType="submit"
+                type="primary"
+                theme="solid"
+                icon={newUserLoading ? <RotateCw size={14} className={styles.spinIcon} /> : <Plus size={14} />}
                 disabled={newUserLoading || !newUsername.trim() || !newPassword.trim()}
                 data-testid="user-add-submit"
+                style={{ width: '100%', height: '34px' }}
               >
-                {newUserLoading ? (
-                  <>
-                    <RotateCw size={14} className={styles.spinIcon} />
-                    <span>{t('registering')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Plus size={14} />
-                    <span>{t('addUserAccount')}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
+                {newUserLoading ? t('registering') : t('addUserAccount')}
+              </Button>
+            </Col>
+          </Row>
         </form>
 
         {/* Section 3: Storage Space & Data Retention Policy */}
-        <div className={styles.retentionSection}>
-          <div className={styles.sectionHeader}>
-            <h3>{lang === 'zh' ? '存储空间与数据保留策略' : 'Storage Space & Data Retention Policy'}</h3>
-          </div>
-          <p className={styles.sectionDescription} style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem', lineHeight: '1.4' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid var(--semi-color-border)', paddingTop: '20px' }}>
+          <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>
+            {lang === 'zh' ? '存储空间与数据保留策略' : 'Storage Space & Data Retention Policy'}
+          </h4>
+          <p style={{ margin: 0, color: 'var(--semi-color-text-2)', fontSize: '12px', lineHeight: '1.5' }}>
             {lang === 'zh'
               ? '配置平台保留测试日志及报告的策略。执行物理清理将永久删除指定天数之前的运行日志和 HTML 报告目录，但会保留 SQLite 中的分析指标和运行结果数据，且已锁定的记录将被安全保护，不予清理。'
               : 'Configure the storage retention policy. Running cleanup will permanently delete physical run execution directories (logs and reports) older than the specified days. SQLite metadata and run results will be preserved, and locked/pinned runs will be protected from deletion.'}
           </p>
 
-          <div className={styles.retentionFormRow}>
-            <div className={styles.formField} style={{ flex: '1' }}>
-              <label className={styles.label} htmlFor="user-retention-days">{lang === 'zh' ? '保留天数' : 'Retention Days'}</label>
-              <input
-                id="user-retention-days"
-                type="number"
-                min="1"
-                className={styles.input}
-                value={retentionDays}
-                onChange={(e) => setRetentionDays(Number(e.target.value))}
-                disabled={isCleaningStorage}
-              />
-            </div>
+          <Row gutter={16} style={{ display: 'flex', alignItems: 'flex-end', marginTop: '4px' }}>
+            <Col span={12}>
+              <div className={styles.formField}>
+                <label className={styles.label} htmlFor="user-retention-days">
+                  {lang === 'zh' ? '保留天数' : 'Retention Days'}
+                </label>
+                <Input
+                  id="user-retention-days"
+                  type="number"
+                  min="1"
+                  value={String(retentionDays)}
+                  onChange={(val) => setRetentionDays(Number(val))}
+                  disabled={isCleaningStorage}
+                />
+              </div>
+            </Col>
 
-            <div className={styles.formField} style={{ justifyContent: 'flex-end', flex: '1' }}>
-              <button
-                type="button"
-                className={styles.cleanupButton}
+            <Col span={12}>
+              <Button
+                type="danger"
+                theme="solid"
                 disabled={isCleaningStorage || retentionDays <= 0}
+                icon={isCleaningStorage ? <RotateCw size={14} className={styles.spinIcon} /> : <Trash2 size={14} />}
+                style={{ width: '100%', height: '34px' }}
                 onClick={async () => {
                   if (!confirm(lang === 'zh' ? `确认要物理清理所有非锁定且早于 ${retentionDays} 天的测试记录文件吗？此操作无法撤销。` : `Are you sure you want to clean up physical files of all unlocked runs older than ${retentionDays} days? This cannot be undone.`)) {
-                    return;
+                    return
                   }
-                  setIsCleaningStorage(true);
+                  setIsCleaningStorage(true)
                   try {
                     const resp = await apiFetch(`/runs/cleanup?retention_days=${retentionDays}`, {
                       method: 'POST'
-                    });
-                    const data = await resp.json();
+                    })
+                    const data = await resp.json()
                     if (resp.ok) {
                       alert(lang === 'zh'
                         ? `清理成功！已清理 ${data.cleaned_count || 0} 个记录目录。`
-                        : `Cleanup successful! Purged ${data.cleaned_count || 0} runs directories.`);
-                      fetchRuns();
+                        : `Cleanup successful! Purged ${data.cleaned_count || 0} runs directories.`)
+                      fetchRuns()
                     } else {
-                      alert(data.detail || 'Cleanup failed');
+                      alert(data.detail || 'Cleanup failed')
                     }
                   } catch (err) {
-                    console.error('Error during cleanup:', err);
-                    alert('Network error. Failed to run storage cleanup.');
+                    console.error('Error during cleanup:', err)
+                    alert('Network error. Failed to run storage cleanup.')
                   } finally {
-                    setIsCleaningStorage(false);
+                    setIsCleaningStorage(false)
                   }
                 }}
               >
-                {isCleaningStorage ? (
-                  <>
-                    <RotateCw size={14} className={styles.spinIcon} />
-                    <span>{lang === 'zh' ? '清理中...' : 'Cleaning...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 size={14} />
-                    <span>{lang === 'zh' ? '立即执行物理清理' : 'Execute Storage Cleanup'}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
+                {isCleaningStorage ? (lang === 'zh' ? '清理中...' : 'Cleaning...') : (lang === 'zh' ? '立即执行物理清理' : 'Execute Storage Cleanup')}
+              </Button>
+            </Col>
+          </Row>
+        </div>
+
+        {/* Modal Actions */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid var(--semi-color-border)', paddingTop: '20px' }}>
+          <Button
+            size="large"
+            theme="light"
+            onClick={onClose}
+            data-testid="user-modal-close"
+          >
+            {lang === 'zh' ? '关闭' : 'Close'}
+          </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }

@@ -17,6 +17,9 @@ import { FullscreenReportOverlay } from './components/FullscreenReportOverlay'
 
 import { ScheduleModal } from './components/ScheduleModal'
 import { UserManagementModal } from './components/UserManagementModal'
+import { LocaleProvider } from '@douyinfe/semi-ui'
+import zh_CN from '@douyinfe/semi-ui/lib/es/locale/source/zh_CN'
+import en_US from '@douyinfe/semi-ui/lib/es/locale/source/en_US'
 
 export default function App() {
   const [runs, setRuns] = useState<Run[]>([])
@@ -67,6 +70,14 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('qarunner_theme', theme)
+    
+    // Toggle Semi Design Dark Theme
+    const body = document.body
+    if (theme === 'dark') {
+      body.setAttribute('theme-mode', 'dark')
+    } else {
+      body.removeAttribute('theme-mode')
+    }
   }, [theme])
 
   useEffect(() => {
@@ -113,9 +124,6 @@ export default function App() {
     setSelectedFiles,
     expandedFolders,
     setExpandedFolders,
-    getNodeCheckState,
-    handleToggleNode,
-    toggleFolder,
   } = useFileTreeSelection()
   const [selectedMarkers, setSelectedMarkers] = useState<string[]>([])
   const [profileName, setProfileName] = useState('')
@@ -1079,31 +1087,35 @@ export default function App() {
   // so an already-logged-in user doesn't flash the login screen on reload.
   if (isAuthenticated === null) {
     return (
-      <div className={styles.loginOverlay}>
-        <div className={styles.ambientGlow1}></div>
-        <div className={styles.ambientGlow2}></div>
-        <RotateCw size={32} className={styles.spinIcon} />
-      </div>
+      <LocaleProvider locale={lang === 'zh' ? zh_CN : en_US}>
+        <div className={styles.loginOverlay}>
+          <div className={styles.ambientGlow1}></div>
+          <div className={styles.ambientGlow2}></div>
+          <RotateCw size={32} className={styles.spinIcon} />
+        </div>
+      </LocaleProvider>
     )
   }
 
   // Rendering 1: Login full-screen Glassmorphism if not authenticated
   if (!isAuthenticated) {
     return (
-      <LoginScreen
-        t={t}
-        theme={theme}
-        setTheme={setTheme}
-        lang={lang}
-        setLang={setLang}
-        loginError={loginError}
-        loginUsername={loginUsername}
-        setLoginUsername={setLoginUsername}
-        loginPassword={loginPassword}
-        setLoginPassword={setLoginPassword}
-        loginLoading={loginLoading}
-        onSubmit={handleLoginSubmit}
-      />
+      <LocaleProvider locale={lang === 'zh' ? zh_CN : en_US}>
+        <LoginScreen
+          t={t}
+          theme={theme}
+          setTheme={setTheme}
+          lang={lang}
+          setLang={setLang}
+          loginError={loginError}
+          loginUsername={loginUsername}
+          setLoginUsername={setLoginUsername}
+          loginPassword={loginPassword}
+          setLoginPassword={setLoginPassword}
+          loginLoading={loginLoading}
+          onSubmit={handleLoginSubmit}
+        />
+      </LocaleProvider>
     )
   }
 
@@ -1168,7 +1180,8 @@ export default function App() {
 
   // Rendering 2: Full Dashboard View for Authenticated Users
   return (
-    <div className={styles.appContainer}>
+    <LocaleProvider locale={lang === 'zh' ? zh_CN : en_US}>
+      <div className={styles.appContainer}>
       {/* Background aesthetics */}
       <div className={styles.ambientGlow1}></div>
       <div className={styles.ambientGlow2}></div>
@@ -1328,12 +1341,11 @@ export default function App() {
           selectedProfileId={selectedProfileId}
           setSelectedProfileId={setSelectedProfileId}
           profiles={profiles}
+          selectedFiles={selectedFiles}
           setSelectedFiles={setSelectedFiles}
           scannedFilesTree={scannedFilesTree}
           expandedFolders={expandedFolders}
-          toggleFolder={toggleFolder}
-          getNodeCheckState={getNodeCheckState}
-          handleToggleNode={handleToggleNode}
+          setExpandedFolders={setExpandedFolders}
           scannedMarkers={scannedMarkers}
           selectedMarkers={selectedMarkers}
           setSelectedMarkers={setSelectedMarkers}
@@ -1411,6 +1423,7 @@ export default function App() {
           fetchRuns={fetchRuns}
         />
       )}
-    </div>
+      </div>
+    </LocaleProvider>
   )
 }

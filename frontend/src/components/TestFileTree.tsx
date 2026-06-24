@@ -1,71 +1,86 @@
-import { ChevronRight, FolderGit2, SlidersHorizontal } from 'lucide-react'
-import styles from '../App.module.css'
-import { activateOnKey } from '../a11y'
+import { useMemo } from 'react'
+import { Tree } from '@douyinfe/semi-ui'
+import { IconFolder, IconFile } from '@douyinfe/semi-icons'
 import type { TreeNode } from '../types'
-import type { NodeCheckState } from '../hooks/useFileTreeSelection'
 
 interface TestFileTreeProps {
   nodes: TreeNode[]
+  selectedFiles: string[]
+  setSelectedFiles: (files: string[]) => void
   expandedFolders: string[]
-  onToggleFolder: (path: string) => void
-  getNodeCheckState: (node: TreeNode) => NodeCheckState
-  onToggleNode: (node: TreeNode) => void
+  setExpandedFolders: (folders: string[]) => void
 }
 
-/** Recursive folder/file checkbox tree for selecting which tests to run.
- *  Selection/expansion state is owned by useFileTreeSelection in App. */
+/**
+ * Enterprise-grade tree view for selecting pytest files to execute.
+ * Leverages Semi UI's Tree component with native checkbox management,
+ * keyboard accessibility, and custom icons.
+ */
 export function TestFileTree({
   nodes,
+  selectedFiles,
+  setSelectedFiles,
   expandedFolders,
-  onToggleFolder,
-  getNodeCheckState,
-  onToggleNode,
+  setExpandedFolders,
 }: TestFileTreeProps) {
-  const renderNode = (node: TreeNode, depth = 0) => {
-    const isFolder = node.is_dir
-    const isExpanded = expandedFolders.includes(node.path)
-    const checkState = getNodeCheckState(node)
+  
+  // Transform our TreeNode format to Semi UI's treeData format
+  const treeData = useMemo(() => {
+    const transform = (items: TreeNode[]): any[] => {
+      return items.map(node => ({
+        label: node.name,
+        key: node.path,
+        isLeaf: !node.is_dir,
+        icon: node.is_dir ? (
+          <IconFolder style={{ color: 'var(--semi-color-warning)' }} />
+        ) : (
+          <IconFile style={{ color: 'var(--semi-color-primary)' }} />
+        ),
+        children: node.children && node.children.length > 0 ? transform(node.children) : undefined,
+      }))
+    }
+    return transform(nodes)
+  }, [nodes])
 
-    return (
-      <div key={node.path} className={styles.treeNode} style={{ marginLeft: `${depth * 0.75}rem` }}>
-        <div className={styles.treeRow}>
-          {isFolder ? (
-            <button
-              type="button"
-              className={`${styles.treeExpandButton} ${isExpanded ? styles.treeExpandButtonExpanded : ''}`}
-              onClick={() => onToggleFolder(node.path)}
-            >
-              <ChevronRight size={14} />
-            </button>
-          ) : (
-            <div style={{ width: '16px' }} />
-          )}
+  // Collect all file paths (leaves) to filter out directories from checkedKeys
+  const filePathsSet = useMemo(() => {
+    const fileSet = new Set<string>()
+    const traverse = (items: TreeNode[]) => {
+      items.forEach(node => {
+        if (!node.is_dir) {
+          fileSet.add(node.path)
+        }
+        if (node.children) {
+          traverse(node.children)
+        }
+      })
+    }
+    traverse(nodes)
+    return fileSet
+  }, [nodes])
 
-          {/* Mouse-only redundant hit target; keyboard toggling lives on the named label below (one tab stop per node). */}
-          <div className={styles.treeCheckboxWrapper} onClick={() => onToggleNode(node)}>
-            <div className={`${styles.treeCheckbox} ${checkState === 'checked' ? styles.treeCheckboxChecked : checkState === 'partial' ? styles.treeCheckboxPartial : ''}`} />
-          </div>
-
-          <div
-            className={`${styles.treeLabel} ${isFolder ? styles.treeNodeFolder : styles.treeNodeFile}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => onToggleNode(node)}
-            onKeyDown={activateOnKey(() => onToggleNode(node))}
-          >
-            {isFolder ? <FolderGit2 size={14} className={styles.treeIcon} /> : <SlidersHorizontal size={12} className={styles.treeIcon} />}
-            <span>{node.name}</span>
-          </div>
-        </div>
-
-        {isFolder && isExpanded && node.children && (
-          <div className={styles.treeChildren}>
-            {node.children.map((child: TreeNode) => renderNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
-    )
+  const handleExpand = (expandedKeys: any) => {
+    setExpandedFolders(expandedKeys || [])
   }
 
-  return <>{nodes.map(node => renderNode(node))}</>
+  return (
+    <Tree
+      treeData={treeData}
+      multiple
+      value={selectedFiles}
+      onChange={(checkedKeys) => {
+        const keysArray = Array.isArray(checkedKeys) ? checkedKeys : []
+        const onlyFiles = keysArray.filter((key): key is string => typeof key === 'string' && filePathsSet.has(key))
+        setSelectedFiles(onlyFiles)
+      }}
+      expandedKeys={expandedFolders}
+      onExpand={handleExpand}
+      style={{
+        width: '100%',
+        padding: '0.5rem',
+        maxHeight: '320px',
+        overflowY: 'auto'
+      }}
+    />
+  )
 }

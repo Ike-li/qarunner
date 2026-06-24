@@ -1,5 +1,14 @@
-import { Activity, Clock, FolderGit2, Pencil, Play, SlidersHorizontal, X } from 'lucide-react'
-import type { MouseEvent, ReactNode } from 'react'
+import { MouseEvent, ReactNode } from 'react'
+import { Button, Tooltip, Tag, Badge } from '@douyinfe/semi-ui'
+import {
+  IconFolder,
+  IconActivity,
+  IconPlay,
+  IconEdit,
+  IconClock,
+  IconDelete,
+  IconSetting
+} from '@douyinfe/semi-icons'
 import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
 import type { Lang, TranslationKey } from '../i18n'
@@ -48,7 +57,7 @@ export function ProjectSidebar({
   return (
     <div className={styles.sidebarCard}>
       <div className={styles.sidebarHeader}>
-        <FolderGit2 size={16} className={styles.iconAccent} />
+        <IconFolder style={{ color: 'var(--semi-color-primary)', marginRight: '8px', fontSize: '18px' }} />
         <h2>{t('workspaceSuites')}</h2>
       </div>
       <div className={styles.sidebarContent}>
@@ -61,12 +70,19 @@ export function ProjectSidebar({
           onKeyDown={activateOnKey(() => setSelectedSuiteFilter(null))}
         >
           <div className={styles.sidebarItemMain}>
-            <Activity size={14} className={styles.sidebarIcon} />
+            <IconActivity style={{ color: selectedSuiteFilter === null ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
             <span>{t('allSuites')}</span>
           </div>
-          <span className={styles.suiteCountBadge}>
-            {runs.length}
-          </span>
+          <Badge
+            count={runs.length}
+            overflowCount={999}
+            style={{
+              backgroundColor: selectedSuiteFilter === null ? 'var(--semi-color-primary-light-default)' : 'var(--semi-color-fill-1)',
+              color: selectedSuiteFilter === null ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)',
+              border: 'none',
+              marginLeft: '8px'
+            }}
+          />
         </div>
 
         {/* Scanned test directories */}
@@ -92,24 +108,41 @@ export function ProjectSidebar({
                   onKeyDown={activateOnKey(() => setSelectedSuiteFilter(suite))}
                 >
                   <div className={styles.sidebarItemMain}>
-                    <FolderGit2 size={14} className={styles.sidebarIcon} />
+                    <IconFolder style={{ color: isFiltered ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
                     <span className={styles.suiteNameText} title={suite}>{suite}</span>
                   </div>
                   <div className={styles.sidebarItemActions} onClick={(e) => e.stopPropagation()}>
-                    <span className={styles.suiteCountBadge}>
-                      {suiteRunsCount}
-                    </span>
-                    <button
-                      className={styles.quickPlayButton}
-                      title={t('quickTrigger')}
-                      aria-label={t('quickTrigger')}
-                      onClick={() => {
-                        setTestsPath(suite)
-                        setIsTriggerModalOpen(true)
+                    <Badge
+                      count={suiteRunsCount}
+                      overflowCount={999}
+                      style={{
+                        backgroundColor: isFiltered ? 'var(--semi-color-primary-light-default)' : 'var(--semi-color-fill-1)',
+                        color: isFiltered ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)',
+                        border: 'none'
                       }}
-                    >
-                      <Play size={10} fill="currentColor" />
-                    </button>
+                    />
+                    <Tooltip content={t('quickTrigger')}>
+                      <Button
+                        size="small"
+                        theme="light"
+                        type="primary"
+                        shape="circle"
+                        icon={<IconPlay style={{ fontSize: '10px' }} />}
+                        onClick={() => {
+                          setTestsPath(suite)
+                          setIsTriggerModalOpen(true)
+                        }}
+                        style={{
+                          width: '18px',
+                          height: '18px',
+                          minWidth: '18px',
+                          padding: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      />
+                    </Tooltip>
                   </div>
                 </div>
 
@@ -126,11 +159,11 @@ export function ProjectSidebar({
                       // Pad with empty dots to keep layout consistent at 5 dots
                       for (let i = 0; i < 5 - stats.last5.length; i++) {
                         dots.push(
-                          <span 
-                            key={`empty-${i}`} 
-                            className={`${styles.historyDot} ${styles.dotEmpty}`} 
-                            title={lang === 'zh' ? '无执行记录' : 'No execution'} 
-                          />
+                          <Tooltip key={`empty-${i}`} content={lang === 'zh' ? '无执行记录' : 'No execution'}>
+                            <span 
+                              className={`${styles.historyDot} ${styles.dotEmpty}`} 
+                            />
+                          </Tooltip>
                         );
                       }
 
@@ -154,15 +187,15 @@ export function ProjectSidebar({
                         }
 
                         dots.push(
-                          <span
-                            key={run.id}
-                            className={`${styles.historyDot} ${dotClass}`}
-                            title={tooltip}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => setSelectedRunId(run.id)}
-                            onKeyDown={activateOnKey(() => setSelectedRunId(run.id))}
-                          />
+                          <Tooltip key={run.id} content={tooltip}>
+                            <span
+                              className={`${styles.historyDot} ${dotClass}`}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSelectedRunId(run.id)}
+                              onKeyDown={activateOnKey(() => setSelectedRunId(run.id))}
+                            />
+                          </Tooltip>
                         );
                       });
 
@@ -171,60 +204,78 @@ export function ProjectSidebar({
                           {/* Row 1: Profile Main Info and Actions */}
                           <div className={styles.nestedProfileMainRow}>
                             <div className={styles.nestedProfileInfo}>
-                              <SlidersHorizontal size={11} className={styles.nestedProfileIcon} />
+                              <IconSetting style={{ fontSize: '12px', color: 'var(--semi-color-text-2)', marginRight: '4px' }} />
                               <span className={styles.nestedProfileName}>{profile.name}</span>
                               {isSchedActive && (
-                                <span className={styles.activeScheduleIndicator} title={lang === 'zh' ? `定时已启用: ${existingSched?.cron_expression}` : `Schedule active: ${existingSched?.cron_expression}`} />
+                                <Tooltip content={lang === 'zh' ? `定时已启用: ${existingSched?.cron_expression}` : `Schedule active: ${existingSched?.cron_expression}`}>
+                                  <span className={styles.activeScheduleIndicator} />
+                                </Tooltip>
                               )}
                             </div>
                             <div className={styles.nestedProfileActions}>
-                              <button
-                                className={styles.nestedProfilePlayButton}
-                                title={lang === 'zh' ? '立即执行' : 'Instant Run'}
-                                aria-label={lang === 'zh' ? '立即执行' : 'Instant Run'}
-                                onClick={() => handleTriggerProfile(profile)}
-                              >
-                                <Play size={8} fill="currentColor" />
-                              </button>
-                              <button
-                                className={styles.nestedProfileEditButton}
-                                title={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
-                                aria-label={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
-                                onClick={() => handleOpenEditProfile(profile)}
-                              >
-                                <Pencil size={8} />
-                              </button>
-                              <button
-                                className={`${styles.nestedProfileClockButton} ${isSchedActive ? styles.nestedProfileClockButtonActive : ''}`}
-                                title={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
-                                aria-label={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
-                                onClick={() => handleOpenScheduleModal(profile)}
-                              >
-                                <Clock size={8} />
-                              </button>
-                              <button
-                                className={styles.nestedProfileDeleteButton}
-                                title={lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                                aria-label={lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                                onClick={(e) => handleDeleteProfile(profile.id, e)}
-                              >
-                                <X size={8} />
-                              </button>
+                              <Tooltip content={lang === 'zh' ? '立即执行' : 'Instant Run'}>
+                                <Button
+                                  size="small"
+                                  theme="borderless"
+                                  type="tertiary"
+                                  icon={<IconPlay style={{ fontSize: '10px' }} />}
+                                  onClick={() => handleTriggerProfile(profile)}
+                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                                />
+                              </Tooltip>
+                              <Tooltip content={lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}>
+                                <Button
+                                  size="small"
+                                  theme="borderless"
+                                  type="tertiary"
+                                  icon={<IconEdit style={{ fontSize: '10px' }} />}
+                                  onClick={() => handleOpenEditProfile(profile)}
+                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                                />
+                              </Tooltip>
+                              <Tooltip content={lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}>
+                                <Button
+                                  size="small"
+                                  theme="borderless"
+                                  type={isSchedActive ? "primary" : "tertiary"}
+                                  icon={<IconClock style={{ fontSize: '10px' }} />}
+                                  onClick={() => handleOpenScheduleModal(profile)}
+                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                                />
+                              </Tooltip>
+                              <Tooltip content={lang === 'zh' ? '删除方案' : 'Delete Profile'}>
+                                <Button
+                                  size="small"
+                                  theme="borderless"
+                                  type="danger"
+                                  icon={<IconDelete style={{ fontSize: '10px' }} />}
+                                  onClick={(e) => handleDeleteProfile(profile.id, e)}
+                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                                />
+                              </Tooltip>
                             </div>
                           </div>
 
                           {/* Row 2: Performance metrics and historical circles */}
                           <div className={styles.nestedProfileStatsRow}>
                             {stats.hasRuns ? (
-                              <span className={`${styles.profilePassRateBadge} ${stats.passRate >= 80 ? styles.badgeHighPass : stats.passRate >= 50 ? styles.badgeMediumPass : styles.badgeLowPass}`}>
+                              <Tag
+                                size="small"
+                                color={stats.passRate >= 80 ? 'green' : stats.passRate >= 50 ? 'amber' : 'red'}
+                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
+                              >
                                 {stats.passRate}% {lang === 'zh' ? '通过率' : 'Pass'}
-                              </span>
+                              </Tag>
                             ) : (
-                              <span className={styles.profileNoRunsBadge}>
+                              <Tag
+                                size="small"
+                                color="grey"
+                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
+                              >
                                 {lang === 'zh' ? '暂无记录' : 'No runs'}
-                              </span>
+                              </Tag>
                             )}
-                            <div className={styles.profileHistoryDots} title={lang === 'zh' ? '最近 5 次执行历史 (从左至右: 较早 -> 最新，点击圆点可载入日志)' : 'Last 5 runs (left to right: older -> newest, click to load logs)'}>
+                            <div className={styles.profileHistoryDots}>
                               {dots}
                             </div>
                           </div>

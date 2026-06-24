@@ -1,8 +1,23 @@
-import { Activity, BarChart3, Box, CheckCircle2, ChevronRight, Clock, Cpu, FolderGit2, Lock, Play, RotateCw, Sparkles, Unlock, Users, XCircle } from 'lucide-react'
-import type { MouseEvent } from 'react'
+import React from 'react'
+import { Table, Tag, Progress, Button, Radio, RadioGroup, Tooltip, Spin } from '@douyinfe/semi-ui'
+import {
+  IconLock,
+  IconUnlock,
+  IconFolder,
+  IconRefresh,
+  IconChevronRight,
+  IconActivity,
+  IconUser,
+  IconClock,
+  IconBox,
+  IconServer,
+  IconBolt,
+  IconPlay
+} from '@douyinfe/semi-icons'
 import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
 import { formatDuration } from '../logUtils'
+import { passRateColor, statusTagColor } from './runStatus'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Run } from '../types'
 
@@ -18,13 +33,15 @@ interface RunsTableProps {
   setSelectedRunId: (value: string | null) => void
   setIsTriggerModalOpen: (value: boolean) => void
   fetchRuns: () => void
-  handleToggleLock: (runId: string, e: MouseEvent) => void
+  handleToggleLock: (runId: string, e: React.MouseEvent) => void
   formatDate: (isoStr: string | null) => string
 }
 
-/** Right column: execution-records table with segmented All/Manual/Scheduled
- *  filter tabs, refresh, loading/empty states, and one row per run
- *  (status/engine/owner badges, results, pass-rate bar, duration, lock toggle). */
+/**
+ * Right column: execution-records table leveraging Semi UI Table component.
+ * Includes segmented All/Manual/Scheduled filter, refresh button, status colors,
+ * progress bars, and Lock controls.
+ */
 export function RunsTable({
   t,
   lang,
@@ -40,196 +57,240 @@ export function RunsTable({
   handleToggleLock,
   formatDate,
 }: RunsTableProps) {
+
+  const columns = [
+    {
+      title: t('runId'),
+      dataIndex: 'id',
+      key: 'id',
+      render: (text: string) => <code style={{ fontFamily: 'var(--font-mono)' }}>{text.slice(0, 8)}</code>
+    },
+    {
+      title: <IconLock style={{ fontSize: '14px' }} />,
+      dataIndex: 'locked',
+      key: 'locked',
+      align: 'center' as const,
+      render: (locked: boolean, record: Run) => (
+        <Tooltip
+          content={locked
+            ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
+            : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
+          }
+        >
+          <Button
+            type="tertiary"
+            icon={locked ? <IconLock style={{ color: 'var(--semi-color-warning)' }} /> : <IconUnlock style={{ color: 'var(--semi-color-text-3)' }} />}
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleToggleLock(record.id, e)
+            }}
+          />
+        </Tooltip>
+      )
+    },
+    {
+      title: t('targetSuite'),
+      dataIndex: 'tests_path',
+      key: 'tests_path',
+      render: (text: string) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <IconFolder style={{ color: 'var(--semi-color-text-2)' }} />
+          <span style={{ fontWeight: 500 }}>{text}</span>
+        </span>
+      )
+    },
+    {
+      title: t('status'),
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: Run['status'], record: Run) => {
+        const color: any = statusTagColor(status, record.passed)
+        let icon: React.ReactNode = null
+        if (status === 'queued') {
+          icon = <IconRefresh spin />
+        } else if (status === 'running') {
+          icon = <IconActivity spin />
+        }
+
+        return (
+          <Tag color={color} size="large" style={{ textTransform: 'capitalize', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            {icon}
+            {t(`status_${status}`)}
+          </Tag>
+        )
+      }
+    },
+    {
+      title: t('engine'),
+      dataIndex: 'executor_mode',
+      key: 'executor_mode',
+      render: (mode: Run['executor_mode']) => (
+        <Tag color="violet" size="large">
+          {mode === 'docker' ? <IconBox style={{ marginRight: '4px' }} /> : <IconServer style={{ marginRight: '4px' }} />}
+          {t(`engine_${mode}`)}
+        </Tag>
+      )
+    },
+    {
+      title: t('owner'),
+      dataIndex: 'created_by',
+      key: 'created_by',
+      render: (text: string) => {
+        let color: any = 'default'
+        if (text === 'system' || text.startsWith('system:')) color = 'teal'
+        else if (text === 'admin') color = 'red'
+        else color = 'indigo'
+        return <Tag color={color} size="large">{text}</Tag>
+      }
+    },
+    {
+      title: t('results'),
+      dataIndex: 'summary',
+      key: 'summary',
+      render: (summary: Run['summary']) => {
+        if (!summary) return <span style={{ color: 'var(--semi-color-text-3)' }}>-</span>
+        return (
+          <span style={{ fontWeight: 600 }}>
+            <span style={{ color: 'var(--semi-color-success)' }}>{summary.passed}</span>
+            <span style={{ color: 'var(--semi-color-text-3)', margin: '0 4px' }}>/</span>
+            <span style={{ color: 'var(--semi-color-danger)' }}>{summary.failed + summary.error}</span>
+            <span style={{ color: 'var(--semi-color-text-3)', margin: '0 4px' }}>/</span>
+            <span>{summary.total}</span>
+          </span>
+        )
+      }
+    },
+    {
+      title: t('passRate'),
+      dataIndex: 'summary',
+      key: 'passRate',
+      render: (summary: Run['summary']) => {
+        if (!summary) return <span style={{ color: 'var(--semi-color-text-3)' }}>-</span>
+        const rate = Math.round(summary.pass_rate * 100)
+        const strokeColor = passRateColor(rate)
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
+            <Progress percent={rate} stroke={strokeColor} style={{ width: '60px' }} size="small" />
+            <span style={{ fontSize: '12px', minWidth: '32px', fontWeight: 600 }}>{rate}%</span>
+          </div>
+        )
+      }
+    },
+    {
+      title: t('duration'),
+      dataIndex: 'summary',
+      key: 'duration',
+      render: (summary: Run['summary']) => (
+        <span style={{ fontFamily: 'var(--font-mono)' }}>
+          {formatDuration(summary?.duration_ms)}
+        </span>
+      )
+    },
+    {
+      title: t('createdAt'),
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (text: string) => (
+        <span style={{ color: 'var(--semi-color-text-2)' }}>
+          {formatDate(text)}
+        </span>
+      )
+    },
+    {
+      title: '',
+      key: 'arrow',
+      render: () => <IconChevronRight style={{ color: 'var(--semi-color-text-3)' }} />
+    }
+  ]
+
+  const onRow = (record: any) => {
+    return {
+      onClick: () => {
+        if (record) setSelectedRunId(record.id)
+      },
+      onKeyDown: activateOnKey(() => {
+        if (record) setSelectedRunId(record.id)
+      }),
+      className: record?.id === selectedRunId ? styles.rowSelected : ''
+    }
+  }
+
   return (
     <div className={styles.tableCard}>
-      <div className={styles.tableHeader}>
+      <div className={styles.tableHeader} style={{ flexWrap: 'wrap', gap: '1rem' }}>
         <div className={styles.tableTitleGroup}>
-          <BarChart3 size={18} className={styles.iconMuted} />
-          <h2 data-testid="execution-records-title">{t('executionRecords')}</h2>
+          <IconActivity size="large" style={{ color: 'var(--semi-color-text-2)' }} />
+          <h2 data-testid="execution-records-title" style={{ margin: 0 }}>{t('executionRecords')}</h2>
         </div>
 
-        {/* Segmented Filter Tab */}
-        <div className={styles.logFilters}>
-          <button 
-            className={`${styles.logFilterButton} ${logFilterTab === 'All' ? styles.logFilterButtonActive : ''}`}
-            onClick={() => setLogFilterTab('All')}
-          >
-            <Activity size={12} />
-            <span>{lang === 'zh' ? '全部记录' : 'All Runs'}</span>
-          </button>
-          <button 
-            className={`${styles.logFilterButton} ${logFilterTab === 'Manual' ? styles.logFilterButtonActive : ''}`}
-            onClick={() => setLogFilterTab('Manual')}
-          >
-            <Users size={12} />
-            <span>{lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
-          </button>
-          <button 
-            className={`${styles.logFilterButton} ${logFilterTab === 'Scheduled' ? styles.logFilterButtonActive : ''}`}
-            onClick={() => setLogFilterTab('Scheduled')}
-          >
-            <Clock size={12} />
-            <span>{lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
-          </button>
-        </div>
-
-        <button
-          className={styles.refreshIconButton}
-          onClick={fetchRuns}
-          title={t('refreshLogs')}
-          aria-label={t('refreshLogs')}
+        {/* Segmented Filter Radio Group */}
+        <RadioGroup
+          type="button"
+          buttonSize="middle"
+          value={logFilterTab}
+          onChange={e => setLogFilterTab(e.target.value as any)}
+          style={{ marginRight: 'auto' }}
         >
-          <RotateCw size={16} />
-        </button>
+          <Radio value="All">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <IconActivity />
+              <span>{lang === 'zh' ? '全部记录' : 'All Runs'}</span>
+            </span>
+          </Radio>
+          <Radio value="Manual">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <IconUser />
+              <span>{lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
+            </span>
+          </Radio>
+          <Radio value="Scheduled">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <IconClock />
+              <span>{lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
+            </span>
+          </Radio>
+        </RadioGroup>
+
+        <Button
+          icon={<IconRefresh />}
+          onClick={fetchRuns}
+          aria-label={t('refreshLogs')}
+          title={t('refreshLogs')}
+        />
       </div>
 
       {loading && runs.length === 0 ? (
         <div className={styles.loadingState}>
-          <RotateCw size={36} className={styles.spinIcon} />
-          <p>{t('loadingHistory')}</p>
+          <Spin size="large" />
+          <p style={{ marginTop: '1rem' }}>{t('loadingHistory')}</p>
         </div>
       ) : runs.length === 0 ? (
         <div className={styles.emptyState}>
-          <Sparkles size={48} className={styles.iconSparkle} />
+          <IconBolt style={{ color: 'var(--semi-color-warning)', fontSize: '48px' }} />
           <h3>{t('noRunsTitle')}</h3>
           <p>{t('noRunsDesc')}</p>
-          <button 
-            className={styles.triggerButton}
+          <Button
+            theme="solid"
+            type="primary"
+            icon={<IconPlay />}
             onClick={() => setIsTriggerModalOpen(true)}
             style={{ marginTop: '1.5rem' }}
           >
-            <Play size={16} fill="currentColor" />
-            <span>{t('launchFirstRun')}</span>
-          </button>
+            {t('launchFirstRun')}
+          </Button>
         </div>
       ) : (
         <div className={styles.tableWrapper}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>{t('runId')}</th>
-                <th style={{ width: '50px', textAlign: 'center' }}><Lock size={12} /></th>
-                <th>{t('targetSuite')}</th>
-                <th>{t('status')}</th>
-                <th>{t('engine')}</th>
-                <th>{t('owner')}</th>
-                <th>{t('results')}</th>
-                <th>{t('passRate')}</th>
-                <th>{t('duration')}</th>
-                <th>{t('createdAt')}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRuns.map((run) => {
-                const isSelected = run.id === selectedRunId
-                return (
-                  <tr
-                    key={run.id}
-                    className={`${styles.tableRow} ${isSelected ? styles.rowSelected : ''}`}
-                    tabIndex={0}
-                    onClick={() => setSelectedRunId(run.id)}
-                    onKeyDown={activateOnKey(() => setSelectedRunId(run.id))}
-                  >
-                    <td className={styles.cellId}>
-                      <code>{run.id.slice(0, 8)}</code>
-                    </td>
-                    <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className={`${styles.lockButton} ${run.locked ? styles.lockButtonActive : ''}`}
-                        onClick={(e) => handleToggleLock(run.id, e)}
-                        title={run.locked
-                          ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
-                          : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
-                        }
-                        aria-label={run.locked
-                          ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
-                          : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
-                        }
-                      >
-                        {run.locked ? (
-                          <Lock size={12} className={styles.lockIconActive} />
-                        ) : (
-                          <Unlock size={12} className={styles.lockIconInactive} />
-                        )}
-                      </button>
-                    </td>
-                    <td className={styles.cellPath}>
-                      <FolderGit2 size={15} className={styles.inlineIcon} />
-                      <span>{run.tests_path}</span>
-                    </td>
-                    <td>
-                      <span className={`${styles.badge} ${styles[`badge_${run.status}`]}`}>
-                        {run.status === 'queued' && <RotateCw size={12} className={styles.spinIcon} />}
-                        {run.status === 'running' && <Activity size={12} className={styles.pulseIcon} />}
-                        {run.status === 'completed' && run.passed && <CheckCircle2 size={12} />}
-                        {run.status === 'completed' && !run.passed && <XCircle size={12} />}
-                        {run.status === 'failed' && <XCircle size={12} />}
-                        {run.status === 'timeout' && <Clock size={12} />}
-                        <span className={styles.badgeText}>{t(`status_${run.status}`)}</span>
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`${styles.engineBadge} ${
-                        run.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
-                      }`}>
-                        {run.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
-                        <span>{t(`engine_${run.executor_mode}`)}</span>
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`${styles.ownerBadge} ${
-                        run.created_by === 'system' ? styles.ownerBadge_system :
-                        run.created_by === 'admin' ? styles.ownerBadge_admin : styles.ownerBadge_user
-                      }`}>
-                        {run.created_by}
-                      </span>
-                    </td>
-                    <td>
-                      {run.summary ? (
-                        <span className={styles.summaryStats}>
-                          <span className={styles.textPassed}>{run.summary.passed}</span>
-                          <span className={styles.statDivider}>/</span>
-                          <span className={styles.textFailed}>{run.summary.failed + run.summary.error}</span>
-                          <span className={styles.statDivider}>/</span>
-                          <span>{run.summary.total}</span>
-                        </span>
-                      ) : (
-                        <span className={styles.textMuted}>-</span>
-                      )}
-                    </td>
-                    <td>
-                      {run.summary ? (
-                        <div className={styles.progressContainer}>
-                          <div className={styles.progressBarWrapper}>
-                            <div 
-                              className={`${styles.progressBar} ${run.passed ? styles.bgPassed : styles.bgFailed}`}
-                              style={{ width: `${run.summary.pass_rate * 100}%` }}
-                            ></div>
-                          </div>
-                          <span className={styles.progressText}>
-                            {(run.summary.pass_rate * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                      ) : (
-                        <span className={styles.textMuted}>-</span>
-                      )}
-                    </td>
-                    <td className={styles.textMono}>
-                      {formatDuration(run.summary?.duration_ms)}
-                    </td>
-                    <td className={styles.textMuted}>
-                      {formatDate(run.created_at)}
-                    </td>
-                    <td className={styles.cellArrow}>
-                      <ChevronRight size={16} />
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <Table
+            columns={columns}
+            dataSource={filteredRuns}
+            rowKey="id"
+            onRow={onRow}
+            pagination={filteredRuns.length > 10 ? { pageSize: 10 } : false}
+            size="middle"
+            style={{ width: '100%' }}
+          />
         </div>
       )}
     </div>

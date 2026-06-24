@@ -236,7 +236,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 1.5rem;
-  margin-top: 2rem;
+  margin-top: 1.25rem;
   position: relative;
   z-index: 10;
 }
@@ -245,11 +245,11 @@
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: 16px;
-  padding: 1.25rem 1.5rem;
+  padding: 0.9rem 1.25rem;
   backdrop-filter: blur(16px);
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1rem;
   transition: all 0.3s ease;
 }
 
@@ -260,9 +260,9 @@
 }
 
 .statIconWrapper {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -293,7 +293,7 @@
 
 .statValue {
   font-family: var(--font-title);
-  font-size: 1.85rem;
+  font-size: 1.6rem;
   font-weight: 700;
   margin: 0.15rem 0 0 0;
   line-height: 1;
@@ -301,7 +301,7 @@
 
 /* Main content layout with dual column sidebar + table */
 .mainContent {
-  margin-top: 2rem;
+  margin-top: 1.25rem;
   position: relative;
   z-index: 10;
   flex: 1;
@@ -501,6 +501,7 @@
   overflow: hidden;
   flex: 1;
   min-width: 0;
+  min-height: calc(100vh - 260px);
 }
 
 .tableHeader {
@@ -2089,26 +2090,6 @@
   background: rgba(255, 255, 255, 0.09);
   border-color: rgba(255, 255, 255, 0.15);
   transform: translateY(-1px);
-}
-
-/* Logout button */
-.logoutButton {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-}
-
-.logoutButton:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: #f87171;
 }
 
 /* Owner Badges inside Run Records */

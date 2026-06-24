@@ -1,4 +1,5 @@
 import { Activity, LogOut, Moon, Play, Sun, Users } from 'lucide-react'
+import { Button, Avatar, Tag, Tooltip, Space } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import type { Lang, TranslationKey } from '../i18n'
 import type { UserProfile } from '../types'
@@ -39,85 +40,100 @@ export function Header({
           <Activity className={styles.pulseIcon} />
         </div>
         <div className={styles.logoText}>
-          <h1>{t('platformTitle')}</h1>
-          <span>{t('platformSubtitleFull')}</span>
+          <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: 'var(--semi-color-text-0)' }}>{t('platformTitle')}</h1>
+          <span style={{ fontSize: '11px', color: 'var(--semi-color-text-2)' }}>{t('platformSubtitleFull')}</span>
         </div>
       </div>
 
-      <div className={styles.headerActions}>
+      <div className={styles.headerActions} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
         {/* User profile capsule */}
         {currentUser && (
-          <div className={styles.userProfileCapsule}>
-            <div className={styles.userAvatar}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 12px', borderRadius: '20px', backgroundColor: 'var(--semi-color-fill-0)', border: '1px solid var(--semi-color-border)' }}>
+            <Avatar size="small" color={currentUser.role === 'admin' ? 'blue' : 'amber'} style={{ fontSize: '11px', fontWeight: 600 }}>
               {currentUser.username.substring(0, 2).toUpperCase()}
-            </div>
-            <div className={styles.userInfo}>
-              <span className={styles.profileUsername} data-testid="profile-username">{currentUser.username}</span>
-              <span className={`${styles.profileRoleTag} ${styles[`profileRole_${currentUser.role}`]}`} data-testid="profile-role">
-                {currentUser.role}
+            </Avatar>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.2 }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--semi-color-text-0)' }} data-testid="profile-username">
+                {currentUser.username}
               </span>
+              <Tag
+                size="small"
+                color={currentUser.role === 'admin' ? 'blue' : 'amber'}
+                style={{ fontSize: '10px', height: '16px', padding: '0 4px', marginTop: '2px', textTransform: 'capitalize' }}
+                data-testid="profile-role"
+              >
+                {currentUser.role}
+              </Tag>
             </div>
           </div>
         )}
 
-        {/* Admin User Management Button */}
-        {currentUser?.role === 'admin' && (
-          <button
-            className={styles.manageUsersButton}
-            data-testid="open-users-button"
+        <Space spacing={8}>
+          {/* Admin User Management Button */}
+          {currentUser?.role === 'admin' && (
+            <Tooltip content={t('managePlatformUsers')}>
+              <Button
+                theme="light"
+                type="primary"
+                data-testid="open-users-button"
+                onClick={() => {
+                  fetchUsers()
+                  setIsUserModalOpen(true)
+                }}
+                icon={<Users size={16} />}
+              >
+                {t('users')}
+              </Button>
+            </Tooltip>
+          )}
+
+          {/* Theme Toggle */}
+          <Tooltip content={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+            <Button
+              theme="borderless"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              icon={theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
+              style={{ color: 'var(--semi-color-text-1)' }}
+            />
+          </Tooltip>
+
+          {/* Language Toggle */}
+          <Tooltip content={lang === 'en' ? '切换为中文' : 'Switch to English'}>
+            <Button
+              theme="borderless"
+              onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+              style={{ fontWeight: 600, color: 'var(--semi-color-text-1)' }}
+            >
+              {lang === 'en' ? '中文' : 'EN'}
+            </Button>
+          </Tooltip>
+
+          {/* Trigger Run */}
+          <Button
+            type="primary"
+            theme="solid"
+            data-testid="open-trigger-button"
+            icon={<Play size={16} fill="currentColor" />}
             onClick={() => {
-              fetchUsers()
-              setIsUserModalOpen(true)
+              fetchTests()
+              setIsTriggerModalOpen(true)
             }}
-            title={t('managePlatformUsers')}
           >
-            <Users size={16} />
-            <span>{t('users')}</span>
-          </button>
-        )}
+            {t('triggerRun')}
+          </Button>
 
-        {/* Theme Toggle */}
-        <button
-          className={styles.actionIconButton}
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-          aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-        >
-          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
-
-        {/* Language Toggle */}
-        <button
-          className={styles.actionIconButton}
-          onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
-          title={lang === 'en' ? '切换为中文' : 'Switch to English'}
-          aria-label={lang === 'en' ? '切换为中文' : 'Switch to English'}
-        >
-          <span className={styles.langText}>{lang === 'en' ? 'ZH' : 'EN'}</span>
-        </button>
-
-        <button
-          className={styles.triggerButton}
-          data-testid="open-trigger-button"
-          onClick={() => {
-            fetchTests()
-            setIsTriggerModalOpen(true)
-          }}
-        >
-          <Play size={16} fill="currentColor" />
-          <span>{t('triggerRun')}</span>
-        </button>
-
-        {/* Logout Trigger */}
-        <button
-          className={styles.logoutButton}
-          onClick={handleLogout}
-          title={t('signOut')}
-          aria-label={t('signOut')}
-        >
-          <LogOut size={18} />
-        </button>
+          {/* Logout Button */}
+          <Tooltip content={t('signOut')}>
+            <Button
+              theme="borderless"
+              onClick={handleLogout}
+              icon={<LogOut size={16} />}
+              style={{ color: 'var(--semi-color-text-1)' }}
+            />
+          </Tooltip>
+        </Space>
       </div>
     </header>
   )
 }
+

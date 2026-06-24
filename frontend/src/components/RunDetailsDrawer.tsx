@@ -5,8 +5,8 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react'
+import { SideSheet, Tabs, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
-import { useDialogA11y } from '../hooks/useDialogA11y'
 import { formatDuration } from '../logUtils'
 import type { Lang, TranslationKey } from '../i18n'
 import type { Run } from '../types'
@@ -91,68 +91,39 @@ export function RunDetailsDrawer({
 
 
 
-  const dialogRef = useDialogA11y({
-    isOpen: !!selectedRun,
-    onClose: () => {
-      setSelectedRunId(null)
-      setIsDrawerExpanded(false)
-    },
-  })
   return (
-    <div className={`${styles.drawerOverlay} ${selectedRun ? styles.drawerOpen : ''}`} onClick={() => {
-      setSelectedRunId(null)
-      setIsDrawerExpanded(false)
-    }}>
-      <div
-        ref={dialogRef}
-        className={`${styles.drawer} ${isDrawerExpanded ? styles.drawerExpanded : ''}`}
-        role={selectedRun ? 'dialog' : undefined}
-        aria-modal={selectedRun ? true : undefined}
-        aria-labelledby={selectedRun ? 'run-details-title' : undefined}
-        aria-hidden={selectedRun ? undefined : true}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className={styles.drawerHeader}>
+    <SideSheet
+      visible={!!selectedRun}
+      onCancel={() => {
+        setSelectedRunId(null)
+        setIsDrawerExpanded(false)
+      }}
+      width={isDrawerExpanded ? '85%' : '640px'}
+      title={
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '1rem' }}>
           <div className={styles.drawerTitleGroup}>
-            <h3 id="run-details-title">{t('executionDetails')}</h3>
+            <h3 id="run-details-title" style={{ margin: 0 }}>{t('executionDetails')}</h3>
             <code>{t('id')}: {selectedRun?.id}</code>
           </div>
-          <div className={styles.drawerHeaderActions}>
-            <button
-              className={styles.drawerExpandButton}
-              tabIndex={selectedRun ? undefined : -1}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Button
+              icon={isTopCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
               onClick={() => setIsTopCollapsed(!isTopCollapsed)}
               title={isTopCollapsed ? (lang === 'zh' ? "显示顶部详情" : "Show Top Details") : (lang === 'zh' ? "折叠顶部详情" : "Collapse Top Details")}
-              aria-label={isTopCollapsed ? (lang === 'zh' ? "显示顶部详情" : "Show Top Details") : (lang === 'zh' ? "折叠顶部详情" : "Collapse Top Details")}
-            >
-              {isTopCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-            </button>
-            <button
-              className={styles.drawerExpandButton}
-              tabIndex={selectedRun ? undefined : -1}
+            />
+            <Button
+              icon={isDrawerExpanded ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
               onClick={() => setIsDrawerExpanded(!isDrawerExpanded)}
               title={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
-              aria-label={isDrawerExpanded ? (lang === 'zh' ? "收起面板" : "Collapse Panel Width") : (lang === 'zh' ? "宽屏模式" : "Expand Panel Width")}
-            >
-              {isDrawerExpanded ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-            </button>
-            <button
-              className={styles.drawerCloseButton}
-              tabIndex={selectedRun ? undefined : -1}
-              aria-label={lang === 'zh' ? '关闭' : 'Close'}
-              onClick={() => {
-                setSelectedRunId(null)
-                setIsDrawerExpanded(false)
-              }}
-            >
-              <X size={20} />
-            </button>
+            />
           </div>
         </div>
-
-        {selectedRun && (
-          <div className={styles.drawerContent}>
+      }
+      closable={true}
+      bodyStyle={{ padding: '16px' }}
+    >
+      {selectedRun && (
+        <div className={styles.drawerContent} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             {/* Top Big Status Badge */}
             {!isTopCollapsed && (
               <div className={styles.drawerStatusSection}>
@@ -216,22 +187,26 @@ export function RunDetailsDrawer({
             )}
 
             {/* Tab Selector Segmented Control */}
-            <div className={styles.drawerTabs}>
-              <button 
-                className={`${styles.drawerTabButton} ${drawerTab === 'logs' ? styles.drawerTabButtonActive : ''}`}
-                onClick={() => setDrawerTab('logs')}
-              >
-                <Terminal size={14} />
-                <span>{t('consoleLogs')}</span>
-              </button>
-              <button 
-                className={`${styles.drawerTabButton} ${drawerTab === 'report' ? styles.drawerTabButtonActive : ''}`}
-                onClick={() => setDrawerTab('report')}
-              >
-                <BarChart3 size={14} />
-                <span>{t('testReport')}</span>
-              </button>
-            </div>
+            <Tabs activeKey={drawerTab} onChange={key => setDrawerTab(key as any)} style={{ marginBottom: '1rem' }}>
+              <Tabs.TabPane
+                itemKey="logs"
+                tab={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <Terminal size={14} />
+                    <span>{t('consoleLogs')}</span>
+                  </span>
+                }
+              />
+              <Tabs.TabPane
+                itemKey="report"
+                tab={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <BarChart3 size={14} />
+                    <span>{t('testReport')}</span>
+                  </span>
+                }
+              />
+            </Tabs>
 
             {drawerTab === 'logs' && (
               <>
@@ -561,7 +536,6 @@ export function RunDetailsDrawer({
             )}
           </div>
         )}
-      </div>
-    </div>
+    </SideSheet>
   )
 }
