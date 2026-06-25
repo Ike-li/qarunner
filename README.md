@@ -54,6 +54,12 @@ docker compose -f docker-compose.dev.yml up
   `uvicorn --reload` with `WATCHFILES_FORCE_POLLING` as a fallback for when
   inotify events don't cross the mount. `frontend/node_modules` is an anonymous
   volume, so the container's Linux binaries never collide with the host's.
+- **Linking a local suite**: "Add suite → local path" symlinks a host project
+  into `external_tests`. For the symlink to resolve *inside* the container, the
+  host projects root is bind-mounted read-only at the same path
+  (`QARUNNER_PROJECTS_ROOT`, default `~/code`); narrow it in `.env` for a tighter
+  mount. Git suites instead clone straight into `external_tests` and need no such
+  mount.
 - **Don't use a bare `docker compose up` for development** — with no `-f` flag it
   starts the *production* `docker-compose.yml` (baked SPA on `:8000`, zero hot
   reload).
@@ -103,6 +109,12 @@ automatically (no token is ever placed in a URL). Therefore:
   orchestrator's readiness probe at the same path.
 - **Persistence**: the SQLite DB and run artifacts both live in the
   `platform-artifacts` named volume. Back it up to retain run history.
+- **Test suites**: the single-instance platform clones / pulls / prepares git
+  suites into the writable `external_tests` root. It is bind-mounted
+  source==target so the DooD executor's jail-fallback path stays host-resolvable;
+  on a server point `${PWD}/external_tests` at a persistent directory and back it
+  up too. No named volume is used — the executor mounts the per-run jail under
+  artifacts, never this root.
 - **Executor**: runs default to the in-process `subprocess` executor. The
   hardened Docker executor (SEC-3: non-root, no network, `cap_drop=ALL`,
   read-only rootfs, pid/mem/cpu limits) needs a Docker daemon socket mounted into

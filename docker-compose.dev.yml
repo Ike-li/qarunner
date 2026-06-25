@@ -21,6 +21,11 @@ services:
       - ./src:/app/src
       - ./artifacts:/app/artifacts
       - ./external_tests:/app/external_tests
+      # dev "link local suite": mount the host projects root at the SAME path
+      # (source==target) so a symlink created under external_tests → a host
+      # project resolves inside the container (otherwise it dangles — the
+      # original bug). Defaults to ~/code; narrow via QARUNNER_PROJECTS_ROOT.
+      - ${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
