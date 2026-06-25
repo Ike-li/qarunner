@@ -609,6 +609,55 @@ def test_list_tests_missing_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resp.json() == []
 
 
+def test_list_suites_detailed_left_join(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /suites = filesystem entities left-joined with metadata (R5).
+
+    Registered dirs carry their recorded source/repo_url/ref; unregistered dirs
+    still appear, defaulting to ``local`` (manual placement isn't broken).
+    """
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "git_suite").mkdir()
+    (tests_root / "manual_suite").mkdir()
+    (tests_root / ".hidden").mkdir()
+    (tests_root / "__pycache__").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(
+        container.store,
+        name="git_suite",
+        source="git",
+        repo_url="https://example.com/r.git",
+        ref="main",
+    )
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        resp = client.get("/suites")
+
+    assert resp.status_code == 200
+    by_name = {s["name"]: s for s in resp.json()}
+    assert set(by_name) == {"git_suite", "manual_suite"}  # hidden/__ filtered out
+    assert by_name["git_suite"]["source"] == "git"
+    assert by_name["git_suite"]["repo_url"] == "https://example.com/r.git"
+    assert by_name["git_suite"]["ref"] == "main"
+    assert by_name["manual_suite"]["source"] == "local"
+    assert by_name["manual_suite"]["repo_url"] is None
+
+
+def test_list_suites_detailed_missing_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", "/nonexistent/suites/path")
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/suites")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 # ── Schedules Endpoints ───────────────────────────────────────────────
 
 

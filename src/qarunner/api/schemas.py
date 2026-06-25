@@ -259,6 +259,19 @@ class CloneTestSuiteRequest(BaseModel):
     credential_ref: str | None = None
 
 
+class SuiteInfoResponse(BaseModel):
+    """A test suite as a filesystem entity left-joined with its metadata.
+
+    Unregistered directories default to ``source="local"`` so manually placed
+    suites still surface (R5).
+    """
+
+    name: str
+    source: str = "local"
+    repo_url: str | None = None
+    ref: str | None = None
+
+
 class LinkTestSuiteResponse(BaseModel):
     """Response of linking a local directory path."""
 

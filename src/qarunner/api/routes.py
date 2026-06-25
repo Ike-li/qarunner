@@ -30,6 +30,7 @@ from qarunner.api.schemas import (
     CloneTestSuiteRequest,
     LinkTestSuiteRequest,
     LinkTestSuiteResponse,
+    SuiteInfoResponse,
     profile_to_response,
     run_to_response,
     schedule_to_response,
@@ -151,6 +152,20 @@ def _safe_suite_path(tests_root: Path, name: str) -> Path:
     if (not name) or ("/" in name) or ("\\" in name) or name.startswith("."):
         raise HTTPException(status_code=400, detail=f"Invalid suite name: {name!r}")
     return tests_root / name
+
+
+def _scan_suite_dirs(tests_root: Path) -> list[str]:
+    """Return sorted suite directory names directly under *tests_root*.
+
+    Skips hidden (``.``) and dunder (``__``) entries; the filesystem is the
+    source of truth for which suites exist (R5).
+    """
+    names: list[str] = []
+    for entry in tests_root.iterdir():
+        if entry.is_dir() and not entry.name.startswith(".") and not entry.name.startswith("__"):
+            names.append(entry.name)
+    names.sort()
+    return names
 
 
 # ── Health ───────────────────────────────────────────────────────────────
@@ -326,16 +341,42 @@ async def list_tests(
     tests_root = Path(cfg.tests_root).resolve()
     if not tests_root.is_dir():
         return []
+    return await asyncio.to_thread(_scan_suite_dirs, tests_root)
 
-    def _scan_tests() -> list[str]:
-        paths: list[str] = []
-        for entry in tests_root.iterdir():
-            if entry.is_dir() and not entry.name.startswith(".") and not entry.name.startswith("__"):
-                paths.append(entry.name)
-        paths.sort()
-        return paths
 
-    return await asyncio.to_thread(_scan_tests)
+@router.get("/suites", response_model=list[SuiteInfoResponse])
+async def list_suites_detailed(
+    request: Request, _current_user: User = Depends(get_current_user)
+) -> list[SuiteInfoResponse]:
+    """List suites as filesystem entities left-joined with their metadata (R5).
+
+    Each directory under tests_root is returned with its recorded source / repo
+    / ref; directories with no record default to ``local`` so manually placed
+    suites still appear. Drives the frontend's source-aware actions (stage 5).
+    """
+    container = request.app.state.container
+    cfg = container.settings
+    store = container.store
+    tests_root = Path(cfg.tests_root).resolve()
+    if not tests_root.is_dir():
+        return []
+
+    names = await asyncio.to_thread(_scan_suite_dirs, tests_root)
+    suites: list[SuiteInfoResponse] = []
+    for name in names:
+        record = await store.get_suite(name)
+        if record is not None:
+            suites.append(
+                SuiteInfoResponse(
+                    name=name,
+                    source=record.source,
+                    repo_url=record.repo_url,
+                    ref=record.ref,
+                )
+            )
+        else:
+            suites.append(SuiteInfoResponse(name=name))
+    return suites
 
 
 @router.post("/tests/link", response_model=LinkTestSuiteResponse)
