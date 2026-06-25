@@ -72,6 +72,25 @@ class TestProfile(BaseModel):
 
 
 
+class TestSuite(BaseModel):
+    """A registered external test suite living under tests_root.
+
+    ``source`` is "local" (symlinked host path, dev-only) or "git" (cloned repo).
+    git suites carry repo_url/ref/credential_ref for updates; ``created_by`` is
+    the owner used for object-level authz.
+    """
+
+    __test__ = False
+
+    name: str
+    source: str = "local"
+    repo_url: str | None = None
+    ref: str | None = None
+    credential_ref: str | None = None
+    created_by: str
+    created_at: datetime
+
+
 class TestSchedule(BaseModel):
     """Configuration for automated test runs on cron schedule."""
 

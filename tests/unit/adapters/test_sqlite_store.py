@@ -14,6 +14,7 @@ from qarunner.models import (
     RunStatus,
     TestProfile,
     TestSchedule,
+    TestSuite,
     TestSummary,
 )
 
@@ -40,6 +41,57 @@ def _make_run(**kwargs: object) -> Run:
     }
     defaults.update(kwargs)
     return Run(**defaults)  # type: ignore[arg-type]
+
+
+def _make_suite(**kwargs: object) -> TestSuite:
+    defaults: dict[str, object] = {
+        "name": "my-e2e",
+        "source": "git",
+        "repo_url": "https://example.com/r.git",
+        "ref": "main",
+        "credential_ref": None,
+        "created_by": "alice",
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+    }
+    defaults.update(kwargs)
+    return TestSuite(**defaults)  # type: ignore[arg-type]
+
+
+async def test_suite_save_get(store: SqliteStore) -> None:
+    await store.save_suite(_make_suite())
+    got = await store.get_suite("my-e2e")
+    assert got is not None
+    assert got.source == "git"
+    assert got.repo_url == "https://example.com/r.git"
+    assert got.ref == "main"
+    assert got.created_by == "alice"
+
+
+async def test_suite_get_missing_returns_none(store: SqliteStore) -> None:
+    assert await store.get_suite("nope") is None
+
+
+async def test_suite_list(store: SqliteStore) -> None:
+    await store.save_suite(_make_suite(name="a", source="local", repo_url=None, ref=None))
+    await store.save_suite(_make_suite(name="b"))
+    names = sorted(s.name for s in await store.list_suites())
+    assert names == ["a", "b"]
+
+
+async def test_suite_save_is_upsert(store: SqliteStore) -> None:
+    await store.save_suite(_make_suite(ref="main"))
+    await store.save_suite(_make_suite(ref="v2"))
+    got = await store.get_suite("my-e2e")
+    assert got is not None
+    assert got.ref == "v2"
+    assert len(await store.list_suites()) == 1
+
+
+async def test_suite_delete(store: SqliteStore) -> None:
+    await store.save_suite(_make_suite())
+    assert await store.delete_suite("my-e2e") is True
+    assert await store.get_suite("my-e2e") is None
+    assert await store.delete_suite("my-e2e") is False
 
 
 async def test_save_and_get(store: SqliteStore) -> None:

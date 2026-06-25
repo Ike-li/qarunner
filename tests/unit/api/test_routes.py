@@ -25,6 +25,7 @@ from qarunner.models import (
     RunStatus,
     TestProfile,
     TestSchedule,
+    TestSuite,
     User,
     UserRole,
 )
@@ -58,11 +59,13 @@ class FakeStore:
 
     _runs: dict[str, Run] = field(default_factory=dict)
     _profiles: dict[str, TestProfile] = field(default_factory=dict)
+    _suites: dict[str, TestSuite] = field(default_factory=dict)
     _schedules: dict[str, TestSchedule] = field(default_factory=dict)
     _users: dict[str, dict] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._profiles = {}
+        self._suites = {}
         self._schedules = {}
         self._users = {}
         from qarunner.core.auth import hash_password
@@ -125,6 +128,21 @@ class FakeStore:
             ):
                 res.append(r)
         return res
+
+    async def save_suite(self, suite: TestSuite) -> None:
+        self._suites[suite.name] = suite
+
+    async def get_suite(self, name: str) -> TestSuite | None:
+        return self._suites.get(name)
+
+    async def list_suites(self) -> list[TestSuite]:
+        return sorted(self._suites.values(), key=lambda s: s.name)
+
+    async def delete_suite(self, name: str) -> bool:
+        if name in self._suites:
+            del self._suites[name]
+            return True
+        return False
 
     async def save_profile(self, profile: TestProfile) -> None:
         self._profiles[profile.id] = profile

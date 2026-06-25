@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from qarunner.models import Run, TestProfile, TestSchedule
+from qarunner.models import Run, TestProfile, TestSchedule, TestSuite
 
 
 @runtime_checkable
@@ -67,7 +67,20 @@ class ScheduleStore(Protocol):
 
 
 @runtime_checkable
-class Store(RunStore, UserStore, ProfileStore, ScheduleStore, Protocol):
+class SuiteStore(Protocol):
+    """Persistence for registered test suites (local symlink / git clone)."""
+
+    async def save_suite(self, suite: TestSuite) -> None: ...
+
+    async def get_suite(self, name: str) -> TestSuite | None: ...
+
+    async def list_suites(self) -> list[TestSuite]: ...
+
+    async def delete_suite(self, name: str) -> bool: ...
+
+
+@runtime_checkable
+class Store(RunStore, UserStore, ProfileStore, ScheduleStore, SuiteStore, Protocol):
     """Full persistence surface used by the API container.
 
     Combines the focused stores and adds lifecycle and run-maintenance methods.

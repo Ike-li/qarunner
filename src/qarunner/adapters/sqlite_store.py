@@ -13,7 +13,15 @@ from pathlib import Path
 import aiosqlite
 
 from qarunner.errors import RunNotFound
-from qarunner.models import ReportRef, Run, RunStatus, TestProfile, TestSchedule, TestSummary
+from qarunner.models import (
+    ReportRef,
+    Run,
+    RunStatus,
+    TestProfile,
+    TestSchedule,
+    TestSuite,
+    TestSummary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +96,20 @@ _BASELINE_VERSION = 1
 _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
     (2, ("ALTER TABLE runs ADD COLUMN worker_node_id TEXT;",)),
     (3, ("ALTER TABLE test_profiles ADD COLUMN runner TEXT NOT NULL DEFAULT 'pytest';",)),
+    (
+        4,
+        (
+            "CREATE TABLE IF NOT EXISTS suites ("
+            "name TEXT PRIMARY KEY, "
+            "source TEXT NOT NULL DEFAULT 'local', "
+            "repo_url TEXT, "
+            "ref TEXT, "
+            "credential_ref TEXT, "
+            "created_by TEXT NOT NULL DEFAULT 'system', "
+            "created_at TEXT NOT NULL"
+            ");",
+        ),
+    ),
 )
 
 
@@ -462,6 +484,55 @@ class SqliteStore:
             rows = await cursor.fetchall()
         return [_row_to_profile(row) for row in rows]
 
+    async def save_suite(self, suite: TestSuite) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT INTO suites ("
+                "name, source, repo_url, ref, credential_ref, created_by, created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "source=excluded.source, repo_url=excluded.repo_url, ref=excluded.ref, "
+                "credential_ref=excluded.credential_ref, created_by=excluded.created_by, "
+                "created_at=excluded.created_at",
+                (
+                    suite.name,
+                    suite.source,
+                    suite.repo_url,
+                    suite.ref,
+                    suite.credential_ref,
+                    suite.created_by,
+                    _dt_to_iso(suite.created_at),
+                ),
+            )
+            await db.commit()
+
+    async def get_suite(self, name: str) -> TestSuite | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT name, source, repo_url, ref, credential_ref, created_by, created_at "
+                "FROM suites WHERE name = ?",
+                (name,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return _row_to_suite(row)
+
+    async def list_suites(self) -> list[TestSuite]:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT name, source, repo_url, ref, credential_ref, created_by, created_at "
+                "FROM suites ORDER BY name"
+            )
+            rows = await cursor.fetchall()
+        return [_row_to_suite(row) for row in rows]
+
+    async def delete_suite(self, name: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute("DELETE FROM suites WHERE name = ?", (name,))
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def lock_run(self, run_id: str, locked: bool) -> None:
         async with self._connect() as db:
             await db.execute(
@@ -701,6 +772,18 @@ def _row_to_profile(row: aiosqlite.Row) -> TestProfile:
         created_by=created_by_val,
         created_at=created_at_val,
         env=env_data,
+    )
+
+
+def _row_to_suite(row: aiosqlite.Row) -> TestSuite:
+    return TestSuite(
+        name=row[0],
+        source=row[1],
+        repo_url=row[2],
+        ref=row[3],
+        credential_ref=row[4],
+        created_by=row[5],
+        created_at=_iso_to_dt(row[6]),
     )
 
 
