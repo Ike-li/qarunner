@@ -66,9 +66,9 @@
 ```yaml
 # 方式 1：仍用项目内 external_tests（git clone 落这里，浅挂载稳健）
 - ./external_tests:/app/external_tests
-# 方式 2（可选）：若仍要 local link 宿主任意项目，env 驱动一个项目根（source==target）
-#   .env: QARUNNER_PROJECTS_ROOT=~/code
-- ${QARUNNER_PROJECTS_ROOT:-/dev/null}:${QARUNNER_PROJECTS_ROOT:-/dev/null}:ro
+# 方式 2：local link 宿主项目，env 驱动一个项目根（source==target），默认 ~/code（决策 3）
+#   覆盖请在 .env 设 QARUNNER_PROJECTS_ROOT
+- ${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:ro
 ```
 
 **服务器（`docker-compose.yml`）** —— named volume 或 host path，git clone 落持久卷：
@@ -81,7 +81,7 @@ volumes:
   suites-data:
 ```
 
-**k8s** —— 共享网络卷（多副本可读），或用 initContainer 在启动时 `git clone`/`git pull` 填充 `emptyDir`/PVC。
+**k8s / 多副本** —— 共享**只读**网络卷（NFS/EFS 等）承载 suites，由单一写入点（CI / 运维 / leader）`git clone/pull` 填充，各副本只读消费以保证 ref 一致（决策 4）。
 
 > 关键收益：从 dev 到服务器，**应用镜像不变、代码不变**，只换上面这段卷定义。
 
@@ -89,9 +89,10 @@ volumes:
 
 1. **新增 `POST /tests/clone`**（与现有 `POST /tests/link` 并列，`routes.py`）
    - 入参草图：`CloneTestSuiteRequest { url: str, name: str | None, ref: str | None }`（`name` 缺省取仓库名，`ref` 可选分支/tag）。
-   - 行为：在 `tests_root` 下 `git clone --depth 1 [-b ref] <url> <name>`；已存在则 `git pull`（或先校验再决定覆盖策略）。
+   - 行为：在 `tests_root` 下 `git clone --depth 1 [-b ref] <url> <name>`。已存在时**不自动覆盖/拉取**。
+   - 更新走独立动作（如 `POST /tests/{name}/pull`），由前端"更新"按钮**手动**触发 `git pull`（决策 1）。
    - 复用现有 `LinkTestSuiteResponse` 形态（`success` / `message`）。
-2. **模型**：`TestProfile`（`models.py`）与 suite 记录增加 `source: Literal["local","git"]`（默认 `"local"` 向后兼容），git 来源额外存 `repo_url` / `ref`，便于"更新/重新拉取"。
+2. **模型**：`TestProfile`（`models.py`）与 suite 记录增加 `source: Literal["local","git"]`（默认 `"local"` 向后兼容），git 来源额外存 `repo_url` / `ref` / **每仓库凭证引用**（决策 2），便于"更新/重新拉取"。
 3. **`list_tests`（`routes.py:244`）**：维持扫描 `tests_root` 子目录的方式，git clone 出来的目录自动被发现，**无需特判**。
 4. **安全**（见 §7）：URL 校验、子进程参数化（杜绝命令注入）、克隆超时/体积上限、`name` 路径逃逸校验。
 
@@ -107,7 +108,7 @@ volumes:
 - **命令注入**：用参数化子进程（`["git","clone",url,name]` 列表形式），**禁止** shell 字符串拼接。
 - **URL 白名单 / SSRF**：限制协议（`https://`、`git@`）；考虑限制 host 或要求显式允许，避免被当作内网探测跳板。
 - **路径逃逸**：`name` 经 `secure` 校验，拒绝 `..`、绝对路径、分隔符，确保 clone 目标落在 `tests_root` 内。
-- **凭证**：私有仓库的 token/SSH key 通过环境/挂载注入，**不入库、不写日志**（与 SEC-2 一致）。
+- **凭证**：**每仓库**配置（决策 2），token/SSH key 通过环境/挂载注入、记录里只存引用，**不入库明文、不写日志**（与 SEC-2 一致）。
 - **资源**：`--depth 1`、clone 超时、磁盘配额，防止超大仓库拖垮平台容器。
 - **执行隔离**：克隆只是拉代码，真正跑测试仍由 executor（subprocess/Docker SEC-3）隔离，不变。
 
@@ -131,13 +132,16 @@ volumes:
 - **阶段 2**：前端 `AddSuiteModal` 加 Git tab；suite 列表区分来源、git 来源提供"更新"按钮。
 - **阶段 3（可选）**：Docker executor + named volume 共享在服务器上的端到端验证；私有仓库凭证注入。
 
-## 11. 未决问题（待评审）
+## 11. 评审决策（已定稿 2026-06-24）
 
-1. git 来源已存在时：默认 `git pull` 自动更新，还是显式"更新"按钮？分支切换策略？
-2. 私有仓库凭证的注入形式（平台级 token vs 每仓库配置）？
-3. 是否需要 webhook / 定时 `git pull` 让 suite 跟随上游，还是手动触发？
-4. `QARUNNER_PROJECTS_ROOT`（dev local-link 的根）默认值：留空（不挂）还是默认 `~/code`？暴露面权衡。
-5. 多副本部署下 suites 一致性：共享只读网络卷 vs 各副本独立 clone（需保证 ref 一致）。
+| # | 决策 | 落地含义 |
+|---|---|---|
+| 1 | **更新方式：手动** | git 来源已存在时**不自动 pull**；前端提供显式"更新"按钮触发 `git pull`。**不做 webhook / 定时拉取**。 |
+| 2 | **凭证：每仓库配置** | 每个 git suite 单独存自己的凭证引用（token / SSH key 引用），不共用平台级单 token。凭证值经环境/挂载注入，记录里只存引用、不落明文（SEC-2）。 |
+| 3 | **dev 本地软链根：保留** | `QARUNNER_PROJECTS_ROOT` 默认 `~/code`（可在 `.env` 调窄）。dev 下 `local` link 仍可用，根下任意项目零改 compose 即可绑定。 |
+| 4 | **多副本：共享只读网络卷** | 服务器 / k8s 多副本挂同一**只读**网络卷（NFS/EFS 等）承载 suites，由单一写入点（CI / 运维 / 一个 leader）`git clone/pull`，各副本只读消费，保证 ref 一致。 |
+
+> 留到阶段 1 实现时再定的小问：每仓库凭证的具体存储形态（env 命名约定 vs 挂载 secret 目录）——但粒度已确定是"每仓库"。
 
 ---
 
