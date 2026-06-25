@@ -1,6 +1,6 @@
 # 外部测试套件接入：跨环境（dev / 服务器）设计
 
-> 状态：**round 3（2026-06-24），做减法收敛**。不含实现代码。
+> 状态：**round 3（2026-06-24），做减法收敛 + P1 补丁（依赖准备网络归属）**。不含实现代码。
 > round 1 方案有洞 → round 2 补洞补过头（引入与单实例架构/SQLite/playwright 冲突的复杂度）
 > → round 3 砍掉多副本过度设计、修正 G2 错误、贴回项目现状。修订轨迹见 §12。
 > 背景触发：容器化后用 `AddSuiteModal` 绑定本地项目 `~/code/my-e2e-suite`，
@@ -103,10 +103,11 @@ volumes:
 4. **`DELETE /tests/{name}`**（G1）：git → `rmtree`+删记录；local → `unlink`+删记录。**owner-scope**。
 5. **`list_tests`**：文件系统实体 + `suites` 左 join（R5），返回带 `source`。
 6. **安全**（§7）：URL 白名单、子进程参数化、`name` 路径逃逸校验、克隆超时/体积上限、**owner-scope**。
-7. **依赖准备 / jail 复制（R1，重做 G2）**——**不能 ignore `node_modules`**：playwright runner 跑 `npx playwright test`（playwright_runner.py:23），依赖 `node_modules/@playwright/test`（package.json:23），ignore 会让它跑不起来。正确处理分两种来源：
-   - **git suite**：仓库通常 `.gitignore` 掉 node_modules → clone 后本就**没有** node_modules → 需在 clone 后 / 运行前对 node 项目执行一次 `npm ci`（依赖准备步骤）。copytree 不涉及（仓库里没有）。
-   - **local suite**：宿主项目**已带** node_modules → copytree 会全量复制（开销大但 playwright 能跑）。缓解开销的选项留待实现时定（如对 node_modules 用只读 mount 而非复制，或接受复制），**但绝不 ignore**。
-   - 结论：`_JAIL_IGNORE_NAMES`（orchestrator.py:57）**不加 node_modules**；依赖准备作为 node 类 runner 的独立步骤。
+7. **依赖准备 / jail 复制（R1，重做 G2；含 P1 闭环）**——**不能 ignore `node_modules`**：playwright runner 跑 `npx playwright test`（playwright_runner.py:23），依赖 `node_modules/@playwright/test`（package.json:23），ignore 会让它跑不起来。
+   - **依赖准备只在 platform 的 clone/link 阶段做**（P1）：`npm ci` 要联网拉包，而 executor 是 `network_mode="none"`（docker_runner.py:138，SEC-3 零网络）→ 装依赖只能发生在有出网的 **platform 容器**，**executor 内永不联网、不装包**。git suite（仓库通常 `.gitignore` 掉 node_modules，clone 后没有）在 clone 后由 platform 执行一次 `npm ci`；local suite 复用宿主已装依赖。
+   - **装完依赖后两种来源同样面临 copytree 开销**（P1 纠正 round 2 的"git 就没事"）：node_modules 一旦在 suite 目录里（git = `npm ci` 之后，local = 本来就有），orchestrator `copytree` 进 jail 都会全量复制（可能 GB 级）。缓解策略（只读 mount node_modules 而非复制 / jail 内按需装 / 接受复制）对**两种来源统一**留待实现时定。
+   - **唯一红线**：`_JAIL_IGNORE_NAMES`（orchestrator.py:57）**不加 node_modules**（否则 playwright 跑不了）。
+8. **实现注意项（写代码时定，非设计阻塞）**：`clone -b <tag>` 时 `rev-parse --abbrev-ref HEAD` 返回 detached `HEAD`，记录 ref 需特判（N1）；suites 表孤儿记录（目录被手动删、记录残留）的清理时机（N2）；手动放进 `external_tests`、无记录无 owner 的目录其 `DELETE` 权限判定（N3）。
 
 ## 6. 前端改动点
 
@@ -186,6 +187,12 @@ volumes:
 | R5 | list_tests 改"元数据为真相源"破坏手动放目录 | 改为"文件系统实体 + 元数据左 join" |
 | R6 | fetch ref 缺失未定义 | clone 落实际默认分支（`rev-parse --abbrev-ref HEAD`） |
 | R7 | system 属主 suite 权限未定 | admin-only |
+
+**round 3 内部补丁（review P1）**
+
+| 编号 | 发现 | 处置 |
+|---|---|---|
+| P1 | R1 留尾：`npm ci` 网络归属未定 + 装完依赖后 copytree 开销重现（原"copytree 不涉及"对 git suite 不准） | §5.7 钉死依赖准备只在 platform clone 阶段（executor 零网）；node_modules 进 suite 后两来源同样面临 copytree 开销、统一待实现定；红线=不 ignore。N1–N3 降为实现注意项 |
 
 ---
 
