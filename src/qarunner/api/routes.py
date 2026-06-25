@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -26,6 +27,7 @@ from qarunner.api.schemas import (
     UserCreateRequest,
     UserListResponse,
     UserResponse,
+    CloneTestSuiteRequest,
     LinkTestSuiteRequest,
     LinkTestSuiteResponse,
     profile_to_response,
@@ -42,7 +44,7 @@ from qarunner.errors import (
     UnknownRunner,
     UnsafePath,
 )
-from qarunner.models import Run, RunRequest, User, UserRole
+from qarunner.models import Run, RunRequest, TestSuite, User, UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,72 @@ def _client_ip(request: Request) -> str:
     deployment hardening).
     """
     return request.client.host if request.client else "unknown"
+
+
+# ── External test-suite git operations (stage 2) ─────────────────────────
+
+# Bounds clone/fetch so a hung or hostile remote can't pin a worker forever.
+_GIT_TIMEOUT = 300.0
+
+
+async def _run_git(
+    args: list[str], *, cwd: str | None = None, timeout: float = _GIT_TIMEOUT
+) -> tuple[int, str, str]:
+    """Run ``git <args>`` with a parametrised argv (no shell) under a timeout.
+
+    Returns ``(returncode, stdout, stderr)``. The argv form (never a shell
+    string) keeps repo URLs / refs from being interpreted as commands. On
+    timeout the process is killed and a non-zero code is synthesised so callers
+    handle it exactly like any other git failure.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        *args,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return 124, "", "git operation timed out"
+    return proc.returncode, out_b.decode(errors="replace"), err_b.decode(errors="replace")
+
+
+def _validate_git_url(url: str) -> None:
+    """Reject repo URLs outside the allowlist (SSRF / local-file / command exec).
+
+    Only ``https://`` and scp-style ``git@`` are accepted; ``file://``, ``ext::``,
+    plain ``http://`` and anything else are refused with 400.
+    """
+    if url.startswith("https://") or url.startswith("git@"):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail="Unsupported repository URL: only https:// and git@ are allowed.",
+    )
+
+
+def _suite_name_from_url(url: str) -> str:
+    """Derive a suite directory name from a clone URL (last segment, no ``.git``)."""
+    tail = url.rstrip("/").replace(":", "/").rstrip("/").rsplit("/", 1)[-1]
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    return tail
+
+
+def _safe_suite_path(tests_root: Path, name: str) -> Path:
+    """Resolve ``tests_root/name``, allowing only a single safe path component.
+
+    Blocks traversal: a name containing a separator, a leading dot, or ``.``/
+    ``..`` is refused with 400 so clone/pull/delete can only ever touch a direct
+    child of the suites root.
+    """
+    if (not name) or ("/" in name) or ("\\" in name) or name.startswith("."):
+        raise HTTPException(status_code=400, detail=f"Invalid suite name: {name!r}")
+    return tests_root / name
 
 
 # ── Health ───────────────────────────────────────────────────────────────
@@ -266,12 +334,13 @@ async def list_tests(
 async def link_test_suite(
     request: Request,
     payload: LinkTestSuiteRequest,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> LinkTestSuiteResponse:
     """Create a symlink under tests_root pointing to the specified local directory path."""
     import os
     import shutil
-    cfg = request.app.state.container.settings
+    container = request.app.state.container
+    cfg = container.settings
     tests_root = Path(cfg.tests_root).resolve()
 
     if not tests_root.is_dir():
@@ -326,12 +395,175 @@ async def link_test_suite(
             "Please make sure you have mapped this volume inside docker-compose.yml."
         )
 
+    # Register the suite with metadata + ownership so it can later be updated,
+    # deleted or authorised against (stage 1 store; ``local`` source).
+    await container.store.save_suite(
+        TestSuite(
+            name=suite_name,
+            source="local",
+            repo_url=None,
+            ref=None,
+            credential_ref=None,
+            created_by=current_user.username,
+            created_at=datetime.now(UTC),
+        )
+    )
+
     return LinkTestSuiteResponse(
         success=True,
         suite_name=suite_name,
         is_accessible=is_accessible,
         message=message,
     )
+
+
+@router.post("/tests/clone", response_model=LinkTestSuiteResponse)
+async def clone_test_suite(
+    request: Request,
+    payload: CloneTestSuiteRequest,
+    current_user: User = Depends(get_current_user),
+) -> LinkTestSuiteResponse:
+    """Clone a git repository into tests_root as a new ``git`` suite.
+
+    Any logged-in user may clone; ``pull``/``delete`` are owner-scoped. The URL
+    is allowlisted (https / ssh only), the name is traversal-checked, and git
+    runs with a parametrised argv under a timeout. The resolved ref is recorded
+    so a later ``/pull`` can fetch a concrete branch (R6).
+    """
+    container = request.app.state.container
+    store = container.store
+    cfg = container.settings
+
+    _validate_git_url(payload.url)
+    tests_root = Path(cfg.tests_root).resolve()
+    tests_root.mkdir(parents=True, exist_ok=True)
+
+    name = payload.name or _suite_name_from_url(payload.url)
+    suite_path = _safe_suite_path(tests_root, name)
+
+    if suite_path.exists() or await store.get_suite(name) is not None:
+        raise HTTPException(status_code=409, detail=f"Suite '{name}' already exists")
+
+    args = ["clone", "--depth", "1"]
+    if payload.ref:
+        args += ["-b", payload.ref]
+    args += ["--", payload.url, str(suite_path)]
+    rc, _out, err = await _run_git(args)
+    if rc != 0:
+        raise HTTPException(status_code=502, detail=f"git clone failed: {err.strip()}")
+
+    # Record the concrete ref. An explicit ref is trusted as given (a tag would
+    # leave HEAD detached, so rev-parse is unreliable — N1); otherwise resolve
+    # the checked-out default branch (R6).
+    if payload.ref:
+        ref: str | None = payload.ref
+    else:
+        rc2, out2, _err2 = await _run_git(
+            ["rev-parse", "--abbrev-ref", "HEAD"], cwd=str(suite_path)
+        )
+        ref = out2.strip() if (rc2 == 0 and out2.strip()) else None
+
+    await store.save_suite(
+        TestSuite(
+            name=name,
+            source="git",
+            repo_url=payload.url,
+            ref=ref,
+            credential_ref=payload.credential_ref,
+            created_by=current_user.username,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return LinkTestSuiteResponse(
+        success=True,
+        suite_name=name,
+        is_accessible=suite_path.is_dir(),
+        message=f"Successfully cloned '{name}'!",
+    )
+
+
+@router.post("/tests/{suite_name}/pull", response_model=LinkTestSuiteResponse)
+async def pull_test_suite(
+    suite_name: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> LinkTestSuiteResponse:
+    """Update a git suite to its recorded ref (owner or admin only).
+
+    Shallow clones can't ``git pull`` cleanly, so this fetches the recorded ref
+    (or remote HEAD if none) at depth 1 and hard-resets to it (G3).
+    """
+    container = request.app.state.container
+    store = container.store
+    cfg = container.settings
+
+    suite = await store.get_suite(suite_name)
+    if suite is None:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_name}' not found")
+    _require_owner_access(suite.created_by, current_user)
+    if suite.source != "git":
+        raise HTTPException(status_code=400, detail="Only git suites can be pulled")
+
+    tests_root = Path(cfg.tests_root).resolve()
+    suite_path = _safe_suite_path(tests_root, suite_name)
+    ref = suite.ref or "HEAD"
+
+    rc, _out, err = await _run_git(
+        ["fetch", "--depth", "1", "origin", ref], cwd=str(suite_path)
+    )
+    if rc != 0:
+        raise HTTPException(status_code=502, detail=f"git fetch failed: {err.strip()}")
+    rc2, _out2, err2 = await _run_git(
+        ["reset", "--hard", "FETCH_HEAD"], cwd=str(suite_path)
+    )
+    if rc2 != 0:
+        raise HTTPException(status_code=502, detail=f"git reset failed: {err2.strip()}")
+
+    return LinkTestSuiteResponse(
+        success=True,
+        suite_name=suite_name,
+        is_accessible=suite_path.is_dir(),
+        message=f"Successfully pulled '{suite_name}'!",
+    )
+
+
+@router.delete("/tests/{suite_name}")
+async def delete_test_suite(
+    suite_name: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Remove a suite's files and metadata (owner or admin only).
+
+    git suites are real directories (rmtree); local suites are symlinks
+    (unlink). A directory present without a record (manually placed, N3) is
+    admin-only to delete; an orphan record with no directory (N2) still clears.
+    """
+    import shutil
+
+    container = request.app.state.container
+    store = container.store
+    cfg = container.settings
+
+    suite = await store.get_suite(suite_name)
+    tests_root = Path(cfg.tests_root).resolve()
+    suite_path = _safe_suite_path(tests_root, suite_name)
+    exists_on_disk = suite_path.is_symlink() or suite_path.exists()
+
+    if suite is None and not exists_on_disk:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_name}' not found")
+    if suite is not None:
+        _require_owner_access(suite.created_by, current_user)
+    elif current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if suite_path.is_symlink():
+        await asyncio.to_thread(suite_path.unlink)
+    elif suite_path.is_dir():
+        await asyncio.to_thread(shutil.rmtree, suite_path)
+    await store.delete_suite(suite_name)
+
+    return {"status": "success", "message": f"Suite {suite_name} deleted"}
 
 
 @router.get("/tests/{suite_name}/tree")

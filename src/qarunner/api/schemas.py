@@ -250,6 +250,15 @@ class LinkTestSuiteRequest(BaseModel):
     path: str
 
 
+class CloneTestSuiteRequest(BaseModel):
+    """Payload to clone a git repository as a test suite."""
+
+    url: str
+    name: str | None = None
+    ref: str | None = None
+    credential_ref: str | None = None
+
+
 class LinkTestSuiteResponse(BaseModel):
     """Response of linking a local directory path."""
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -1833,5 +1834,618 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         resp_dir_ok = client.post("/tests/link", json={"path": str(target_dir)})
         assert resp_dir_ok.status_code == 200
         assert (tests_root / "real-dir-to-link").is_symlink()
+
+
+def test_link_writes_local_suite_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linking a local dir must register a ``local`` suite owned by the caller."""
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    local = tmp_path / "proj"
+    local.mkdir()
+
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/tests/link", json={"path": str(local)})
+
+    assert resp.status_code == 200
+    suite = container.store._suites["proj"]  # type: ignore[attr-defined]
+    assert suite.source == "local"
+    assert suite.created_by == "test_user"
+    assert suite.repo_url is None
+    assert suite.ref is None
+
+
+# ── External test suites: git clone / pull / delete (stage 2) ────────────
+
+
+def _git_proc(
+    returncode: int = 0, stdout: bytes = b"", stderr: bytes = b""
+) -> MagicMock:
+    """Build a fake asyncio subprocess for git (communicate/wait/kill mocked)."""
+    proc = MagicMock()
+    proc.returncode = returncode
+    proc.communicate = AsyncMock(return_value=(stdout, stderr))
+    proc.wait = AsyncMock()
+    proc.kill = MagicMock()
+    return proc
+
+
+def _patch_git(monkeypatch: pytest.MonkeyPatch, *procs: MagicMock) -> AsyncMock:
+    """Patch ``asyncio.create_subprocess_exec`` to yield *procs* in call order."""
+    mock = AsyncMock(side_effect=list(procs))
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock)
+    return mock
+
+
+def _forbid_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assert git is never spawned (for paths that must reject before cloning)."""
+    mock = AsyncMock(side_effect=AssertionError("git must not be invoked"))
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock)
+
+
+def _save_suite_in_store(store: object, **overrides: object) -> TestSuite:
+    base: dict[str, object] = dict(
+        name="repo",
+        source="git",
+        repo_url="https://example.com/org/repo.git",
+        ref="main",
+        credential_ref=None,
+        created_by="test_user",
+        created_at=NOW,
+    )
+    base.update(overrides)
+    suite = TestSuite(**base)  # type: ignore[arg-type]
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(store.save_suite(suite))  # type: ignore[attr-defined]
+    loop.close()
+    return suite
+
+
+def test_clone_success_records_git_suite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={
+                "url": "https://example.com/org/demo.git",
+                "name": "my-suite",
+                "ref": "v1.0",
+                "credential_ref": "cred-1",
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["suite_name"] == "my-suite"
+
+    suite = container.store._suites["my-suite"]  # type: ignore[attr-defined]
+    assert suite.source == "git"
+    assert suite.repo_url == "https://example.com/org/demo.git"
+    assert suite.ref == "v1.0"
+    assert suite.credential_ref == "cred-1"
+    assert suite.created_by == "test_user"
+
+    # argv is parametrised (no shell): git clone --depth 1 -b v1.0 -- <url> <dir>
+    args = mock.call_args.args
+    assert args[0] == "git"
+    assert args[1] == "clone"
+    assert "--depth" in args and "1" in args
+    assert "-b" in args and "v1.0" in args
+    assert "--" in args
+    assert "https://example.com/org/demo.git" in args
+    assert str(tests_root / "my-suite") in args
+
+
+def test_clone_records_default_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0, stdout=b"main\n"))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone", json={"url": "https://example.com/org/myrepo.git"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["suite_name"] == "myrepo"
+    suite = container.store._suites["myrepo"]  # type: ignore[attr-defined]
+    assert suite.ref == "main"
+
+    # second git call resolves the default branch inside the cloned dir
+    second = mock.call_args_list[1]
+    assert "rev-parse" in second.args
+    assert second.kwargs["cwd"] == str(tests_root / "myrepo")
+
+
+def test_clone_default_branch_empty_records_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(0), _git_proc(0, stdout=b"   \n"))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone", json={"url": "https://example.com/org/blank.git"}
+        )
+
+    assert resp.status_code == 200
+    suite = container.store._suites["blank"]  # type: ignore[attr-defined]
+    assert suite.ref is None
+
+
+def test_clone_default_branch_revparse_failure_records_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(0), _git_proc(1, stderr=b"boom"))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone", json={"url": "https://example.com/org/detached.git"}
+        )
+
+    assert resp.status_code == 200
+    suite = container.store._suites["detached"]  # type: ignore[attr-defined]
+    assert suite.ref is None
+
+
+def test_clone_accepts_ssh_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "git@example.com:org/repo.git", "ref": "dev"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["suite_name"] == "repo"
+    suite = container.store._suites["repo"]  # type: ignore[attr-defined]
+    assert suite.source == "git"
+    assert suite.ref == "dev"
+
+
+def test_clone_name_without_git_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone", json={"url": "https://example.com/org/plain", "ref": "dev"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["suite_name"] == "plain"
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    ["file:///etc/passwd", "ext::sh -c whoami", "http://insecure/repo.git"],
+)
+def test_clone_rejects_unsupported_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_url: str
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/clone", json={"url": bad_url, "name": "x"})
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("bad_name", ["..", "a/b", ".hidden"])
+def test_clone_rejects_unsafe_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_name: str
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "https://example.com/org/x.git", "name": bad_name},
+        )
+
+    assert resp.status_code == 400
+
+
+def test_clone_conflict_existing_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "dup").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "https://example.com/org/dup.git", "name": "dup"},
+        )
+
+    assert resp.status_code == 409
+
+
+def test_clone_conflict_existing_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="dup")
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "https://example.com/org/dup.git", "name": "dup"},
+        )
+
+    assert resp.status_code == 409
+
+
+def test_clone_git_failure_returns_502(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(1, stderr=b"fatal: repo not found"))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "https://example.com/org/x.git", "name": "x"},
+        )
+
+    assert resp.status_code == 502
+    assert "git clone failed" in resp.json()["detail"]
+    assert "x" not in container.store._suites  # type: ignore[attr-defined]
+
+
+def test_clone_timeout_returns_502(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    proc = _git_proc(0)
+    proc.communicate = AsyncMock(side_effect=TimeoutError)
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_exec", AsyncMock(return_value=proc)
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "https://example.com/org/x.git", "name": "x"},
+        )
+
+    assert resp.status_code == 502
+    proc.kill.assert_called_once()
+
+
+def test_pull_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "repo").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", ref="main")
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/pull")
+
+    assert resp.status_code == 200
+    first = mock.call_args_list[0]
+    assert "fetch" in first.args and "--depth" in first.args
+    assert "origin" in first.args and "main" in first.args
+    assert first.kwargs["cwd"] == str(tests_root / "repo")
+    second = mock.call_args_list[1]
+    assert "reset" in second.args and "--hard" in second.args
+    assert "FETCH_HEAD" in second.args
+
+
+def test_pull_uses_head_when_ref_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "repo").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", ref=None)
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/pull")
+
+    assert resp.status_code == 200
+    assert "HEAD" in mock.call_args_list[0].args
+
+
+def test_pull_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/ghost/pull")
+
+    assert resp.status_code == 404
+
+
+def test_pull_forbidden_non_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "repo").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/pull")
+
+    assert resp.status_code == 403
+
+
+def test_pull_local_suite_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(
+        container.store, name="repo", source="local", repo_url=None, ref=None
+    )
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/pull")
+
+    assert resp.status_code == 400
+    assert "Only git suites" in resp.json()["detail"]
+
+
+def test_pull_fetch_failure_502(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "repo").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo")
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(1, stderr=b"fatal: no remote"))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/pull")
+
+    assert resp.status_code == 502
+    assert "git fetch failed" in resp.json()["detail"]
+
+
+def test_pull_reset_failure_502(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "repo").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo")
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(0), _git_proc(1, stderr=b"fatal: reset"))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/pull")
+
+    assert resp.status_code == 502
+    assert "git reset failed" in resp.json()["detail"]
+
+
+def test_delete_git_suite_rmtree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", source="git")
+    suite_dir = tests_root / "repo"
+    suite_dir.mkdir()
+    (suite_dir / "test_x.py").write_text("x")
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/repo")
+
+    assert resp.status_code == 200
+    assert not suite_dir.exists()
+    assert "repo" not in container.store._suites  # type: ignore[attr-defined]
+
+
+def test_delete_local_suite_unlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(
+        container.store, name="proj", source="local", repo_url=None, ref=None
+    )
+    target = tmp_path / "proj-target"
+    target.mkdir()
+    link = tests_root / "proj"
+    link.symlink_to(target)
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/proj")
+
+    assert resp.status_code == 200
+    assert not link.is_symlink()
+    assert target.exists()  # symlink removed, target untouched
+    assert "proj" not in container.store._suites  # type: ignore[attr-defined]
+
+
+def test_delete_forbidden_non_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", created_by="bob")
+    suite_dir = tests_root / "repo"
+    suite_dir.mkdir()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/repo")
+
+    assert resp.status_code == 403
+    assert suite_dir.exists()
+
+
+def test_delete_unregistered_dir_admin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    suite_dir = tests_root / "manual"
+    suite_dir.mkdir()
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/manual")
+
+    assert resp.status_code == 200
+    assert not suite_dir.exists()
+
+
+def test_delete_unregistered_dir_non_admin_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    suite_dir = tests_root / "manual"
+    suite_dir.mkdir()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/manual")
+
+    assert resp.status_code == 403
+    assert suite_dir.exists()
+
+
+def test_delete_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/ghost")
+
+    assert resp.status_code == 404
+
+
+def test_delete_orphan_record_no_fs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", source="git")
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        resp = client.delete("/tests/repo")
+
+    assert resp.status_code == 200
+    assert "repo" not in container.store._suites  # type: ignore[attr-defined]
 
 
