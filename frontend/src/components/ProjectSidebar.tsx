@@ -8,18 +8,21 @@ import {
   IconClock,
   IconDelete,
   IconSetting,
-  IconPlus
+  IconPlus,
+  IconRefresh,
+  IconDownload
 } from '@douyinfe/semi-icons'
 import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
 import type { Lang, TranslationKey } from '../i18n'
-import type { Profile, Run, Schedule } from '../types'
+import type { Profile, Run, Schedule, SuiteInfo } from '../types'
 
 interface ProjectSidebarProps {
   t: (key: TranslationKey) => string
   lang: Lang
   runs: Run[]
   tests: string[]
+  suites: SuiteInfo[]
   profiles: Profile[]
   schedules: Schedule[]
   selectedSuiteFilter: string | null
@@ -32,6 +35,9 @@ interface ProjectSidebarProps {
   handleOpenEditProfile: (profile: Profile) => void
   handleOpenScheduleModal: (profile: Profile) => void
   handleDeleteProfile: (profileId: string, e?: MouseEvent) => void
+  handlePullSuite: (name: string) => void
+  handlePrepareSuite: (name: string) => void
+  handleDeleteSuite: (name: string) => void
   setIsAddSuiteModalOpen: (value: boolean) => void
 }
 
@@ -43,6 +49,7 @@ export function ProjectSidebar({
   lang,
   runs,
   tests,
+  suites,
   profiles,
   schedules,
   selectedSuiteFilter,
@@ -55,8 +62,13 @@ export function ProjectSidebar({
   handleOpenEditProfile,
   handleOpenScheduleModal,
   handleDeleteProfile,
+  handlePullSuite,
+  handlePrepareSuite,
+  handleDeleteSuite,
   setIsAddSuiteModalOpen,
 }: ProjectSidebarProps) {
+  // name → source/repo/ref, so each suite row can render source-aware actions.
+  const suiteInfoByName = new Map(suites.map((s) => [s.name, s]))
   return (
     <div className={styles.sidebarCard}>
       <div className={styles.sidebarHeader} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
@@ -122,6 +134,7 @@ export function ProjectSidebar({
             const isFiltered = selectedSuiteFilter === suite
             const suiteRunsCount = runs.filter(r => r.tests_path === suite).length
             const suiteProfiles = profiles.filter(p => p.tests_path === suite)
+            const isGit = suiteInfoByName.get(suite)?.source === 'git'
             return (
               <div 
                 key={suite}
@@ -137,6 +150,14 @@ export function ProjectSidebar({
                   <div className={styles.sidebarItemMain}>
                     <IconFolder style={{ color: isFiltered ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
                     <span className={styles.suiteNameText} title={suite}>{suite}</span>
+                    <Tag
+                      size="small"
+                      color={isGit ? 'blue' : 'grey'}
+                      type="light"
+                      style={{ fontSize: '10px', marginLeft: '6px', padding: '0 4px', height: '16px', lineHeight: '14px', flexShrink: 0 }}
+                    >
+                      {isGit ? 'git' : 'local'}
+                    </Tag>
                   </div>
                   <div className={styles.sidebarItemActions} onClick={(e) => e.stopPropagation()}>
                     <Badge
@@ -168,6 +189,40 @@ export function ProjectSidebar({
                           alignItems: 'center',
                           justifyContent: 'center',
                         }}
+                      />
+                    </Tooltip>
+                    {isGit && (
+                      <Tooltip content={lang === 'zh' ? '更新 (git pull)' : 'Update (git pull)'}>
+                        <Button
+                          size="small"
+                          theme="borderless"
+                          type="tertiary"
+                          icon={<IconRefresh style={{ fontSize: '10px' }} />}
+                          onClick={() => handlePullSuite(suite)}
+                          style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                        />
+                      </Tooltip>
+                    )}
+                    {isGit && (
+                      <Tooltip content={lang === 'zh' ? '准备依赖 (npm ci)' : 'Prepare deps (npm ci)'}>
+                        <Button
+                          size="small"
+                          theme="borderless"
+                          type="tertiary"
+                          icon={<IconDownload style={{ fontSize: '10px' }} />}
+                          onClick={() => handlePrepareSuite(suite)}
+                          style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                        />
+                      </Tooltip>
+                    )}
+                    <Tooltip content={lang === 'zh' ? '移除套件' : 'Remove suite'}>
+                      <Button
+                        size="small"
+                        theme="borderless"
+                        type="danger"
+                        icon={<IconDelete style={{ fontSize: '10px' }} />}
+                        onClick={() => handleDeleteSuite(suite)}
+                        style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                       />
                     </Tooltip>
                   </div>

@@ -79,3 +79,10 @@ export interface TreeNode {
   is_dir: boolean
   children?: TreeNode[]
 }
+
+export interface SuiteInfo {
+  name: string
+  source: string
+  repo_url: string | null
+  ref: string | null
+}

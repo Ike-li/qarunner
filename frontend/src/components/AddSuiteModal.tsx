@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Modal, Button, Input, Banner } from '@douyinfe/semi-ui'
-import { FolderPlus, Info, Terminal, Settings, Link } from 'lucide-react'
+import { Modal, Button, Input, Banner, Tabs } from '@douyinfe/semi-ui'
+import { FolderPlus, Info, Terminal, Settings, Link, GitBranch } from 'lucide-react'
 import type { Lang } from '../i18n'
 
 interface AddSuiteModalProps {
@@ -17,7 +17,46 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
   const [linking, setLinking] = useState(false)
   const [feedback, setFeedback] = useState<{ success: boolean; message: string } | null>(null)
 
+  // Git clone tab state (stage 5)
+  const [gitUrl, setGitUrl] = useState('')
+  const [gitRef, setGitRef] = useState('')
+  const [gitCred, setGitCred] = useState('')
+  const [cloning, setCloning] = useState(false)
+  const [gitFeedback, setGitFeedback] = useState<{ success: boolean; message: string } | null>(null)
+
   const title = isZh ? '添加项目测试套件' : 'Add Project Test Suite'
+
+  const handleClone = async () => {
+    const url = gitUrl.trim()
+    if (!url) return
+    setCloning(true)
+    setGitFeedback(null)
+    try {
+      const resp = await apiFetch('/tests/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          ref: gitRef.trim() || null,
+          credential_ref: gitCred.trim() || null,
+        }),
+      })
+      const data = await resp.json()
+      if (resp.ok && data.success) {
+        setGitFeedback({ success: true, message: data.message })
+        onSuiteLinked() // Refresh the sidebar list instantly
+        setGitUrl('')
+        setGitRef('')
+        setGitCred('')
+      } else {
+        setGitFeedback({ success: false, message: data.detail || (isZh ? '克隆失败' : 'Failed to clone repository') })
+      }
+    } catch (err: any) {
+      setGitFeedback({ success: false, message: err.message || 'Network error' })
+    } finally {
+      setCloning(false)
+    }
+  }
 
   const handleLink = async () => {
     const trimmedPath = path.trim()
@@ -64,8 +103,106 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
       }
       width={600}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', color: 'var(--semi-color-text-0)' }}>
-        
+      <Tabs type="line" defaultActiveKey="git" style={{ color: 'var(--semi-color-text-0)' }}>
+        <Tabs.TabPane
+          itemKey="git"
+          tab={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <GitBranch size={15} />
+              {isZh ? 'Git 仓库' : 'Git URL'}
+            </span>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingTop: '8px', color: 'var(--semi-color-text-0)' }}>
+            <div style={{
+              display: 'flex',
+              gap: '12px',
+              padding: '12px 16px',
+              borderRadius: '8px',
+              backgroundColor: 'var(--semi-color-primary-light-default)',
+              color: 'var(--semi-color-primary)',
+              fontSize: '13px',
+              lineHeight: '1.5'
+            }}>
+              <Info size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div>
+                {isZh ? (
+                  <><strong>说明：</strong>平台单实例会把仓库 <code>git clone</code> 到容器内 <code>/app/external_tests/</code> 下，环境无关（dev 与服务器一致）。仅支持 <code>https://</code> 与 <code>git@</code>。</>
+                ) : (
+                  <><strong>Info:</strong> The platform single-instance <code>git clone</code>s the repo into <code>/app/external_tests/</code> inside the container — environment-independent (same on dev and server). Only <code>https://</code> and <code>git@</code> are allowed.</>
+                )}
+              </div>
+            </div>
+
+            <div style={{
+              padding: '16px',
+              border: '1px solid var(--semi-color-primary)',
+              borderRadius: '8px',
+              backgroundColor: 'var(--semi-color-primary-light-default)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, color: 'var(--semi-color-primary)', fontSize: '14px' }}>
+                <GitBranch size={16} />
+                <span>{isZh ? '从 Git 仓库克隆' : 'Clone from Git Repository'}</span>
+              </div>
+              <Input
+                placeholder={isZh ? '仓库 URL，例如 https://github.com/org/repo.git' : 'Repository URL, e.g. https://github.com/org/repo.git'}
+                value={gitUrl}
+                onChange={(val) => setGitUrl(val)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleClone() }}
+              />
+              <Input
+                placeholder={isZh ? '分支 / 标签（可选，默认仓库默认分支）' : 'Branch / tag (optional, defaults to the repo default)'}
+                value={gitRef}
+                onChange={(val) => setGitRef(val)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleClone() }}
+              />
+              <Input
+                placeholder={isZh ? '凭证引用（可选，私有仓库用）' : 'Credential reference (optional, for private repos)'}
+                value={gitCred}
+                onChange={(val) => setGitCred(val)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleClone() }}
+              />
+              <Button
+                theme="solid"
+                type="primary"
+                loading={cloning}
+                onClick={handleClone}
+                disabled={!gitUrl.trim()}
+                style={{ alignSelf: 'flex-start' }}
+              >
+                {isZh ? '克隆仓库' : 'Clone Repository'}
+              </Button>
+              {gitFeedback && (
+                <Banner
+                  type={gitFeedback.success ? 'success' : 'warning'}
+                  description={gitFeedback.message}
+                  closeIcon={null}
+                  style={{ marginTop: '4px', borderRadius: '6px' }}
+                />
+              )}
+              <p style={{ margin: 0, fontSize: '12px', lineHeight: '1.5', color: 'var(--semi-color-text-2)' }}>
+                {isZh
+                  ? '克隆后，若为 Node 套件，可在套件列表点「准备依赖」执行 npm ci（依赖只在平台安装，执行器无网络）。'
+                  : 'After cloning a Node suite, click "Prepare deps" in the suite list to run npm ci (deps install on the platform only; executors have no network).'}
+              </p>
+            </div>
+          </div>
+        </Tabs.TabPane>
+
+        <Tabs.TabPane
+          itemKey="local"
+          tab={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <Link size={15} />
+              {isZh ? '本地路径' : 'Local Path'}
+            </span>
+          }
+        >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingTop: '8px', color: 'var(--semi-color-text-0)' }}>
+
         {/* Banner with general explanation */}
         <div style={{
           display: 'flex',
@@ -250,6 +387,8 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
         </div>
 
       </div>
+        </Tabs.TabPane>
+      </Tabs>
     </Modal>
   )
 }

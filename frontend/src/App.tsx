@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { RotateCw } from 'lucide-react'
 import styles from './App.module.css'
-import type { Run, UserProfile, Profile, Schedule, TreeNode } from './types'
+import type { Run, UserProfile, Profile, Schedule, TreeNode, SuiteInfo } from './types'
 import { translations, type Lang, type TranslationKey } from './i18n'
 import { LoginScreen } from './components/LoginScreen'
 import { StatsCards } from './components/StatsCards'
@@ -25,6 +25,7 @@ import en_US from '@douyinfe/semi-ui/lib/es/locale/source/en_US'
 export default function App() {
   const [runs, setRuns] = useState<Run[]>([])
   const [tests, setTests] = useState<string[]>([])
+  const [suites, setSuites] = useState<SuiteInfo[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRunDetails, setSelectedRunDetails] = useState<Run | null>(null)
   const [detailsLoading, setDetailsLoading] = useState<boolean>(false)
@@ -180,6 +181,7 @@ export default function App() {
     setSelectedRunId(null)
     setRuns([])
     setTests([])
+    setSuites([])
     setProfiles([])
     setScannedFilesTree([])
     setScannedMarkers([])
@@ -501,18 +503,72 @@ export default function App() {
   // Fetch tests directories
   const fetchTests = useCallback(async () => {
     try {
-      const resp = await apiFetch('/tests')
+      // /suites = filesystem entities left-joined with metadata (source/repo/ref).
+      // We keep `tests` (names only) for the rest of the UI that keys off the
+      // suite name, and `suites` for source-aware actions (clone/pull/delete).
+      const resp = await apiFetch('/suites')
       if (resp.ok) {
-        const data = await resp.json()
-        setTests(data)
-        if (data.length > 0) {
-          setTestsPath(data[0]) // default to first subdirectory
+        const data: SuiteInfo[] = await resp.json()
+        setSuites(data)
+        const names = data.map((s) => s.name)
+        setTests(names)
+        if (names.length > 0) {
+          setTestsPath(names[0]) // default to first subdirectory
         }
       }
     } catch (err) {
       console.error('Error fetching test directories:', err)
     }
   }, [apiFetch])
+
+  // ── Git-suite lifecycle (stage 5): update / prepare / remove ───────────
+  const handlePullSuite = useCallback(async (name: string) => {
+    try {
+      const resp = await apiFetch(`/tests/${encodeURIComponent(name)}/pull`, { method: 'POST' })
+      const data = await resp.json()
+      if (resp.ok) {
+        alert(data.message || (lang === 'zh' ? '更新成功' : 'Updated'))
+        await fetchTests()
+      } else {
+        alert(data.detail || (lang === 'zh' ? '更新失败' : 'Failed to update suite'))
+      }
+    } catch (err) {
+      console.error('Error pulling suite:', err)
+    }
+  }, [apiFetch, lang, fetchTests])
+
+  const handlePrepareSuite = useCallback(async (name: string) => {
+    try {
+      const resp = await apiFetch(`/tests/${encodeURIComponent(name)}/prepare`, { method: 'POST' })
+      const data = await resp.json()
+      if (resp.ok) {
+        alert(data.message || (lang === 'zh' ? '依赖已准备' : 'Dependencies prepared'))
+      } else {
+        alert(data.detail || (lang === 'zh' ? '准备依赖失败' : 'Failed to prepare dependencies'))
+      }
+    } catch (err) {
+      console.error('Error preparing suite:', err)
+    }
+  }, [apiFetch, lang])
+
+  const handleDeleteSuite = useCallback(async (name: string) => {
+    const confirmMsg = lang === 'zh'
+      ? `确定要移除套件「${name}」吗？此操作会删除其文件。`
+      : `Remove suite "${name}"? This deletes its files.`
+    if (!window.confirm(confirmMsg)) return
+    try {
+      const resp = await apiFetch(`/tests/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      if (resp.ok) {
+        if (selectedSuiteFilter === name) setSelectedSuiteFilter(null)
+        await fetchTests()
+      } else {
+        const data = await resp.json()
+        alert(data.detail || (lang === 'zh' ? '移除失败' : 'Failed to remove suite'))
+      }
+    } catch (err) {
+      console.error('Error removing suite:', err)
+    }
+  }, [apiFetch, lang, fetchTests, selectedSuiteFilter])
 
   // Admin: Fetch all registered users
   const fetchUsers = useCallback(async () => {
@@ -1251,6 +1307,7 @@ export default function App() {
           lang={lang}
           runs={runs}
           tests={tests}
+          suites={suites}
           profiles={profiles}
           schedules={schedules}
           selectedSuiteFilter={selectedSuiteFilter}
@@ -1263,6 +1320,9 @@ export default function App() {
           handleOpenEditProfile={handleOpenEditProfile}
           handleOpenScheduleModal={handleOpenScheduleModal}
           handleDeleteProfile={handleDeleteProfile}
+          handlePullSuite={handlePullSuite}
+          handlePrepareSuite={handlePrepareSuite}
+          handleDeleteSuite={handleDeleteSuite}
           setIsAddSuiteModalOpen={setIsAddSuiteModalOpen}
         />
 
