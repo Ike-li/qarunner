@@ -28,7 +28,7 @@ class TestProfileResponse(BaseModel):
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
-    executor_mode: str = "subprocess"
+    executor_mode: str = "docker"
     timeout: int | None = None
     created_by: str
     created_at: datetime
@@ -45,7 +45,7 @@ class TestProfileCreateRequest(BaseModel):
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
-    executor_mode: str = "subprocess"
+    executor_mode: str = "docker"
     timeout: int | None = None
     env: dict[str, str] = Field(default_factory=dict)
 
@@ -60,7 +60,7 @@ class TestProfileUpdateRequest(BaseModel):
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
-    executor_mode: str = "subprocess"
+    executor_mode: str = "docker"
     timeout: int | None = None
     env: dict[str, str] = Field(default_factory=dict)
 

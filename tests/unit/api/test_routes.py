@@ -330,12 +330,42 @@ def test_create_run_unsafe_path_400() -> None:
     assert resp.status_code == 400
 
 
-def test_create_run_subprocess_non_admin_allowed_by_default() -> None:
+def test_create_run_subprocess_non_admin_restricted_by_default() -> None:
+    # Default-deny (P0-2): non-admins are confined to the isolated docker
+    # executor; subprocess is opt-in via allow_subprocess_for_non_admins.
     container = _make_container()
     app = create_app(container)
     _override_user(app, "normal_user", UserRole.USER)
     with TestClient(app) as client:
-        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"})
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
+        )
+    assert resp.status_code == 400
+    assert "restricted" in resp.json()["detail"].lower()
+
+
+def test_create_run_subprocess_non_admin_allowed_when_enabled() -> None:
+    container = _make_container()
+    container.settings.allow_subprocess_for_non_admins = True
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
+        )
+    assert resp.status_code == 202
+
+
+def test_create_run_default_mode_docker_allows_non_admin() -> None:
+    # The docker default lets a non-admin create a run without tripping the
+    # subprocess restriction (no executor_mode supplied → defaults to docker).
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest"})
     assert resp.status_code == 202
 
 
@@ -345,7 +375,10 @@ def test_create_run_subprocess_non_admin_restricted() -> None:
     app = create_app(container)
     _override_user(app, "normal_user", UserRole.USER)
     with TestClient(app) as client:
-        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"})
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
+        )
     assert resp.status_code == 400
     assert "restricted" in resp.json()["detail"].lower()
 
@@ -356,7 +389,10 @@ def test_create_run_subprocess_admin_always_allowed() -> None:
     app = create_app(container)
     _override_user(app, "admin_user", UserRole.ADMIN)
     with TestClient(app) as client:
-        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"})
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
+        )
     assert resp.status_code == 202
 
 

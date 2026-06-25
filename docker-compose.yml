@@ -5,7 +5,15 @@ services:
       dockerfile: Dockerfile.platform
     image: qarunner-platform:latest
     container_name: qarunner-platform
-    user: root
+    # Run as the image's non-root `app` user (uid 1000, set in Dockerfile.platform);
+    # do NOT override with `user: root` (P0-2). To reach the Docker daemon socket
+    # the container user must join the host's docker group — set QARUNNER_DOCKER_GID
+    # to its gid (`getent group docker | cut -d: -f3`, or `stat -c %g /var/run/docker.sock`).
+    # NOTE: docker-group access ≈ host root; the real isolation is that untrusted
+    # test code runs in the docker executor, not the platform process (P0-2 a/b).
+    # Ensure ./artifacts is writable by uid 1000 on the host.
+    group_add:
+      - "${QARUNNER_DOCKER_GID:?set QARUNNER_DOCKER_GID — see .env.example}"
     ports:
       - "8000:8000"
     environment:

@@ -42,7 +42,10 @@ class RunRequest(BaseModel):
     args: list[str] = Field(default_factory=list)
     allure: bool = True
     timeout: int | None = None
-    executor_mode: str = "subprocess"
+    # Default to the isolated docker executor (SEC): untrusted test code must not
+    # run in the platform process by default. subprocess stays opt-in (admins, or
+    # allow_subprocess_for_non_admins).
+    executor_mode: str = "docker"
     # Selective run parameters
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)

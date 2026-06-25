@@ -72,7 +72,10 @@ class Settings(BaseSettings):
     # next start by crash_recovery_on_startup), so the process can exit promptly.
     shutdown_drain_timeout_seconds: float = 30.0
     worker_node_id: str = Field(default_factory=socket.gethostname)
-    allow_subprocess_for_non_admins: bool = True
+    # SEC: untrusted test code runs in-process under the subprocess executor, so
+    # non-admins are confined to the isolated docker executor by default. Set true
+    # only for a trusted/dev deployment (see docker-compose.dev.yml).
+    allow_subprocess_for_non_admins: bool = False
 
 
 

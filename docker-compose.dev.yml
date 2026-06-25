@@ -16,6 +16,10 @@ services:
       - QARUNNER_SECRET_KEY=${QARUNNER_SECRET_KEY:-dev_secret_key_placeholder_for_local_container_development_needs_to_be_64_chars}
       - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:-admin123}
       - QARUNNER_COOKIE_SECURE=false  # Disable cookie Secure flag for local http dev (SEC-6)
+      # Dev-only exception (P0-2): trusted single-host dev box, so allow non-admins
+      # to use the in-process subprocess executor for convenience. Prod defaults to
+      # false (docker-only for non-admins).
+      - QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true
       - WATCHFILES_FORCE_POLLING=true  # 兜底:bind mount 上 inotify 不传播时,强制 uvicorn --reload 走轮询
     volumes:
       - ./src:/app/src
