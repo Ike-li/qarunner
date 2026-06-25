@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
           target: backendTarget,
           changeOrigin: true,
         },
+        '/suites': {
+          target: backendTarget,
+          changeOrigin: true,
+        },
         '/auth': {
           target: backendTarget,
           changeOrigin: true,

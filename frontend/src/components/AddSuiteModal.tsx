@@ -103,11 +103,12 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
       }
       width={600}
     >
+      <div data-testid="add-suite-modal">
       <Tabs type="line" defaultActiveKey="git" style={{ color: 'var(--semi-color-text-0)' }}>
         <Tabs.TabPane
           itemKey="git"
           tab={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <span data-testid="suite-tab-git" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
               <GitBranch size={15} />
               {isZh ? 'Git 仓库' : 'Git URL'}
             </span>
@@ -148,18 +149,21 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
                 <span>{isZh ? '从 Git 仓库克隆' : 'Clone from Git Repository'}</span>
               </div>
               <Input
+                data-testid="clone-url-input"
                 placeholder={isZh ? '仓库 URL，例如 https://github.com/org/repo.git' : 'Repository URL, e.g. https://github.com/org/repo.git'}
                 value={gitUrl}
                 onChange={(val) => setGitUrl(val)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleClone() }}
               />
               <Input
+                data-testid="clone-ref-input"
                 placeholder={isZh ? '分支 / 标签（可选，默认仓库默认分支）' : 'Branch / tag (optional, defaults to the repo default)'}
                 value={gitRef}
                 onChange={(val) => setGitRef(val)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleClone() }}
               />
               <Input
+                data-testid="clone-cred-input"
                 placeholder={isZh ? '凭证引用（可选，私有仓库用）' : 'Credential reference (optional, for private repos)'}
                 value={gitCred}
                 onChange={(val) => setGitCred(val)}
@@ -169,6 +173,7 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
                 theme="solid"
                 type="primary"
                 loading={cloning}
+                data-testid="clone-submit"
                 onClick={handleClone}
                 disabled={!gitUrl.trim()}
                 style={{ alignSelf: 'flex-start' }}
@@ -176,12 +181,14 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
                 {isZh ? '克隆仓库' : 'Clone Repository'}
               </Button>
               {gitFeedback && (
-                <Banner
-                  type={gitFeedback.success ? 'success' : 'warning'}
-                  description={gitFeedback.message}
-                  closeIcon={null}
-                  style={{ marginTop: '4px', borderRadius: '6px' }}
-                />
+                <div data-testid="clone-feedback">
+                  <Banner
+                    type={gitFeedback.success ? 'success' : 'warning'}
+                    description={gitFeedback.message}
+                    closeIcon={null}
+                    style={{ marginTop: '4px', borderRadius: '6px' }}
+                  />
+                </div>
               )}
               <p style={{ margin: 0, fontSize: '12px', lineHeight: '1.5', color: 'var(--semi-color-text-2)' }}>
                 {isZh
@@ -195,7 +202,7 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
         <Tabs.TabPane
           itemKey="local"
           tab={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <span data-testid="suite-tab-local" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
               <Link size={15} />
               {isZh ? '本地路径' : 'Local Path'}
             </span>
@@ -249,6 +256,7 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
           </p>
           <div style={{ display: 'flex', gap: '8px' }}>
             <Input
+              data-testid="link-path-input"
               placeholder={isZh ? '例如: ~/code/my-e2e-suite' : 'E.g. ~/code/my-e2e-suite'}
               value={path}
               onChange={(val) => setPath(val)}
@@ -263,6 +271,7 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
               theme="solid"
               type="primary"
               loading={linking}
+              data-testid="link-submit"
               onClick={handleLink}
               disabled={!path.trim()}
             >
@@ -389,6 +398,7 @@ export function AddSuiteModal({ isOpen, onClose, lang, apiFetch, onSuiteLinked }
       </div>
         </Tabs.TabPane>
       </Tabs>
+      </div>
     </Modal>
   )
 }

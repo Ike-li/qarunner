@@ -82,6 +82,7 @@ export function ProjectSidebar({
             theme="light"
             type="primary"
             shape="circle"
+            data-testid="open-add-suite-button"
             icon={<IconPlus style={{ fontSize: '12px' }} />}
             onClick={(e) => {
               e.stopPropagation()
@@ -197,6 +198,7 @@ export function ProjectSidebar({
                           size="small"
                           theme="borderless"
                           type="tertiary"
+                          data-testid={`suite-update-${suite}`}
                           icon={<IconRefresh style={{ fontSize: '10px' }} />}
                           onClick={() => handlePullSuite(suite)}
                           style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
@@ -209,6 +211,7 @@ export function ProjectSidebar({
                           size="small"
                           theme="borderless"
                           type="tertiary"
+                          data-testid={`suite-prepare-${suite}`}
                           icon={<IconDownload style={{ fontSize: '10px' }} />}
                           onClick={() => handlePrepareSuite(suite)}
                           style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
@@ -220,6 +223,7 @@ export function ProjectSidebar({
                         size="small"
                         theme="borderless"
                         type="danger"
+                        data-testid={`suite-remove-${suite}`}
                         icon={<IconDelete style={{ fontSize: '10px' }} />}
                         onClick={() => handleDeleteSuite(suite)}
                         style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
