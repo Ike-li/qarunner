@@ -2449,3 +2449,136 @@ def test_delete_orphan_record_no_fs(
     assert "repo" not in container.store._suites  # type: ignore[attr-defined]
 
 
+# ── External test suites: npm ci dependency prep (stage 3) ───────────────
+
+
+def test_prepare_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/ghost/prepare")
+
+    assert resp.status_code == 404
+
+
+def test_prepare_forbidden_non_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/prepare")
+
+    assert resp.status_code == 403
+
+
+def test_prepare_local_suite_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(
+        container.store, name="repo", source="local", repo_url=None, ref=None
+    )
+    app = create_app(container)
+    _forbid_git(monkeypatch)  # local suites reuse host deps; npm must not run
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/prepare")
+
+    assert resp.status_code == 200
+    assert "reuse host" in resp.json()["message"]
+
+
+def test_prepare_git_no_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", source="git")
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/prepare")
+
+    assert resp.status_code == 404
+
+
+def test_prepare_git_no_package_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "repo").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", source="git")
+    app = create_app(container)
+    _forbid_git(monkeypatch)  # no package.json → nothing to install
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/prepare")
+
+    assert resp.status_code == 200
+    assert "nothing to prepare" in resp.json()["message"]
+
+
+def test_prepare_git_npm_ci_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    suite_dir = tests_root / "repo"
+    suite_dir.mkdir()
+    (suite_dir / "package.json").write_text('{"name": "x"}')
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", source="git")
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/prepare")
+
+    assert resp.status_code == 200
+    assert "Dependencies installed" in resp.json()["message"]
+    assert mock.call_args.args == ("npm", "ci")
+    assert mock.call_args.kwargs["cwd"] == str(suite_dir)
+
+
+def test_prepare_git_npm_ci_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    suite_dir = tests_root / "repo"
+    suite_dir.mkdir()
+    (suite_dir / "package.json").write_text('{"name": "x"}')
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", source="git")
+    app = create_app(container)
+    _patch_git(monkeypatch, _git_proc(1, stderr=b"npm ERR! lockfile"))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/repo/prepare")
+
+    assert resp.status_code == 502
+    assert "npm ci failed" in resp.json()["detail"]
+
+

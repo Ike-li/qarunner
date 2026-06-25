@@ -825,6 +825,67 @@ class TestWorkspaceJail:
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.FAILED
 
+    @pytest.mark.asyncio
+    async def test_workspace_jail_copies_node_modules(self, tmp_path):
+        # Red line (§5.7): node_modules must NOT be jail-ignored — the playwright
+        # runner needs @playwright/test from it, and the executor has no network
+        # to reinstall. Snapshot the jail mid-run (the process handler fires with
+        # cwd=jail before cleanup) and confirm node_modules was copied in.
+        from pathlib import Path
+
+        from qarunner.core.orchestrator import _JAIL_IGNORE_NAMES
+
+        assert "node_modules" not in _JAIL_IGNORE_NAMES
+
+        tests_root = tmp_path / "tests_root"
+        tests_root.mkdir()
+        suite_dir = tests_root / "suite_node"
+        suite_dir.mkdir()
+        (suite_dir / "test_dummy.py").write_text("def test_dummy(): pass")
+        dep = suite_dir / "node_modules" / "@playwright" / "test"
+        dep.mkdir(parents=True)
+        (dep / "index.js").write_text("module.exports = {}")
+
+        artifacts_root = tmp_path / "artifacts_root"
+        artifacts_root.mkdir()
+
+        captured: dict[str, bool] = {}
+
+        def handler(cmd, cwd, env, timeout):
+            captured["dep_in_jail"] = (
+                Path(cwd) / "node_modules" / "@playwright" / "test" / "index.js"
+            ).exists()
+            return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
+
+        registry = RunnerRegistry()
+        registry.register(PytestRunner())
+
+        class NoopScheduler:
+            def schedule(self, coro):
+                coro.close()
+
+        orch = RunOrchestrator(
+            registry=registry,
+            store=InMemoryRunStore(),
+            scheduler=NoopScheduler(),
+            process=FakeProcessRunner(handler=handler),
+            collector=FakeResultCollector(preset=None),
+            reporter=FakeAllureReporter(preset=None),
+            clock=FakeClock(),
+            ids=FakeIdGenerator(),
+            tests_root=str(tests_root),
+            artifacts_root=str(artifacts_root),
+            executable="/usr/bin/python3",
+            default_timeout=600,
+        )
+
+        req = RunRequest(tests_path="suite_node")
+        run = await orch.create(req)
+        await orch.execute(run.id)
+
+        assert captured["dep_in_jail"] is True
+
+
 class TestPlaywrightRunnerExecution:
     @pytest.mark.asyncio
     async def test_playwright_runner_compilation_and_execution(self):

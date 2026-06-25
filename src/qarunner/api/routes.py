@@ -83,21 +83,22 @@ def _client_ip(request: Request) -> str:
 
 # Bounds clone/fetch so a hung or hostile remote can't pin a worker forever.
 _GIT_TIMEOUT = 300.0
+# npm ci pulls a full dependency tree and can be slow; allow longer than git.
+_NPM_TIMEOUT = 600.0
 
 
-async def _run_git(
-    args: list[str], *, cwd: str | None = None, timeout: float = _GIT_TIMEOUT
+async def _run_cmd(
+    cmd: list[str], *, cwd: str | None = None, timeout: float
 ) -> tuple[int, str, str]:
-    """Run ``git <args>`` with a parametrised argv (no shell) under a timeout.
+    """Run *cmd* with a parametrised argv (no shell) under a timeout.
 
     Returns ``(returncode, stdout, stderr)``. The argv form (never a shell
-    string) keeps repo URLs / refs from being interpreted as commands. On
+    string) keeps URLs / refs / paths from being interpreted as commands. On
     timeout the process is killed and a non-zero code is synthesised so callers
-    handle it exactly like any other git failure.
+    handle it exactly like any other failure.
     """
     proc = await asyncio.create_subprocess_exec(
-        "git",
-        *args,
+        *cmd,
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -107,8 +108,15 @@ async def _run_git(
     except TimeoutError:
         proc.kill()
         await proc.wait()
-        return 124, "", "git operation timed out"
+        return 124, "", f"{cmd[0]} operation timed out"
     return proc.returncode, out_b.decode(errors="replace"), err_b.decode(errors="replace")
+
+
+async def _run_git(
+    args: list[str], *, cwd: str | None = None, timeout: float = _GIT_TIMEOUT
+) -> tuple[int, str, str]:
+    """Run ``git <args>`` via :func:`_run_cmd` (parametrised argv + timeout)."""
+    return await _run_cmd(["git", *args], cwd=cwd, timeout=timeout)
 
 
 def _validate_git_url(url: str) -> None:
@@ -524,6 +532,66 @@ async def pull_test_suite(
         suite_name=suite_name,
         is_accessible=suite_path.is_dir(),
         message=f"Successfully pulled '{suite_name}'!",
+    )
+
+
+@router.post("/tests/{suite_name}/prepare", response_model=LinkTestSuiteResponse)
+async def prepare_test_suite(
+    suite_name: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> LinkTestSuiteResponse:
+    """Install a git suite's node dependencies via ``npm ci`` (owner/admin only).
+
+    Executors run with no network (SEC-3), so dependency install must happen on
+    the platform, once, after clone. Idempotent and decoupled from clone (which
+    can take minutes for npm). Local suites reuse host-installed deps and git
+    suites without a ``package.json`` need nothing — both return success.
+    """
+    container = request.app.state.container
+    store = container.store
+    cfg = container.settings
+
+    suite = await store.get_suite(suite_name)
+    if suite is None:
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_name}' not found")
+    _require_owner_access(suite.created_by, current_user)
+    if suite.source != "git":
+        return LinkTestSuiteResponse(
+            success=True,
+            suite_name=suite_name,
+            is_accessible=True,
+            message=(
+                f"'{suite_name}' is a local suite; local suites reuse host "
+                "dependencies, nothing to prepare."
+            ),
+        )
+
+    tests_root = Path(cfg.tests_root).resolve()
+    suite_path = _safe_suite_path(tests_root, suite_name)
+    if not suite_path.is_dir():
+        raise HTTPException(
+            status_code=404, detail=f"Suite '{suite_name}' directory not found"
+        )
+    if not (suite_path / "package.json").exists():
+        return LinkTestSuiteResponse(
+            success=True,
+            suite_name=suite_name,
+            is_accessible=True,
+            message=f"No package.json in '{suite_name}'; nothing to prepare.",
+        )
+
+    rc, _out, err = await _run_cmd(
+        ["npm", "ci"], cwd=str(suite_path), timeout=_NPM_TIMEOUT
+    )
+    if rc != 0:
+        raise HTTPException(status_code=502, detail=f"npm ci failed: {err.strip()}")
+
+    return LinkTestSuiteResponse(
+        success=True,
+        suite_name=suite_name,
+        is_accessible=True,
+        message=f"Dependencies installed for '{suite_name}'.",
     )
 
 
