@@ -411,6 +411,16 @@ async def link_test_suite(
 
     link_path = tests_root / suite_name
 
+    # Object-level authz BEFORE any destructive overwrite: a recorded suite may
+    # only be replaced by its owner or an admin; an unregistered directory/symlink
+    # already on disk (manually placed) is admin-only. Mirrors delete_test_suite
+    # so /link can't bypass /delete's guard (rmtree + owner-hijack via save_suite).
+    existing_suite = await container.store.get_suite(suite_name)
+    if existing_suite is not None:
+        _require_owner_access(existing_suite.created_by, current_user)
+    elif (link_path.exists() or link_path.is_symlink()) and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Clear existing if it exists
     if link_path.exists() or link_path.is_symlink():
         try:

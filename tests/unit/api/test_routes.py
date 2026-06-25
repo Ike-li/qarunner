@@ -1906,6 +1906,55 @@ def test_link_writes_local_suite_record(tmp_path: Path, monkeypatch: pytest.Monk
     assert suite.ref is None
 
 
+def test_link_forbidden_non_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-owner must not overwrite/hijack another user's suite via /tests/link.
+
+    Without an owner check this bypasses delete_test_suite's guard: it would
+    rmtree the victim's directory and re-point the record at the attacker.
+    """
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="repo", created_by="bob")
+    victim_dir = tests_root / "repo"
+    victim_dir.mkdir()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    attacker_target = tmp_path / "evil" / "repo"
+    attacker_target.mkdir(parents=True)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/link", json={"path": str(attacker_target)})
+
+    assert resp.status_code == 403
+    assert victim_dir.exists()  # victim's suite not deleted
+    assert container.store._suites["repo"].created_by == "bob"  # type: ignore[attr-defined]
+
+
+def test_link_overwrite_unregistered_dir_non_admin_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unregistered directory already on disk is admin-only to overwrite via
+    /tests/link — mirrors delete_test_suite's N3 rule for manually placed dirs."""
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    existing = tests_root / "manual"
+    existing.mkdir()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    target = tmp_path / "src" / "manual"
+    target.mkdir(parents=True)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/link", json={"path": str(target)})
+
+    assert resp.status_code == 403
+    assert existing.exists()
+
+
 # ── External test suites: git clone / pull / delete (stage 2) ────────────
 
 
