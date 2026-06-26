@@ -182,3 +182,45 @@ class TestPytestWarningSuppression:
         assert getattr(TestSchedule, "__test__", None) is False
         assert getattr(TestSummary, "__test__", None) is False
 
+
+class TestRunRequestValidation:
+    """RunRequest bounds untrusted API input at the boundary (P2-5/P2-6)."""
+
+    def test_rejects_zero_timeout(self):
+        from qarunner.models import RunRequest
+
+        with pytest.raises(ValidationError):
+            RunRequest(tests_path="t", timeout=0)
+
+    def test_rejects_negative_timeout(self):
+        from qarunner.models import RunRequest
+
+        with pytest.raises(ValidationError):
+            RunRequest(tests_path="t", timeout=-5)
+
+    def test_rejects_oversized_timeout(self):
+        from qarunner.models import MAX_TIMEOUT_SECONDS, RunRequest
+
+        with pytest.raises(ValidationError):
+            RunRequest(tests_path="t", timeout=MAX_TIMEOUT_SECONDS + 1)
+
+    def test_accepts_none_and_in_range_timeout(self):
+        from qarunner.models import MAX_TIMEOUT_SECONDS, RunRequest
+
+        assert RunRequest(tests_path="t").timeout is None
+        assert RunRequest(tests_path="t", timeout=1).timeout == 1
+        assert RunRequest(tests_path="t", timeout=MAX_TIMEOUT_SECONDS).timeout == MAX_TIMEOUT_SECONDS
+
+    def test_rejects_unknown_executor_mode(self):
+        from qarunner.models import RunRequest
+
+        with pytest.raises(ValidationError):
+            RunRequest(tests_path="t", executor_mode="hacker")
+
+    def test_accepts_known_modes_and_defaults_to_docker(self):
+        from qarunner.models import RunRequest
+
+        assert RunRequest(tests_path="t").executor_mode == "docker"
+        assert RunRequest(tests_path="t", executor_mode="subprocess").executor_mode == "subprocess"
+        assert RunRequest(tests_path="t", executor_mode="docker").executor_mode == "docker"
+

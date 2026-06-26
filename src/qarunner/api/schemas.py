@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from qarunner.models import (
+    MAX_TIMEOUT_SECONDS,
     ReportRef,
     Run,
     RunStatus,
@@ -45,8 +47,8 @@ class TestProfileCreateRequest(BaseModel):
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
-    executor_mode: str = "docker"
-    timeout: int | None = None
+    executor_mode: Literal["subprocess", "docker"] = "docker"
+    timeout: int | None = Field(default=None, gt=0, le=MAX_TIMEOUT_SECONDS)
     env: dict[str, str] = Field(default_factory=dict)
 
 
@@ -60,8 +62,8 @@ class TestProfileUpdateRequest(BaseModel):
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
-    executor_mode: str = "docker"
-    timeout: int | None = None
+    executor_mode: Literal["subprocess", "docker"] = "docker"
+    timeout: int | None = Field(default=None, gt=0, le=MAX_TIMEOUT_SECONDS)
     env: dict[str, str] = Field(default_factory=dict)
 
 

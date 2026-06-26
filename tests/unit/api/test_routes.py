@@ -1211,6 +1211,31 @@ def parse_error_here(
         assert resp_markers_missing.json() == []
 
 
+def test_create_profile_rejects_unknown_executor_mode() -> None:
+    # P2-6: executor_mode is a closed set; an unknown value is a 422, not a
+    # silent fallback to subprocess.
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/profiles",
+            json={"name": "P", "tests_path": "tests/", "executor_mode": "hacker"},
+        )
+    assert resp.status_code == 422
+
+
+def test_create_profile_rejects_nonpositive_timeout() -> None:
+    # P2-5: a non-positive timeout would expire immediately; reject at the edge.
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/profiles",
+            json={"name": "P", "tests_path": "tests/", "timeout": 0},
+        )
+    assert resp.status_code == 422
+
+
 def test_profile_crud_endpoints() -> None:
     container = _make_container()
     app = create_app(container)

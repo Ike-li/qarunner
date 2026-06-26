@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -34,6 +35,11 @@ class User(BaseModel):
 
 
 
+# Upper bound for a run's timeout (seconds). Bounds untrusted input so a single
+# run can neither expire instantly (<=0) nor hold a worker slot indefinitely (P2-5).
+MAX_TIMEOUT_SECONDS = 86_400  # 24h
+
+
 class RunRequest(BaseModel):
     """Incoming API request to trigger a test run."""
 
@@ -41,11 +47,11 @@ class RunRequest(BaseModel):
     runner: str = "pytest"
     args: list[str] = Field(default_factory=list)
     allure: bool = True
-    timeout: int | None = None
+    timeout: int | None = Field(default=None, gt=0, le=MAX_TIMEOUT_SECONDS)
     # Default to the isolated docker executor (SEC): untrusted test code must not
     # run in the platform process by default. subprocess stays opt-in (admins, or
-    # allow_subprocess_for_non_admins).
-    executor_mode: str = "docker"
+    # allow_subprocess_for_non_admins). Literal rejects unknown modes (P2-6).
+    executor_mode: Literal["subprocess", "docker"] = "docker"
     # Selective run parameters
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
