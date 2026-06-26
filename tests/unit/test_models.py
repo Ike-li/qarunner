@@ -207,9 +207,10 @@ class TestRunRequestValidation:
     def test_accepts_none_and_in_range_timeout(self):
         from qarunner.models import MAX_TIMEOUT_SECONDS, RunRequest
 
+        cap = MAX_TIMEOUT_SECONDS
         assert RunRequest(tests_path="t").timeout is None
         assert RunRequest(tests_path="t", timeout=1).timeout == 1
-        assert RunRequest(tests_path="t", timeout=MAX_TIMEOUT_SECONDS).timeout == MAX_TIMEOUT_SECONDS
+        assert RunRequest(tests_path="t", timeout=cap).timeout == cap
 
     def test_rejects_unknown_executor_mode(self):
         from qarunner.models import RunRequest

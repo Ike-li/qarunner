@@ -409,8 +409,12 @@ def test_create_run_rate_limited_at_inflight_cap() -> None:
     # bounding unbounded QUEUED-run accumulation.
     container = _make_container()
     container.settings.max_inflight_runs_per_user = 2
-    _make_run_in_store(container.store, id="if-1", status=RunStatus.QUEUED, created_by="normal_user")
-    _make_run_in_store(container.store, id="if-2", status=RunStatus.RUNNING, created_by="normal_user")
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.QUEUED, created_by="normal_user"
+    )
+    _make_run_in_store(
+        container.store, id="if-2", status=RunStatus.RUNNING, created_by="normal_user"
+    )
     app = create_app(container)
     _override_user(app, "normal_user", UserRole.USER)
     with TestClient(app) as client:
@@ -422,7 +426,9 @@ def test_create_run_under_inflight_cap_allowed() -> None:
     # P2-7: below the cap the run is accepted; finished runs don't count toward it.
     container = _make_container()
     container.settings.max_inflight_runs_per_user = 2
-    _make_run_in_store(container.store, id="if-1", status=RunStatus.QUEUED, created_by="normal_user")
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.QUEUED, created_by="normal_user"
+    )
     _make_run_in_store(
         container.store, id="done", status=RunStatus.COMPLETED, created_by="normal_user"
     )
@@ -437,7 +443,9 @@ def test_create_run_admin_exempt_from_inflight_cap() -> None:
     # P2-7: admins are not subject to the per-user in-flight cap.
     container = _make_container()
     container.settings.max_inflight_runs_per_user = 1
-    _make_run_in_store(container.store, id="if-1", status=RunStatus.RUNNING, created_by="admin_user")
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.RUNNING, created_by="admin_user"
+    )
     app = create_app(container)
     _override_user(app, "admin_user", UserRole.ADMIN)
     with TestClient(app) as client:
@@ -449,8 +457,12 @@ def test_create_run_inflight_cap_disabled_when_zero() -> None:
     # P2-7: max_inflight_runs_per_user=0 disables the limit entirely.
     container = _make_container()
     container.settings.max_inflight_runs_per_user = 0
-    _make_run_in_store(container.store, id="if-1", status=RunStatus.RUNNING, created_by="normal_user")
-    _make_run_in_store(container.store, id="if-2", status=RunStatus.RUNNING, created_by="normal_user")
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.RUNNING, created_by="normal_user"
+    )
+    _make_run_in_store(
+        container.store, id="if-2", status=RunStatus.RUNNING, created_by="normal_user"
+    )
     app = create_app(container)
     _override_user(app, "normal_user", UserRole.USER)
     with TestClient(app) as client:
