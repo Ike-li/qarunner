@@ -130,7 +130,10 @@ automatically (no token is ever placed in a URL). Therefore:
   the executor image is built on demand; in production set
   `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build it
   (`docker build -f Dockerfile -t qarunner-executor:latest .`) so a missing image
-  fails fast instead of being silently (re)built.
+  fails fast instead of being silently (re)built. The executor image is
+  **python-only** (pytest + allure), so the **`playwright` runner** needs
+  `executor_mode='subprocess'` (admin) or a playwright-capable executor image —
+  `playwright` + `docker` is rejected with a 400.
 - **Single instance only**: crash recovery and the in-process scheduler assume
   one instance owns the DB (CONC-2). Do **not** scale `platform` beyond one
   replica without setting `QARUNNER_CRASH_RECOVERY_ON_STARTUP=false` on all but
