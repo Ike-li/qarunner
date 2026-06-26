@@ -120,6 +120,15 @@ async def _run_git(
     return await _run_cmd(["git", *args], cwd=cwd, timeout=timeout)
 
 
+def _scrub_paths(text: str, *paths: str) -> str:
+    """Strip absolute server paths from subprocess output before it reaches an
+    API error detail. The suites root / suite path are platform-internal and
+    must not leak to clients (same posture as the run-error path-leak fix)."""
+    for p in paths:
+        text = text.replace(p, "<suite>")
+    return text
+
+
 def _validate_git_url(url: str) -> None:
     """Reject repo URLs outside the allowlist (SSRF / local-file / command exec).
 
@@ -509,7 +518,8 @@ async def clone_test_suite(
     args += ["--", payload.url, str(suite_path)]
     rc, _out, err = await _run_git(args)
     if rc != 0:
-        raise HTTPException(status_code=502, detail=f"git clone failed: {err.strip()}")
+        msg = _scrub_paths(err.strip(), str(suite_path), str(tests_root))
+        raise HTTPException(status_code=502, detail=f"git clone failed: {msg}")
 
     # Record the concrete ref. An explicit ref is trusted as given (a tag would
     # leave HEAD detached, so rev-parse is unreliable — N1); otherwise resolve
@@ -567,16 +577,20 @@ async def pull_test_suite(
     suite_path = _safe_suite_path(tests_root, suite_name)
     ref = suite.ref or "HEAD"
 
+    # ``--`` separates the refspec from options so a ref can never be parsed as a
+    # git flag (defence in depth; clone uses the same guard).
     rc, _out, err = await _run_git(
-        ["fetch", "--depth", "1", "origin", ref], cwd=str(suite_path)
+        ["fetch", "--depth", "1", "origin", "--", ref], cwd=str(suite_path)
     )
     if rc != 0:
-        raise HTTPException(status_code=502, detail=f"git fetch failed: {err.strip()}")
+        msg = _scrub_paths(err.strip(), str(suite_path), str(tests_root))
+        raise HTTPException(status_code=502, detail=f"git fetch failed: {msg}")
     rc2, _out2, err2 = await _run_git(
         ["reset", "--hard", "FETCH_HEAD"], cwd=str(suite_path)
     )
     if rc2 != 0:
-        raise HTTPException(status_code=502, detail=f"git reset failed: {err2.strip()}")
+        msg = _scrub_paths(err2.strip(), str(suite_path), str(tests_root))
+        raise HTTPException(status_code=502, detail=f"git reset failed: {msg}")
 
     return LinkTestSuiteResponse(
         success=True,
@@ -642,7 +656,8 @@ async def prepare_test_suite(
         ["npm", "ci", "--ignore-scripts"], cwd=str(suite_path), timeout=_NPM_TIMEOUT
     )
     if rc != 0:
-        raise HTTPException(status_code=502, detail=f"npm ci failed: {err.strip()}")
+        msg = _scrub_paths(err.strip(), str(suite_path), str(tests_root))
+        raise HTTPException(status_code=502, detail=f"npm ci failed: {msg}")
 
     return LinkTestSuiteResponse(
         success=True,

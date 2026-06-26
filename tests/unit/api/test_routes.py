@@ -2406,6 +2406,29 @@ def test_clone_git_failure_returns_502(
     assert "x" not in container.store._suites  # type: ignore[attr-defined]
 
 
+def test_clone_failure_scrubs_server_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # git stderr must not leak the absolute suites-root path into the API detail.
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    leaked = f"fatal: could not create work tree dir '{tests_root}/x'".encode()
+    _patch_git(monkeypatch, _git_proc(1, stderr=leaked))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={"url": "https://example.com/org/x.git", "name": "x"},
+        )
+
+    assert resp.status_code == 502
+    assert str(tests_root) not in resp.json()["detail"]
+    assert "<suite>" in resp.json()["detail"]
+
+
 def test_clone_timeout_returns_502(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2447,6 +2470,7 @@ def test_pull_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first = mock.call_args_list[0]
     assert "fetch" in first.args and "--depth" in first.args
     assert "origin" in first.args and "main" in first.args
+    assert "--" in first.args  # refspec separated from options (defence in depth)
     assert first.kwargs["cwd"] == str(tests_root / "repo")
     second = mock.call_args_list[1]
     assert "reset" in second.args and "--hard" in second.args
