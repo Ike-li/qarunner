@@ -52,6 +52,19 @@ _DANGEROUS_PYTEST_FLAGS = frozenset(
 )
 
 
+# Playwright CLI flags that load/execute arbitrary JS (a config or global
+# setup/teardown module runs as Node code), rejected for the same
+# argv-injection / RCE reason as the pytest flags above.
+_DANGEROUS_PLAYWRIGHT_FLAGS = frozenset(
+    {
+        "-c",
+        "--config",
+        "--global-setup",
+        "--global-teardown",
+    }
+)
+
+
 # Directory entries never copied into the workspace jail.
 _JAIL_IGNORE_NAMES = frozenset(
     {".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"}
@@ -69,6 +82,12 @@ def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") 
     # -- playwright branch --
     if runner_name == "playwright":
         extra_tokens = shlex.split(req.extra_args) if req.extra_args.strip() else []
+        for token in list(req.args) + extra_tokens:
+            flag = token.split("=", 1)[0]
+            if flag in _DANGEROUS_PLAYWRIGHT_FLAGS:
+                raise UnsafeArguments(
+                    f"playwright flag {flag!r} is not allowed in run arguments"
+                )
         compiled: list[str] = list(req.args)
         compiled.extend(extra_tokens)
         for selected in req.selected_files:
@@ -104,12 +123,13 @@ def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") 
 
 
 # Environment-variable names (exact) and prefixes that let a child process
-# hijack dynamic-library loading, the Python import path, or command
-# resolution — classic sandbox-escape / code-injection vectors. Rejected from
-# caller-supplied ``env`` so untrusted test code can't, for example, set
-# LD_PRELOAD to load arbitrary native code into the runner (FUNC-1 + SEC-3 H-3).
+# hijack dynamic-library loading, the Python import path, command resolution,
+# or Node's module loader — classic sandbox-escape / code-injection vectors.
+# Rejected from caller-supplied ``env`` so untrusted test code can't, for
+# example, set LD_PRELOAD to load arbitrary native code, or NODE_OPTIONS
+# (--require) to run arbitrary JS in the playwright runner (FUNC-1 + SEC-3 H-3).
 _DANGEROUS_ENV_PREFIXES = ("LD_", "DYLD_", "PYTHON")
-_DANGEROUS_ENV_NAMES = frozenset({"PATH", "BASH_ENV"})
+_DANGEROUS_ENV_NAMES = frozenset({"PATH", "BASH_ENV", "NODE_OPTIONS"})
 
 
 def _sanitize_env(env: dict[str, str]) -> dict[str, str]:

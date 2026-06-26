@@ -265,6 +265,7 @@ class TestEnvHandling:
             "PYTHONSTARTUP",
             "PATH",
             "BASH_ENV",
+            "NODE_OPTIONS",
             "ld_preload",  # matched case-insensitively
             "Path",
         ],
@@ -887,6 +888,32 @@ class TestWorkspaceJail:
 
 
 class TestPlaywrightRunnerExecution:
+    @pytest.mark.asyncio
+    async def test_playwright_dangerous_config_flag_rejected(self):
+        # A --config flag loads/executes an arbitrary JS config module; reject it
+        # for the same reason pytest's -p/-c are blocked (P1-3).
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            args=["--config=/tmp/evil.config.ts"],
+        )
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_playwright_legitimate_flag_allowed(self):
+        # Regression guard: benign playwright flags (e.g. --headed) must still pass.
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            extra_args="--headed",
+            selected_files=["test_home.spec.ts"],
+        )
+        run = await orch.create(req)
+        assert "--headed" in run.args
+
     @pytest.mark.asyncio
     async def test_playwright_runner_compilation_and_execution(self):
         from qarunner.models import CollectResult, TestSummary
