@@ -38,6 +38,7 @@ class MockContainer:
         self.remove_fails = remove_fails
         self.is_falsy = is_falsy
         self.status = "running"
+        self.logs_tails: list[int | None] = []
 
     def reload(self) -> None:
         self.status = "completed"
@@ -60,7 +61,8 @@ class MockContainer:
         if self.remove_fails:
             raise Exception("Remove failed")
 
-    def logs(self, stdout: bool = True, stderr: bool = True) -> bytes:
+    def logs(self, stdout: bool = True, stderr: bool = True, tail: int | None = None) -> bytes:
+        self.logs_tails.append(tail)
         if self.wait_status == "timeout":
             # Fail log retrieval during timeout to hit the outer except (timed_out=True)
             raise Exception("Logs failed during timeout")
@@ -149,6 +151,18 @@ async def test_docker_runner_success() -> None:
     assert mock_client.run_kwargs["security_opt"] == ["no-new-privileges"]
     assert mock_client.run_kwargs["pids_limit"] == 512
     assert "user" in mock_client.run_kwargs
+
+
+async def test_docker_runner_bounds_final_log_read() -> None:
+    # OOM guard: the final log gather caps how much it pulls from the finished
+    # container (docker tails by line, like subprocess's byte cap) so a test
+    # emitting GBs of output can't be read fully into memory.
+    from qarunner.adapters.docker_runner import _MAX_LOG_LINES
+
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+    await runner.run(["python", "-m", "pytest"], cwd="/tmp/tests", timeout=10)
+    assert _MAX_LOG_LINES in mock_client.mock_container.logs_tails
 
 
 async def test_docker_runner_falsy_container() -> None:
@@ -377,7 +391,7 @@ async def test_docker_runner_streamer_logs_exception() -> None:
         # handler runs once; later calls (final gather) succeed. reload() flips
         # status to "completed", so the loop exits after this single iteration.
         container_logs_called = 0
-        def logs_side_effect(stdout=True, stderr=True):
+        def logs_side_effect(stdout=True, stderr=True, tail=None):
             nonlocal container_logs_called
             container_logs_called += 1
             if container_logs_called <= 1:

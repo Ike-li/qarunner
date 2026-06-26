@@ -21,6 +21,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cap how many trailing log lines the final gather pulls from a finished
+# container into memory, so a test emitting unbounded output can't OOM the
+# platform (subprocess caps bytes; docker's logs API can only tail by line).
+_MAX_LOG_LINES = 50_000
+
 
 class DockerRunner:
     """Execute pytest commands inside an isolated Docker container."""
@@ -212,8 +217,8 @@ class DockerRunner:
             # 6. Gather logs
             def _get_logs():
                 return (
-                    container.logs(stdout=True, stderr=False),
-                    container.logs(stdout=False, stderr=True),
+                    container.logs(stdout=True, stderr=False, tail=_MAX_LOG_LINES),
+                    container.logs(stdout=False, stderr=True, tail=_MAX_LOG_LINES),
                 )
 
             stdout_bytes, stderr_bytes = await asyncio.to_thread(_get_logs)
