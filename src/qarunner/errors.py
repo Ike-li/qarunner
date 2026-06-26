@@ -21,6 +21,16 @@ class UnsafeArguments(UnsafePath):
     """
 
 
+class UnsupportedExecutor(ValueError):
+    """Raised when a runner cannot run on the requested executor.
+
+    The bundled docker executor image is python-only, so the ``playwright``
+    runner needs ``executor_mode='subprocess'`` (or a playwright-capable image).
+    A domain-level invariant so every caller — the API route *and* the scheduler,
+    which reaches ``create`` directly — is protected, not just the route.
+    """
+
+
 class RunnerError(RuntimeError):
     """Raised when a runner fails to build a command or execute."""
 

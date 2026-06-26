@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from qarunner.core.paths import safe_subpath
 from qarunner.core.runners.base import BuildContext
-from qarunner.errors import UnsafeArguments
+from qarunner.errors import UnsafeArguments, UnsupportedExecutor
 from qarunner.models import (
     CollectResult,
     ProcessResult,
@@ -202,6 +202,16 @@ class RunOrchestrator:
         """Create a new run, persist it, and schedule background execution."""
         # 1. Validate runner
         runner = self._registry.get(req.runner)  # raises UnknownRunner
+
+        # 1b. The bundled docker executor image is python-only; playwright needs a
+        # node runtime. Enforce the invariant here (not just the API route) so the
+        # scheduler — which calls create() directly — can't create a doomed
+        # playwright+docker run.
+        if req.runner == "playwright" and req.executor_mode == "docker":
+            raise UnsupportedExecutor(
+                "The 'playwright' runner is not supported on the docker executor "
+                "(python-only image); use executor_mode='subprocess'."
+            )
 
         # 2. Validate path
         tests_dir = safe_subpath(self._tests_root, req.tests_path)  # raises UnsafePath

@@ -912,6 +912,7 @@ class TestPlaywrightRunnerExecution:
         req = RunRequest(
             tests_path="playwright_suite",
             runner="playwright",
+            executor_mode="subprocess",
             args=["--config=/tmp/evil.config.ts"],
         )
         with pytest.raises(UnsafeArguments):
@@ -924,6 +925,7 @@ class TestPlaywrightRunnerExecution:
         req = RunRequest(
             tests_path="playwright_suite",
             runner="playwright",
+            executor_mode="subprocess",
             extra_args="--headed",
             selected_files=["test_home.spec.ts"],
         )
@@ -943,6 +945,7 @@ class TestPlaywrightRunnerExecution:
         req = RunRequest(
             tests_path="playwright_suite",
             runner="playwright",
+            executor_mode="subprocess",
             selected_files=["test_home.spec.ts"],
             extra_args="--headed"
         )
@@ -985,8 +988,25 @@ class TestPlaywrightRunnerExecution:
         req = RunRequest(
             tests_path="playwright_suite",
             runner="playwright",
+            executor_mode="subprocess",
             selected_files=["-unsafe-flag"],
         )
         with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_playwright_on_docker_rejected(self):
+        # Domain invariant: the python-only docker executor can't run playwright,
+        # so create() rejects it for every caller (route + scheduler), not just
+        # the API route's stop-gate.
+        from qarunner.errors import UnsupportedExecutor
+
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            executor_mode="docker",
+        )
+        with pytest.raises(UnsupportedExecutor):
             await orch.create(req)
 
