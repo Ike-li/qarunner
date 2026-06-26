@@ -730,6 +730,57 @@ async def test_claim_schedule_run_unknown_schedule(store: SqliteStore) -> None:
     assert await store.claim_schedule_run("does-not-exist", tick) is False
 
 
+async def test_save_schedule_preserves_concurrent_last_run_at(store: SqliteStore) -> None:
+    """CONC-2/BUG-4: a full-row save (e.g. a PUT /schedules update re-writing a
+    snapshot read before a cron tick) must NOT clobber last_run_at advanced
+    concurrently by claim_schedule_run. A clobber rolls the claim back, so the
+    same tick gets executed again on another replica."""
+    profile = TestProfile(
+        id="p-pres",
+        name="P",
+        tests_path="tests/",
+        created_by="u",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    schedule = TestSchedule(
+        id="s-pres",
+        name="S",
+        profile_id="p-pres",
+        cron_expression="*/5 * * * *",
+        enabled=True,
+        timezone="UTC",
+        last_run_at=None,
+        created_by="u",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_schedule(schedule)
+
+    # A cron tick is claimed: leader election advances last_run_at to the tick.
+    tick = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    assert await store.claim_schedule_run("s-pres", tick) is True
+
+    # An update path re-saves a pre-claim snapshot (last_run_at still None) with
+    # an unrelated field changed.
+    stale_update = TestSchedule(
+        id="s-pres",
+        name="S-renamed",
+        profile_id="p-pres",
+        cron_expression="*/5 * * * *",
+        enabled=True,
+        timezone="UTC",
+        last_run_at=None,
+        created_by="u",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    await store.save_schedule(stale_update)
+
+    reloaded = await store.get_schedule("s-pres")
+    assert reloaded is not None
+    assert reloaded.name == "S-renamed"  # the row-update is applied...
+    assert reloaded.last_run_at == tick  # ...but the concurrent claim survives
+
+
 async def test_enable_wal_tolerates_concurrent_lock() -> None:
     """CONC-2: a 'database is locked' during WAL conversion is tolerated, not raised."""
     from sqlite3 import OperationalError

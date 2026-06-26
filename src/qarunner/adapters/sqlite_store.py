@@ -603,12 +603,24 @@ class SqliteStore:
             return cursor.rowcount > 0
 
     async def save_schedule(self, schedule: TestSchedule) -> None:
+        # Row-preserving upsert that omits `last_run_at` from the conflict update.
+        # `last_run_at` is owned by claim_schedule_run (a conditional UPDATE used
+        # for leader election); a full-row INSERT OR REPLACE here would clobber a
+        # tick claimed concurrently while an update path (e.g. PUT /schedules)
+        # re-saves a snapshot read before the claim, rolling the claim back and
+        # re-running the same cron tick (CONC-2/BUG-4). On insert the VALUES still
+        # seed `last_run_at`; on update the stored value is preserved.
         async with self._connect() as db:
             await db.execute(
-                "INSERT OR REPLACE INTO test_schedules ("
+                "INSERT INTO test_schedules ("
                 "id, name, profile_id, cron_expression, enabled, timezone, "
                 "last_run_at, next_run_at, created_by, created_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "name=excluded.name, profile_id=excluded.profile_id, "
+                "cron_expression=excluded.cron_expression, enabled=excluded.enabled, "
+                "timezone=excluded.timezone, next_run_at=excluded.next_run_at, "
+                "created_by=excluded.created_by, created_at=excluded.created_at",
                 (
                     schedule.id,
                     schedule.name,
