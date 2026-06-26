@@ -391,6 +391,22 @@ def test_create_run_subprocess_non_admin_restricted() -> None:
     assert "restricted" in resp.json()["detail"].lower()
 
 
+def test_create_run_playwright_docker_rejected() -> None:
+    # Stop-gate: the bundled docker executor image is python-only, so a playwright
+    # run on it would fail with a confusing npx-not-found. Reject up front (400),
+    # even for admins, instead of letting it become a FAILED run.
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "admin_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "tests/", "runner": "playwright", "executor_mode": "docker"},
+        )
+    assert resp.status_code == 400
+    assert "playwright" in resp.json()["detail"].lower()
+
+
 def test_create_run_subprocess_admin_always_allowed() -> None:
     container = _make_container()
     container.settings.allow_subprocess_for_non_admins = False

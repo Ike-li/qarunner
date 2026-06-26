@@ -885,6 +885,19 @@ async def create_run(
 ) -> RunResponse:
     """Create a new test run and return its initial state."""
     container = request.app.state.container
+    # Stop-gate: the bundled docker executor image is python-only, so a playwright
+    # run there fails with a confusing npx-not-found. Reject the combination up
+    # front rather than letting it become a FAILED run (a playwright-capable
+    # executor image is future work).
+    if req.runner == "playwright" and req.executor_mode == "docker":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The 'playwright' runner is not supported on the docker executor "
+                "(the bundled executor image is python-only). Run playwright with "
+                "executor_mode='subprocess' or a playwright-capable executor."
+            ),
+        )
     if (
         req.executor_mode == "subprocess"
         and current_user.role != UserRole.ADMIN
