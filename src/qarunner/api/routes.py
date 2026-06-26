@@ -632,8 +632,14 @@ async def prepare_test_suite(
             message=f"No package.json in '{suite_name}'; nothing to prepare.",
         )
 
+    # --ignore-scripts is mandatory (SEC): a git suite is cloned from an arbitrary
+    # repo, so its package.json lifecycle scripts (preinstall/postinstall/prepare)
+    # are untrusted. Plain `npm ci` would run them in the platform process — an RCE
+    # that bypasses the docker-executor isolation (the platform holds the docker
+    # socket). Dependency *code* still runs later, but only inside the sandboxed
+    # executor, never here.
     rc, _out, err = await _run_cmd(
-        ["npm", "ci"], cwd=str(suite_path), timeout=_NPM_TIMEOUT
+        ["npm", "ci", "--ignore-scripts"], cwd=str(suite_path), timeout=_NPM_TIMEOUT
     )
     if rc != 0:
         raise HTTPException(status_code=502, detail=f"npm ci failed: {err.strip()}")

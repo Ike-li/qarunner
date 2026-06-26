@@ -2804,7 +2804,11 @@ def test_prepare_git_npm_ci_success(
 
     assert resp.status_code == 200
     assert "Dependencies installed" in resp.json()["message"]
-    assert mock.call_args.args == ("npm", "ci")
+    # SEC: --ignore-scripts is mandatory. A git suite is cloned from an arbitrary
+    # repo, so its package.json lifecycle scripts (postinstall etc.) are untrusted;
+    # plain `npm ci` would execute them in the platform process (RCE bypassing the
+    # docker executor isolation).
+    assert mock.call_args.args == ("npm", "ci", "--ignore-scripts")
     assert mock.call_args.kwargs["cwd"] == str(suite_dir)
 
 
