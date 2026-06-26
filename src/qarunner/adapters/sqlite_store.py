@@ -220,7 +220,16 @@ class SqliteStore:
         for target, statements in _MIGRATIONS:
             if target > version:
                 for ddl in statements:
-                    await db.execute(ddl)
+                    try:
+                        await db.execute(ddl)
+                    except aiosqlite.OperationalError as exc:
+                        # A legacy unversioned DB may already carry a column a
+                        # forward migration adds (its pre-versioning per-startup
+                        # ALTER scheme added it). Tolerate the duplicate so the
+                        # version still advances; re-raise anything else (mirrors
+                        # _safe_alter's philosophy).
+                        if "duplicate column name" not in str(exc):
+                            raise
                 version = target
                 await db.execute(f"PRAGMA user_version = {target}")
 

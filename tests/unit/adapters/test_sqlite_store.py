@@ -494,6 +494,61 @@ async def test_forward_migration_runs_once_and_records_version(tmp_path, monkeyp
     assert (await _run_columns()).count("arch8_probe") == 1
     assert await _user_version(store) == 2
 
+
+async def test_migration_tolerates_legacy_preexisting_column(tmp_path) -> None:
+    """ARCH-8: a legacy unversioned DB (user_version=0) may already carry a column
+    a forward migration adds (its old per-startup ALTER scheme added it before
+    versioning). The migration must tolerate the duplicate rather than crashing
+    initialize with 'duplicate column name', which would brick startup."""
+    import aiosqlite
+
+    db_path = str(tmp_path / "legacy.db")
+    async with aiosqlite.connect(db_path) as db:
+        # Full baseline columns PLUS worker_node_id (added by migration 2).
+        await db.execute(
+            """
+            CREATE TABLE runs (
+                id TEXT PRIMARY KEY, status TEXT NOT NULL, runner TEXT NOT NULL,
+                created_by TEXT NOT NULL DEFAULT 'system', tests_path TEXT NOT NULL,
+                args_json TEXT NOT NULL DEFAULT '[]',
+                allure_enabled INTEGER NOT NULL DEFAULT 1, timeout INTEGER,
+                executor_mode TEXT NOT NULL DEFAULT 'subprocess', summary_json TEXT,
+                report_json TEXT, exit_code INTEGER, error TEXT,
+                created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+                env_json TEXT NOT NULL DEFAULT '{}', locked INTEGER NOT NULL DEFAULT 0,
+                worker_node_id TEXT
+            )
+            """
+        )
+        await db.commit()
+
+    store = SqliteStore(db_path)
+    await store.initialize()  # must NOT raise duplicate-column
+
+    from qarunner.adapters.sqlite_store import _BASELINE_VERSION, _MIGRATIONS
+
+    expected = max([_BASELINE_VERSION] + [v for v, _ in _MIGRATIONS])
+    assert await _user_version(store) == expected  # version still advanced past 2
+    await store.close()
+
+
+async def test_migration_reraises_non_duplicate_error(tmp_path, monkeypatch) -> None:
+    """The duplicate-column tolerance must not swallow a genuine migration failure
+    (e.g. a DDL against a missing table); such errors still propagate."""
+    import aiosqlite
+
+    from qarunner.adapters import sqlite_store
+
+    monkeypatch.setattr(
+        sqlite_store,
+        "_MIGRATIONS",
+        ((2, ("ALTER TABLE no_such_table ADD COLUMN x TEXT",)),),
+    )
+    store = SqliteStore(str(tmp_path / "versioned.db"))
+    with pytest.raises(aiosqlite.OperationalError):
+        await store.initialize()
+    await store.close()
+
     await store.close()
 
 
