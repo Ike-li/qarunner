@@ -141,6 +141,23 @@ class TestParseJUnitXml:
         assert result is not None
         assert result.summary.pass_rate == pytest.approx(0.5)
 
+    def test_non_numeric_time_treated_as_zero(self, tmp_path):
+        """A non-numeric ``time`` (untrusted producer) must not raise or discard
+        the result; the case is kept with zero duration. parse_junit_xml is
+        documented to never raise on parseable XML — only return None."""
+        f = tmp_path / "junit.xml"
+        f.write_text(
+            '<?xml version="1.0"?>\n'
+            '<testsuite name="s" tests="1">\n'
+            '  <testcase name="ok" classname="s" time="N/A"/>\n'
+            '</testsuite>\n'
+        )
+        result = parse_junit_xml(str(f))
+        assert result is not None
+        assert result.summary.total == 1
+        assert result.summary.passed == 1
+        assert result.cases[0].duration_ms == 0
+
 
 class TestTextOrNone:
     """_text_or_none helper edge cases."""

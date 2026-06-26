@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import get_current_admin, get_current_user
@@ -1143,7 +1143,7 @@ async def lock_run(
 @router.post("/runs/cleanup")
 async def cleanup_runs(
     request: Request,
-    retention_days: int = 30,
+    retention_days: int = Query(30, ge=1),
     _current_admin: User = Depends(get_current_admin),
 ):
     """Clean up physical run artifacts older than X days, preserving SQLite metadata."""

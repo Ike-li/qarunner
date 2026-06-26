@@ -48,8 +48,7 @@ def parse_junit_xml(path: str) -> CollectResult | None:
         suite_name = suite_el.get("name", "")
         for tc_el in suite_el.findall("testcase"):
             tc_name = tc_el.get("name", "")
-            tc_time = float(tc_el.get("time", "0") or "0")
-            duration_ms = int(tc_time * 1000)
+            duration_ms = _duration_ms(tc_el.get("time"))
 
             failure_el = tc_el.find("failure")
             error_el = tc_el.find("error")
@@ -95,6 +94,17 @@ def parse_junit_xml(path: str) -> CollectResult | None:
         duration_ms=total_ms,
     )
     return CollectResult(summary=summary, cases=cases)
+
+
+def _duration_ms(raw: str | None) -> int:
+    """Convert a junit ``time`` (seconds) to milliseconds, tolerating a missing
+    or non-numeric value. junit.xml comes from untrusted test code, so a
+    malformed ``time`` must not raise (parse_junit_xml only returns None on
+    unparseable XML); the case is kept with zero duration instead."""
+    try:
+        return int(float(raw or "0") * 1000)
+    except ValueError:
+        return 0
 
 
 def _text_or_none(el: ET.Element | None) -> str | None:

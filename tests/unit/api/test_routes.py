@@ -892,6 +892,16 @@ def test_lock_run() -> None:
         assert resp.json()["locked"] is False
 
 
+def test_cleanup_runs_rejects_nonpositive_retention() -> None:
+    # retention_days < 1 would purge same-day / all finished runs; reject it (422)
+    # rather than silently nuking artifacts on a fat-fingered 0/negative.
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/runs/cleanup?retention_days=0")
+    assert resp.status_code == 422
+
+
 def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
     container = _make_container()
