@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -246,5 +247,39 @@ async def test_subprocess_file_escalation_mocked(tmp_path: Path) -> None:
         mock_proc.send_signal.assert_called_once()
         mock_proc.terminate.assert_called()
         mock_proc.kill.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_kills_orphan_on_cancellation(tmp_path: Path) -> None:
+    # If run() is cancelled (e.g. shutdown drain past its deadline) while the
+    # child is still executing, the child must be killed — not left orphaned,
+    # which would let untrusted test code keep running outside lifecycle control.
+    runner = SubprocessRunner()
+    mock_proc = MagicMock()
+    mock_proc.returncode = None  # never finished
+    entered = asyncio.Event()
+
+    async def _hang() -> None:
+        entered.set()
+        await asyncio.Event().wait()  # block until cancelled
+
+    mock_proc.wait = _hang
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        task = asyncio.create_task(
+            runner.run(
+                ["sleep"],
+                cwd=".",
+                timeout=100,
+                stdout_file=str(tmp_path / "o.log"),
+                stderr_file=str(tmp_path / "e.log"),
+            )
+        )
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    mock_proc.kill.assert_called_once()
 
 

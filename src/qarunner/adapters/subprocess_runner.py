@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 
@@ -149,6 +150,12 @@ class SubprocessRunner:
                     if not (f_out or f_err):
                         stdout_bytes, stderr_bytes = await proc.communicate()
         finally:
+            if proc.returncode is None:
+                # Cancelled (e.g. shutdown drain past its deadline) before the
+                # child finished: kill it so untrusted test code isn't left
+                # running orphaned, outside lifecycle control.
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
             if f_out:
                 f_out.close()
             if f_err:
