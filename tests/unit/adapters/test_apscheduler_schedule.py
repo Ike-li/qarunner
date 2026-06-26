@@ -99,6 +99,25 @@ async def test_trigger_passes_profile_env() -> None:
 
 
 @pytest.mark.asyncio
+async def test_trigger_uses_profile_runner() -> None:
+    """The scheduled run must honour the profile's runner, not a hardcoded
+    'pytest' — else scheduling a playwright profile silently runs pytest."""
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(return_value=_schedule())
+    store.get_profile = AsyncMock(
+        return_value=_profile(runner="playwright", executor_mode="subprocess")
+    )
+    store.save_schedule = AsyncMock()
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    run_req: RunRequest = orch.create.call_args[0][0]
+    assert run_req.runner == "playwright"
+
+
+@pytest.mark.asyncio
 async def test_trigger_missing_or_disabled() -> None:
     port, store, orch = _make_port()
     orch.create = AsyncMock()

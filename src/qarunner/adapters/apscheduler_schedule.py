@@ -80,7 +80,7 @@ class ApschedulerSchedulePort:
         # Map profile to run request
         run_req = RunRequest(
             tests_path=profile.tests_path,
-            runner="pytest",
+            runner=profile.runner,
             args=[],
             allure=True,
             timeout=profile.timeout,
