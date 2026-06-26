@@ -945,11 +945,11 @@ class TestPlaywrightRunnerExecution:
         orch._process.handler = playwright_handler
 
         await orch.execute(run.id)
-        
+
         stored = await orch._store.get(run.id)
         assert stored.error is None
         assert stored.status == RunStatus.COMPLETED
-        
+
         assert captured_cmd == [
             "npx",
             "playwright",
@@ -958,7 +958,10 @@ class TestPlaywrightRunnerExecution:
             "--headed",
             "test_home.spec.ts",
         ]
-        assert captured_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"] == f"/artifacts/{run.id}/results/junit.xml"
+        assert (
+            captured_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"]
+            == f"/artifacts/{run.id}/results/junit.xml"
+        )
 
     @pytest.mark.asyncio
     async def test_playwright_runner_unsafe_selected_file(self):

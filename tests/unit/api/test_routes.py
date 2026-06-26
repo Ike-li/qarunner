@@ -1964,7 +1964,7 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
         # 5. tests_root.mkdir exception
         # Make is_dir return False for tests_root, and mock mkdir to raise exception
-        monkeypatch.setattr(Path, "is_dir", lambda self: False if self == tests_root else True)
+        monkeypatch.setattr(Path, "is_dir", lambda self: self != tests_root)
         def mock_mkdir_err(*args, **kwargs):
             raise OSError("mkdir failed")
         monkeypatch.setattr(Path, "mkdir", mock_mkdir_err)
@@ -1980,7 +1980,11 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         monkeypatch.setattr(Path, "unlink", mock_unlink_err)
         # Force is_symlink to return True for my-local-project to trigger unlink
         original_is_symlink = Path.is_symlink
-        monkeypatch.setattr(Path, "is_symlink", lambda self: True if self.name == "my-local-project" else original_is_symlink(self))
+
+        def fake_is_symlink(self):
+            return self.name == "my-local-project" or original_is_symlink(self)
+
+        monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
         resp_unlink = client.post("/tests/link", json={"path": str(local_project)})
         assert resp_unlink.status_code == 500
         assert "Failed to clear existing" in resp_unlink.json()["detail"]

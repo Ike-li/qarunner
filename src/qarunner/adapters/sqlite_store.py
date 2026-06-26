@@ -430,7 +430,8 @@ class SqliteStore:
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "name=excluded.name, description=excluded.description, "
-                "tests_path=excluded.tests_path, runner=excluded.runner, selected_files=excluded.selected_files, "
+                "tests_path=excluded.tests_path, runner=excluded.runner, "
+                "selected_files=excluded.selected_files, "
                 "selected_markers=excluded.selected_markers, extra_args=excluded.extra_args, "
                 "executor_mode=excluded.executor_mode, timeout=excluded.timeout, "
                 "created_by=excluded.created_by, created_at=excluded.created_at, "
@@ -456,7 +457,8 @@ class SqliteStore:
     async def get_profile(self, profile_id: str) -> TestProfile | None:
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, name, description, tests_path, runner, selected_files, selected_markers, "
+                "SELECT id, name, description, tests_path, runner, "
+                "selected_files, selected_markers, "
                 "extra_args, executor_mode, timeout, created_by, created_at, env_json "
                 "FROM test_profiles WHERE id = ?",
                 (profile_id,),
@@ -470,14 +472,16 @@ class SqliteStore:
         async with self._connect() as db:
             if tests_path:
                 cursor = await db.execute(
-                    "SELECT id, name, description, tests_path, runner, selected_files, selected_markers, "
+                    "SELECT id, name, description, tests_path, runner, "
+                    "selected_files, selected_markers, "
                     "extra_args, executor_mode, timeout, created_by, created_at, env_json "
                     "FROM test_profiles WHERE tests_path = ? ORDER BY created_at DESC",
                     (tests_path,),
                 )
             else:
                 cursor = await db.execute(
-                    "SELECT id, name, description, tests_path, runner, selected_files, selected_markers, "
+                    "SELECT id, name, description, tests_path, runner, "
+                    "selected_files, selected_markers, "
                     "extra_args, executor_mode, timeout, created_by, created_at, env_json "
                     "FROM test_profiles ORDER BY created_at DESC"
                 )
@@ -589,7 +593,8 @@ class SqliteStore:
                 )
             else:
                 cursor = await db.execute(
-                    "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE status IN (?, ?)",
+                    "UPDATE runs SET status = ?, error = ?, finished_at = ? "
+                    "WHERE status IN (?, ?)",
                     (
                         RunStatus.FAILED.value,
                         "interrupted by server restart",

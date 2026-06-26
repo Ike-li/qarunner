@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import docker
-from docker.errors import DockerException, ImageNotFound
+from docker.errors import ImageNotFound
 
 from qarunner.errors import RunnerError
 from qarunner.models import ProcessResult

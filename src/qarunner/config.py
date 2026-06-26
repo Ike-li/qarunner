@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import socket
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
-
 
 # Known placeholder / weak values that must never reach a running instance.
 # Settings refuses to start if QARUNNER_SECRET_KEY / QARUNNER_ADMIN_PASSWORD match

@@ -865,7 +865,8 @@ async def test_concurrent_initialize_seeds_one_admin(tmp_path) -> None:
 def test_row_to_profile_legacy() -> None:
     from qarunner.adapters.sqlite_store import _row_to_profile
     # A fake 12-column row resembling a legacy database row:
-    # id, name, description, tests_path, selected_files, selected_markers, extra_args, executor_mode, timeout, created_by, created_at, env_json
+    # id, name, description, tests_path, selected_files, selected_markers,
+    # extra_args, executor_mode, timeout, created_by, created_at, env_json
     fake_row = (
         "id-123",            # 0: id
         "Legacy Profile",    # 1: name

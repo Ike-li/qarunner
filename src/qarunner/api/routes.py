@@ -12,10 +12,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import get_current_admin, get_current_user
 from qarunner.api.schemas import (
+    CloneTestSuiteRequest,
+    LinkTestSuiteRequest,
+    LinkTestSuiteResponse,
     LockRunRequest,
     LoginRequest,
     RunListResponse,
     RunResponse,
+    SuiteInfoResponse,
     TestProfileCreateRequest,
     TestProfileResponse,
     TestProfileUpdateRequest,
@@ -27,10 +31,6 @@ from qarunner.api.schemas import (
     UserCreateRequest,
     UserListResponse,
     UserResponse,
-    CloneTestSuiteRequest,
-    LinkTestSuiteRequest,
-    LinkTestSuiteResponse,
-    SuiteInfoResponse,
     profile_to_response,
     run_to_response,
     schedule_to_response,
@@ -399,7 +399,7 @@ async def link_test_suite(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create tests_root directory: {str(e)}",
-            )
+            ) from e
 
     target_path = Path(payload.path)
     suite_name = target_path.name
@@ -432,7 +432,7 @@ async def link_test_suite(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to clear existing test suite entry: {str(e)}",
-            )
+            ) from e
 
     try:
         os.symlink(payload.path, link_path)
@@ -440,7 +440,7 @@ async def link_test_suite(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create symlink: {str(e)}",
-        )
+        ) from e
 
     # Verify if target path is resolved and is an accessible directory
     is_accessible = link_path.is_dir()
@@ -776,7 +776,10 @@ async def get_test_markers(
                                 inner = dec_node.value
                                 if isinstance(inner, ast.Attribute) and inner.attr == "mark":
                                     val_inner = inner.value
-                                    if isinstance(val_inner, ast.Name) and val_inner.id == "pytest":
+                                    if (
+                                        isinstance(val_inner, ast.Name)
+                                        and val_inner.id == "pytest"
+                                    ):
                                         markers.add(dec_node.attr)
             except (OSError, SyntaxError, ValueError):
                 logger.warning("Failed to parse markers from %s", py_file, exc_info=True)

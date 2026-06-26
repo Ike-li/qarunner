@@ -57,7 +57,7 @@ class LoginThrottle:
         attempt = self._attempts.get(key)
         if attempt is None:
             return
-        
+
         # Move key to end to mark as recently used
         self._attempts.move_to_end(key)
 
