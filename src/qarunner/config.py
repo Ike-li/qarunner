@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     executable: str = ""  # empty → sys.executable at runtime
     default_timeout_seconds: int = 1800
     max_concurrency: int = 4
+    # Per-user cap on simultaneously queued/running runs (P2-7). Bounds unbounded
+    # run accumulation by one authenticated user; admins are exempt. 0 disables.
+    max_inflight_runs_per_user: int = 20
     # Executor image runtime auto-build (DEP-5). When qarunner-executor:latest is
     # missing, DockerRunner builds it from the Dockerfile at runtime — convenient
     # in dev, but a production risk: the build is silent and can drift from the

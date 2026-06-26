@@ -781,6 +781,19 @@ async def test_save_schedule_preserves_concurrent_last_run_at(store: SqliteStore
     assert reloaded.last_run_at == tick  # ...but the concurrent claim survives
 
 
+async def test_count_inflight_runs(store: SqliteStore) -> None:
+    """P2-7: count only queued/running runs for the given user — the basis for
+    the per-user in-flight rate limit. Finished runs and other users don't count."""
+    await store.save(_make_run(id="q", status=RunStatus.QUEUED, created_by="alice"))
+    await store.save(_make_run(id="r", status=RunStatus.RUNNING, created_by="alice"))
+    await store.save(_make_run(id="done", status=RunStatus.COMPLETED, created_by="alice"))
+    await store.save(_make_run(id="other", status=RunStatus.RUNNING, created_by="bob"))
+
+    assert await store.count_inflight_runs("alice") == 2
+    assert await store.count_inflight_runs("bob") == 1
+    assert await store.count_inflight_runs("nobody") == 0
+
+
 async def test_enable_wal_tolerates_concurrent_lock() -> None:
     """CONC-2: a 'database is locked' during WAL conversion is tolerated, not raised."""
     from sqlite3 import OperationalError

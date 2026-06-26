@@ -870,6 +870,16 @@ async def create_run(
             status_code=400,
             detail="Subprocess execution mode is restricted to administrators.",
         )
+    # Per-user in-flight cap (P2-7): bound unbounded run accumulation by one
+    # authenticated user. Admins are exempt; a limit of 0 disables the check.
+    limit = container.settings.max_inflight_runs_per_user
+    if limit and current_user.role != UserRole.ADMIN:
+        inflight = await container.store.count_inflight_runs(current_user.username)
+        if inflight >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many in-flight runs; wait for existing runs to finish.",
+            )
     try:
         run = await container.orchestrator.create(req, created_by=current_user.username)
     except UnknownRunner as e:

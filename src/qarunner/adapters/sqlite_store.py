@@ -541,6 +541,15 @@ class SqliteStore:
             )
             await db.commit()
 
+    async def count_inflight_runs(self, created_by: str) -> int:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM runs WHERE created_by = ? AND status IN (?, ?)",
+                (created_by, RunStatus.QUEUED.value, RunStatus.RUNNING.value),
+            )
+            row = await cursor.fetchone()
+        return int(row[0])
+
     async def get_old_unlocked_runs(self, retention_days: int) -> list[Run]:
         from datetime import timedelta
         cutoff_iso = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
