@@ -77,6 +77,8 @@ limits, healthcheck, and `restart: unless-stopped`.
 cp .env.example .env
 #    QARUNNER_SECRET_KEY     — python -c "import secrets; print(secrets.token_urlsafe(64))"
 #    QARUNNER_ADMIN_PASSWORD — a strong, unique password
+#    QARUNNER_DOCKER_GID     — host docker group gid, REQUIRED by this compose
+#                              (getent group docker | cut -d: -f3); compose won't start unset
 #    QARUNNER_COOKIE_SECURE  — add `QARUNNER_COOKIE_SECURE=true` (see same-origin note)
 
 # 2. Build and start
@@ -115,14 +117,20 @@ automatically (no token is ever placed in a URL). Therefore:
   on a server point `${PWD}/external_tests` at a persistent directory and back it
   up too. No named volume is used — the executor mounts the per-run jail under
   artifacts, never this root.
-- **Executor**: runs default to the in-process `subprocess` executor. The
-  hardened Docker executor (SEC-3: non-root, no network, `cap_drop=ALL`,
-  read-only rootfs, pid/mem/cpu limits) needs a Docker daemon socket mounted into
-  the platform container and is **not** enabled by the bundled compose. It runs
-  tests in a `qarunner-executor:latest` image; in dev that image is built on
-  demand, but in production set `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build
-  it (`docker build -f Dockerfile -t qarunner-executor:latest .`) so a missing
-  image fails fast instead of being silently (re)built.
+- **Executor**: runs default to the hardened **Docker executor** (SEC-3:
+  non-root, no network, `cap_drop=ALL`, read-only rootfs, pid/mem/cpu limits),
+  which runs tests in a throwaway `qarunner-executor:latest` container. The
+  bundled prod compose mounts the Docker daemon socket and joins the host docker
+  group (`QARUNNER_DOCKER_GID`) so this path works — note that socket access is
+  effectively host-root, so the real isolation is that untrusted tests run in the
+  executor container, **not** the platform process. The in-process `subprocess`
+  executor runs test code **in the platform process**, so it is opt-in: admins
+  always, non-admins only when `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true`
+  (default false; the dev compose enables it as a single-host convenience). In dev
+  the executor image is built on demand; in production set
+  `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build it
+  (`docker build -f Dockerfile -t qarunner-executor:latest .`) so a missing image
+  fails fast instead of being silently (re)built.
 - **Single instance only**: crash recovery and the in-process scheduler assume
   one instance owns the DB (CONC-2). Do **not** scale `platform` beyond one
   replica without setting `QARUNNER_CRASH_RECOVERY_ON_STARTUP=false` on all but
@@ -180,7 +188,7 @@ All paths below are relative to the server origin (e.g. `http://localhost:8000`)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/runs` | User | Trigger a test run (returns 202 + id) |
+| `POST` | `/runs` | User | Trigger a test run (202 + id). Per-user in-flight cap → 429 when exceeded (admins exempt); `subprocess` executor mode is admin/opt-in (see Executor) |
 | `GET` | `/runs` | User | List runs, newest first (non-admins see only their own, SEC-4) |
 | `GET` | `/runs/{id}` | User† | Run details + summary |
 | `GET` | `/runs/{id}/report` | User† | Allure HTML report (the browser embeds it via the same-origin cookie) |
@@ -236,6 +244,8 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_EXECUTABLE` | (sys.executable) | Python executable for running tests |
 | `QARUNNER_DEFAULT_TIMEOUT_SECONDS` | `1800` | Default test execution timeout |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | Maximum concurrent test runs |
+| `QARUNNER_MAX_INFLIGHT_RUNS_PER_USER` | `20` | Per-user cap on simultaneously queued/running runs; over it `POST /runs` returns 429 (admins exempt). `0` disables the limit |
+| `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | Let non-admins use the in-process `subprocess` executor (which runs test code in the platform process). Keep `false` in production; the dev compose sets it `true` |
 | `QARUNNER_EXECUTOR_AUTOBUILD` | `true` | Build the `qarunner-executor:latest` image at runtime if missing. **Set `false` in production** and pre-build the image, so a missing image fails fast instead of being silently (re)built and drifting from the Dockerfile |
 | `QARUNNER_SECRET_KEY` | **(required)** | JWT signing secret. No default; known placeholders rejected. Generate via `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
 | `QARUNNER_ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | JWT / auth-cookie lifetime in minutes |
