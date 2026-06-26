@@ -177,6 +177,22 @@ class TestCreateArgValidation:
             await orch.create(req)
 
     @pytest.mark.asyncio
+    async def test_args_junitxml_override_rejected(self):
+        # The platform owns --junitxml (result collection reads results_dir/junit.xml);
+        # a user override would redirect output and break/forge collection.
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", extra_args="--junitxml=/tmp/evil.xml")
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
+    async def test_args_alluredir_override_rejected(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample", args=["--alluredir=/tmp/x"])
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
     async def test_selected_file_dash_prefix_rejected(self):
         orch = _make_orchestrator()
         req = RunRequest(tests_path="sample", selected_files=["-p"])

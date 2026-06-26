@@ -45,7 +45,8 @@ class LoginThrottle:
     threshold: int = 5
     base_seconds: float = 60.0
     max_seconds: float = 900.0
-    # Bounded to 10,000 identities to prevent memory-exhaustion (DoS)
+    # Bounded number of tracked identities (memory-exhaustion DoS guard).
+    max_identities: int = 10000
     _attempts: OrderedDict[str, _Attempt] = field(default_factory=OrderedDict)
 
     def check(self, key: str) -> None:
@@ -73,9 +74,8 @@ class LoginThrottle:
         """Count a failed attempt for *key*, locking it once at the threshold."""
         attempt = self._attempts.get(key)
         if attempt is None:
-            # Enforce max cap of 10,000 to prevent memory-exhaustion DoS
-            if len(self._attempts) >= 10000:
-                self._attempts.popitem(last=False)  # discard oldest (LRU)
+            if len(self._attempts) >= self.max_identities:
+                self._evict_one()
             attempt = _Attempt()
             self._attempts[key] = attempt
         else:
@@ -91,4 +91,17 @@ class LoginThrottle:
     def record_success(self, key: str) -> None:
         """Clear all failure/lock state for *key* after a successful login."""
         self._attempts.pop(key, None)
+
+    def _evict_one(self) -> None:
+        """Drop one identity to stay under the cap, preferring one that is NOT
+        currently locked — so a flood of fresh keys can't evict an active lockout
+        (lock bypass). Falls back to the oldest only if every identity is locked."""
+        now = self.clock.now().timestamp()
+        victim = next(
+            (k for k, a in self._attempts.items() if a.locked_until <= now), None
+        )
+        if victim is None:
+            self._attempts.popitem(last=False)
+        else:
+            del self._attempts[victim]
 

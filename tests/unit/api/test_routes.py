@@ -902,6 +902,34 @@ def test_cleanup_runs_rejects_nonpositive_retention() -> None:
     assert resp.status_code == 422
 
 
+def test_cleanup_skips_run_locked_after_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # TOCTOU: a run selected as unlocked but locked before deletion must survive.
+    # The store holds it LOCKED; get_old_unlocked_runs is stubbed to return the
+    # stale unlocked snapshot it saw a moment earlier.
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
+    locked_run = _make_run_in_store(
+        container.store, id="r-lock", status=RunStatus.COMPLETED, locked=True
+    )
+    stale = locked_run.model_copy(update={"locked": False})
+
+    async def _stale_unlocked(retention_days: int) -> list[Run]:
+        return [stale]
+
+    monkeypatch.setattr(container.store, "get_old_unlocked_runs", _stale_unlocked)
+    run_dir = tmp_path / "r-lock"
+    run_dir.mkdir()
+    (run_dir / "x.log").write_text("keep me")
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/runs/cleanup?retention_days=30")
+    assert resp.status_code == 200
+    assert resp.json()["cleaned_runs"] == 0
+    assert run_dir.exists()  # lock respected despite the stale selection
+
+
 def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
     container = _make_container()

@@ -123,3 +123,32 @@ def test_lru_eviction_at_max_capacity() -> None:
     assert "user_0" not in throttle._attempts
     assert "user_new" in throttle._attempts
 
+
+def test_eviction_skips_actively_locked_entry() -> None:
+    # A flood of fresh keys must not evict an active lockout: eviction prefers an
+    # unlocked entry even when a locked one is older (else an attacker bypasses
+    # their own lock by flooding the table).
+    throttle = LoginThrottle(
+        clock=FakeClock(), threshold=2, base_seconds=60.0, max_seconds=60.0, max_identities=2
+    )
+    throttle.record_failure("A")  # A: 1 failure
+    throttle.record_failure("A")  # A: 2 → locked (oldest, locked)
+    throttle.record_failure("B")  # B: 1 failure (younger, unlocked)
+    throttle.record_failure("C")  # cap reached → evict; A is locked so B is dropped
+    assert "A" in throttle._attempts  # active lock preserved despite being oldest
+    assert "B" not in throttle._attempts  # younger unlocked entry evicted
+    assert "C" in throttle._attempts
+
+
+def test_eviction_falls_back_to_oldest_when_all_locked() -> None:
+    # Pathological: every tracked identity is actively locked → sacrifice the oldest.
+    throttle = LoginThrottle(
+        clock=FakeClock(), threshold=1, base_seconds=60.0, max_seconds=60.0, max_identities=2
+    )
+    throttle.record_failure("A")  # threshold=1 → A locked
+    throttle.record_failure("B")  # B locked
+    throttle.record_failure("C")  # all locked → evict the oldest (A)
+    assert "A" not in throttle._attempts
+    assert "B" in throttle._attempts
+    assert "C" in throttle._attempts
+

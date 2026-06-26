@@ -1178,6 +1178,11 @@ async def cleanup_runs(
     cleaned_count = 0
 
     for r in runs_to_cleanup:
+        # Re-read the lock just before deleting: a run locked after it was
+        # selected as unlocked (TOCTOU) must be preserved. Run metadata is never
+        # deleted, so get() always resolves.
+        if (await container.store.get(r.id)).locked:
+            continue
         run_dir = Path(cfg.artifacts_root) / r.id
         if run_dir.exists():
             try:

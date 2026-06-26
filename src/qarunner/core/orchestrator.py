@@ -33,8 +33,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Pytest flags that can load arbitrary code / plugins / config files and must
-# therefore never be accepted from untrusted run requests (argv-injection / RCE).
+# Pytest flags rejected from untrusted run requests. Most load arbitrary code /
+# plugins / config files (argv-injection / RCE); the result-output flags
+# (--junitxml / --alluredir) are platform-owned — a caller override would
+# redirect result collection, breaking or forging a run's outcome.
 _DANGEROUS_PYTEST_FLAGS = frozenset(
     {
         "-p",
@@ -48,6 +50,9 @@ _DANGEROUS_PYTEST_FLAGS = frozenset(
         "--override-ini",
         "--confcutdir",
         "--pythonpath",
+        "--junitxml",
+        "--junit-xml",
+        "--alluredir",
     }
 )
 
