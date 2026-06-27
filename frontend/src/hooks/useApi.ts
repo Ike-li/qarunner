@@ -1,0 +1,57 @@
+import { useCallback } from 'react'
+
+/**
+ * Foundational API hook — the single fetch wrapper every domain hook and
+ * component uses.  Centralises cookie-based auth (SEC-6) and the 401 →
+ * session-clear path so no caller duplicates it.
+ *
+ * Accepts an `onSessionClear` callback because clearing client state requires
+ * access to every state setter in App; the hook itself stays pure.
+ */
+export function useApi(onSessionClear: () => void) {
+  const apiFetch = useCallback(
+    async (path: string, opts: RequestInit = {}): Promise<Response> => {
+      const resp = await globalThis.fetch(path, {
+        ...opts,
+        credentials: 'include',
+      })
+      if (resp.status === 401) {
+        onSessionClear()
+      }
+      return resp
+    },
+    [onSessionClear],
+  )
+
+  /** Best-effort server-side cookie clear + client reset. */
+  const handleLogout = useCallback(async () => {
+    try {
+      await apiFetch('/auth/logout', { method: 'POST' })
+    } catch {
+      // best-effort; clear client state regardless
+    }
+    onSessionClear()
+  }, [apiFetch, onSessionClear])
+
+  /**
+   * Probe the HttpOnly auth cookie.  Returns `{ ok: true, user }` when the
+   * session is valid, or `{ ok: false }` otherwise — never throws.
+   */
+  const checkAuth = useCallback(async (): Promise<
+    { ok: true; user: { username: string; role: string; created_at: string } }
+    | { ok: false }
+  > => {
+    try {
+      const resp = await apiFetch('/auth/me')
+      if (resp.ok) {
+        const user = await resp.json()
+        return { ok: true, user }
+      }
+      return { ok: false }
+    } catch {
+      return { ok: false }
+    }
+  }, [apiFetch])
+
+  return { apiFetch, handleLogout, checkAuth } as const
+}

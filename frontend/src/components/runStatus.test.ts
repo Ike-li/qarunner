@@ -27,8 +27,8 @@ describe('statusTagColor', () => {
     expect(statusTagColor('timeout', false)).toBe('amber')
   })
 
-  it('falls back to default for an unknown status', () => {
-    expect(statusTagColor('weird' as Run['status'], false)).toBe('default')
+  it('falls back to grey for an unknown status', () => {
+    expect(statusTagColor('weird' as Run['status'], false)).toBe('grey')
   })
 })
 

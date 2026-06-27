@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { Tree } from '@douyinfe/semi-ui'
+import type { TreeNodeData } from '@douyinfe/semi-ui/lib/es/tree/interface'
 import { IconFolder, IconFile } from '@douyinfe/semi-icons'
 import type { TreeNode } from '../types'
 
@@ -26,7 +27,7 @@ export function TestFileTree({
   
   // Transform our TreeNode format to Semi UI's treeData format
   const treeData = useMemo(() => {
-    const transform = (items: TreeNode[]): any[] => {
+    const transform = (items: TreeNode[]): TreeNodeData[] => {
       return items.map(node => ({
         label: node.name,
         key: node.path,
@@ -59,7 +60,7 @@ export function TestFileTree({
     return fileSet
   }, [nodes])
 
-  const handleExpand = (expandedKeys: any) => {
+  const handleExpand = (expandedKeys: string[]) => {
     setExpandedFolders(expandedKeys || [])
   }
 

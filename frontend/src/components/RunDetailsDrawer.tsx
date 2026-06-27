@@ -2,117 +2,89 @@ import {
   Activity, AlertTriangle, BarChart3, Box, Check, CheckCircle2, Clock, Copy, Cpu, Download,
   ExternalLink, Maximize2, RotateCw, Terminal, XCircle,
 } from 'lucide-react'
-import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { formatDuration } from '../logUtils'
-import type { Lang, TranslationKey } from '../i18n'
-import type { Run } from '../types'
-
-interface RunDetailsDrawerProps {
-  t: (key: TranslationKey) => string
-  lang: Lang
-  selectedRun: Run | null
-  selectedRunDetails: Run | null
-  streamedStdout: string
-  isStreaming: boolean
-  filteredStdout: string
-  filteredStderr: string
-  filteredStreamed: string
-  detailsLoading: boolean
-  drawerTab: 'logs' | 'report'
-  setDrawerTab: (value: 'logs' | 'report') => void
-  setSelectedRunId: (value: string | null) => void
-  logSearchQuery: string
-  setLogSearchQuery: (value: string) => void
-  logLevelFilter: 'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS'
-  setLogLevelFilter: (value: 'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS') => void
-  terminalFontSize: number
-  setTerminalFontSize: Dispatch<SetStateAction<number>>
-  isTerminalHeightExpanded: boolean
-  setIsTerminalHeightExpanded: (value: boolean) => void
-  setIsTerminalFullscreen: (value: boolean) => void
-  setIsReportFullscreen: (value: boolean) => void
-  copySuccess: boolean
-
-
-  copyToClipboard: (text: string) => void
-  downloadLogs: (runId: string) => void
-  renderFormattedLogs: (text: string) => ReactNode
-  formatDate: (isoStr: string | null) => string
-  terminalRef: RefObject<HTMLDivElement>
-}
+import { useDashboard } from '../hooks/DashboardContext'
 
 /** Slide-in run-details drawer: status badge, info matrix, and a logs/report tab
  *  switch. Logs tab = console terminal (search/level/font/height/fullscreen
  *  controls + line-numbered log body) plus pytest args and error stacktrace;
  *  report tab = outcome breakdown chart and the inline Allure report iframe.
  *  All state lives in App (terminal prefs via useTerminalView); this displays. */
-export function RunDetailsDrawer({
-  t,
-  lang,
-  selectedRun,
-  selectedRunDetails,
-  streamedStdout,
-  isStreaming,
-  filteredStdout,
-  filteredStderr,
-  filteredStreamed,
-  detailsLoading,
-  drawerTab,
-  setDrawerTab,
-  setSelectedRunId,
-  terminalFontSize,
-  isTerminalHeightExpanded,
-  setIsTerminalFullscreen,
-  setIsReportFullscreen,
-  copySuccess,
+export function RunDetailsDrawer() {
+  const d = useDashboard()
 
+  // ── Derived filtered logs ──────────────────────────────────────────────
+  const filteredStdout = d.runs.selectedRun?.stdout
+    ? d.terminal.getFilteredLogs(d.runs.selectedRun.stdout)
+    : ''
+  const filteredStderr = d.runs.selectedRun?.stderr
+    ? d.terminal.getFilteredLogs(d.runs.selectedRun.stderr)
+    : ''
+  const filteredStreamed = d.runs.streamedStdout
+    ? d.terminal.getFilteredLogs(d.runs.streamedStdout)
+    : ''
 
-  copyToClipboard,
-  downloadLogs,
-  renderFormattedLogs,
-  formatDate,
-  terminalRef,
-}: RunDetailsDrawerProps) {
+  // ── Inline helpers ─────────────────────────────────────────────────────
+  const formatDate = (isoStr: string | null) => {
+    if (!isoStr) return '-'
+    return new Date(isoStr).toLocaleString()
+  }
+
+  const downloadLogs = (runId: string) => {
+    const logText = d.runs.isStreaming
+      ? d.runs.streamedStdout
+      : (d.runs.selectedRun?.stdout || '') + '\n' + (d.runs.selectedRun?.stderr || '')
+    const blob = new Blob([logText], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `run_${runId}_execution.log`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <SideSheet
-      visible={!!selectedRun}
+      visible={!!d.runs.selectedRun}
       onCancel={() => {
-        setSelectedRunId(null)
+        d.runs.setSelectedRunId(null)
       }}
       width="680px"
       title={
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '1rem' }}>
           <div className={styles.drawerTitleGroup}>
-            <h3 id="run-details-title" style={{ margin: 0 }}>{t('executionDetails')}</h3>
-            <code>{t('id')}: {selectedRun?.id}</code>
+            <h3 id="run-details-title" style={{ margin: 0 }}>{d.t('executionDetails')}</h3>
+            <code>{d.t('id')}: {d.runs.selectedRun?.id}</code>
           </div>
         </div>
       }
       closable={true}
       bodyStyle={{ padding: '16px' }}
     >
-      {selectedRun && (
+      {d.runs.selectedRun && (
         <div className={styles.drawerContent} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             {/* Top Big Status Badge */}
             <div className={styles.drawerStatusSection}>
               <span className={`${styles.drawerBadge} ${
-                selectedRun.status === 'completed'
-                  ? (selectedRun.passed ? styles.badge_completed : styles.badge_completed_failed)
-                  : styles[`badge_${selectedRun.status}`]
+                d.runs.selectedRun.status === 'completed'
+                  ? (d.runs.selectedRun.passed ? styles.badge_completed : styles.badge_completed_failed)
+                  : styles[`badge_${d.runs.selectedRun.status}`]
               }`}>
-                {selectedRun.status === 'queued' && <RotateCw size={16} className={styles.spinIcon} />}
-                {selectedRun.status === 'running' && <Activity size={16} className={styles.pulseIcon} />}
-                {selectedRun.status === 'completed' && selectedRun.passed && <CheckCircle2 size={16} />}
-                {selectedRun.status === 'completed' && !selectedRun.passed && <XCircle size={16} />}
-                {selectedRun.status === 'failed' && <XCircle size={16} />}
-                {selectedRun.status === 'timeout' && <Clock size={16} />}
-                <span>{t(`status_${selectedRun.status}`).toUpperCase()}</span>
+                {d.runs.selectedRun.status === 'queued' && <RotateCw size={16} className={styles.spinIcon} />}
+                {d.runs.selectedRun.status === 'running' && <Activity size={16} className={styles.pulseIcon} />}
+                {d.runs.selectedRun.status === 'completed' && d.runs.selectedRun.passed && <CheckCircle2 size={16} />}
+                {d.runs.selectedRun.status === 'completed' && !d.runs.selectedRun.passed && <XCircle size={16} />}
+                {d.runs.selectedRun.status === 'failed' && <XCircle size={16} />}
+                {d.runs.selectedRun.status === 'timeout' && <Clock size={16} />}
+                <span>{d.t(`status_${d.runs.selectedRun.status}`).toUpperCase()}</span>
               </span>
-              {selectedRun.status === 'completed' && (
-                <span className={selectedRun.passed ? styles.textSuccessGlow : styles.textDangerGlow}>
-                  {selectedRun.passed ? t('allTestsPassed') : t('suiteFailed')}
+              {d.runs.selectedRun.status === 'completed' && (
+                <span className={d.runs.selectedRun.passed ? styles.textSuccessGlow : styles.textDangerGlow}>
+                  {d.runs.selectedRun.passed ? d.t('allTestsPassed') : d.t('suiteFailed')}
                 </span>
               )}
             </div>
@@ -120,51 +92,51 @@ export function RunDetailsDrawer({
             {/* Info Matrix grid */}
             <div className={styles.infoGrid}>
               <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('runner')}</span>
-                <span className={styles.infoValue}>{selectedRun.runner}</span>
+                <span className={styles.infoLabel}>{d.t('runner')}</span>
+                <span className={styles.infoValue}>{d.runs.selectedRun.runner}</span>
               </div>
               <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('exitCode')}</span>
+                <span className={styles.infoLabel}>{d.t('exitCode')}</span>
                 <span className={styles.infoValue}>
-                  {selectedRun.exit_code !== null ? selectedRun.exit_code : '-'}
+                  {d.runs.selectedRun.exit_code !== null ? d.runs.selectedRun.exit_code : '-'}
                 </span>
               </div>
               <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('triggeredBy')}</span>
+                <span className={styles.infoLabel}>{d.t('triggeredBy')}</span>
                 <span className={`${styles.ownerBadge} ${
-                  selectedRun.created_by === 'system' ? styles.ownerBadge_system :
-                  selectedRun.created_by === 'admin' ? styles.ownerBadge_admin : styles.ownerBadge_user
+                  d.runs.selectedRun.created_by === 'system' ? styles.ownerBadge_system :
+                  d.runs.selectedRun.created_by === 'admin' ? styles.ownerBadge_admin : styles.ownerBadge_user
                 }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
-                  {selectedRun.created_by}
+                  {d.runs.selectedRun.created_by}
                 </span>
               </div>
               <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('environment')}</span>
+                <span className={styles.infoLabel}>{d.t('environment')}</span>
                 <span className={`${styles.engineBadge} ${
-                  selectedRun.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
+                  d.runs.selectedRun.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
                 }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
-                  {selectedRun.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
-                  <span>{t(`engine_${selectedRun.executor_mode}`)}</span>
+                  {d.runs.selectedRun.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
+                  <span>{d.t(`engine_${d.runs.selectedRun.executor_mode}`)}</span>
                 </span>
               </div>
               <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('created')}</span>
-                <span className={styles.infoValue}>{formatDate(selectedRun.created_at)}</span>
+                <span className={styles.infoLabel}>{d.t('created')}</span>
+                <span className={styles.infoValue}>{formatDate(d.runs.selectedRun.created_at)}</span>
               </div>
               <div className={styles.infoItem}>
-                <span className={styles.infoLabel}>{t('finished')}</span>
-                <span className={styles.infoValue}>{formatDate(selectedRun.finished_at)}</span>
+                <span className={styles.infoLabel}>{d.t('finished')}</span>
+                <span className={styles.infoValue}>{formatDate(d.runs.selectedRun.finished_at)}</span>
               </div>
             </div>
 
             {/* Tab Selector Segmented Control */}
-            <Tabs activeKey={drawerTab} onChange={key => setDrawerTab(key as any)} style={{ marginBottom: '1rem' }}>
+            <Tabs activeKey={d.terminal.drawerTab} onChange={key => d.terminal.setDrawerTab(key as any)} style={{ marginBottom: '1rem' }}>
               <Tabs.TabPane
                 itemKey="logs"
                 tab={
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }} data-testid="drawer-tab-logs">
                     <Terminal size={14} />
-                    <span>{t('consoleLogs')}</span>
+                    <span>{d.t('consoleLogs')}</span>
                   </span>
                 }
               />
@@ -173,28 +145,28 @@ export function RunDetailsDrawer({
                 tab={
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     <BarChart3 size={14} />
-                    <span>{t('testReport')}</span>
+                    <span>{d.t('testReport')}</span>
                   </span>
                 }
               />
             </Tabs>
 
-            {drawerTab === 'logs' && (
+            {d.terminal.drawerTab === 'logs' && (
               <>
                 {/* Terminal Console Logs */}
                 <div className={styles.terminalSection}>
                   <div className={styles.terminalHeader}>
                     <div className={styles.terminalTitleGroup}>
                       <Terminal size={14} className={styles.terminalHeaderIcon} />
-                      <h4>{t('consoleLogs')}</h4>
+                      <h4>{d.t('consoleLogs')}</h4>
                     </div>
                       
                     <div className={styles.terminalHeaderControls}>
                       {/* Live Streaming indicator */}
-                      {(selectedRun.status === 'running' || selectedRun.status === 'queued') && (
-                        <span className={isStreaming ? styles.livePulse : styles.streamingIndicator}>
-                          {!isStreaming && <span className={styles.streamingDot}></span>}
-                          {isStreaming ? (lang === 'zh' ? '实时' : 'LIVE') : t('streaming')}
+                      {(d.runs.selectedRun.status === 'running' || d.runs.selectedRun.status === 'queued') && (
+                        <span className={d.runs.isStreaming ? styles.livePulse : styles.streamingIndicator}>
+                          {!d.runs.isStreaming && <span className={styles.streamingDot}></span>}
+                          {d.runs.isStreaming ? (d.lang === 'zh' ? '实时' : 'LIVE') : d.t('streaming')}
                         </span>
                       )}
 
@@ -202,23 +174,23 @@ export function RunDetailsDrawer({
                       <button 
                         className={styles.terminalIconOnlyButton}
                         onClick={() => {
-                          const logsText = isStreaming 
-                            ? streamedStdout 
-                            : (selectedRun.stdout || '') + '\n' + (selectedRun.stderr || '');
-                          copyToClipboard(logsText);
+                          const logsText = d.runs.isStreaming 
+                            ? d.runs.streamedStdout 
+                            : (d.runs.selectedRun?.stdout || '') + '\n' + (d.runs.selectedRun?.stderr || '');
+                          d.terminal.copyToClipboard(logsText);
                         }}
-                        title={copySuccess ? t('copied') : t('copy')}
-                        aria-label={t('copy')}
+                        title={d.terminal.copySuccess ? d.t('copied') : d.t('copy')}
+                        aria-label={d.t('copy')}
                       >
-                        {copySuccess ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
+                        {d.terminal.copySuccess ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
                       </button>
 
                       {/* Download Button (Icon Only) */}
                       <button 
                         className={styles.terminalIconOnlyButton}
-                        onClick={() => downloadLogs(selectedRun.id)}
-                        title={lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
-                        aria-label={t('download')}
+                        onClick={() => downloadLogs(d.runs.selectedRun!.id)}
+                        title={d.lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
+                        aria-label={d.t('download')}
                       >
                         <Download size={14} />
                       </button>
@@ -226,68 +198,68 @@ export function RunDetailsDrawer({
                       {/* Fullscreen toggle button */}
                       <button 
                         className={styles.terminalFullscreenButton}
-                        onClick={() => setIsTerminalFullscreen(true)}
-                        title={lang === 'zh' ? "全屏终端" : "Fullscreen Terminal"}
+                        onClick={() => d.terminal.setIsTerminalFullscreen(true)}
+                        title={d.lang === 'zh' ? "全屏终端" : "Fullscreen Terminal"}
                       >
                         <Maximize2 size={13} />
-                        <span>{lang === 'zh' ? "全屏终端" : "Fullscreen"}</span>
+                        <span>{d.lang === 'zh' ? "全屏终端" : "Fullscreen"}</span>
                       </button>
                     </div>
                   </div>
                   <div 
-                    className={`${styles.terminalBlock} ${isTerminalHeightExpanded ? styles.terminalBlockExpanded : ''}`} 
-                    ref={terminalRef}
-                    style={{ fontSize: `${terminalFontSize}px` }}
+                    className={`${styles.terminalBlock} ${d.terminal.isTerminalHeightExpanded ? styles.terminalBlockExpanded : ''}`} 
+                    ref={d.terminalRef}
+                    style={{ fontSize: `${d.terminal.terminalFontSize}px` }}
                   >
-                    {isStreaming ? (
+                    {d.runs.isStreaming ? (
                       filteredStreamed ? (
-                        <pre className={styles.stdoutPre}>{renderFormattedLogs(filteredStreamed)}</pre>
-                      ) : streamedStdout ? (
+                        <pre className={styles.stdoutPre}>{d.terminal.renderFormattedLogs(filteredStreamed)}</pre>
+                      ) : d.runs.streamedStdout ? (
                         <span className={styles.terminalPlaceholder}>
-                          {lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+                          {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
                         </span>
                       ) : (
                         <span className={styles.terminalPlaceholder}>
                           <span className={styles.waitingLogs}>
-                            <span className={styles.pulsingText}>{t('waitingLogs')}</span>
+                            <span className={styles.pulsingText}>{d.t('waitingLogs')}</span>
                           </span>
                         </span>
                       )
-                    ) : (selectedRun.stdout || selectedRun.stderr || streamedStdout) ? (
+                    ) : (d.runs.selectedRun.stdout || d.runs.selectedRun.stderr || d.runs.streamedStdout) ? (
                       (filteredStdout || filteredStderr || filteredStreamed) ? (
                         <>
-                          {(filteredStdout || (selectedRunDetails ? null : filteredStreamed)) && (
+                          {(filteredStdout || (d.runs.selectedRunDetails ? null : filteredStreamed)) && (
                             <pre className={styles.stdoutPre}>
-                              {renderFormattedLogs(filteredStdout || filteredStreamed)}
+                              {d.terminal.renderFormattedLogs(filteredStdout || filteredStreamed)}
                             </pre>
                           )}
-                          {filteredStderr && <pre className={styles.stderrPre}>{renderFormattedLogs(filteredStderr)}</pre>}
+                          {filteredStderr && <pre className={styles.stderrPre}>{d.terminal.renderFormattedLogs(filteredStderr)}</pre>}
                         </>
                       ) : (
                         <span className={styles.terminalPlaceholder}>
-                          {lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+                          {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
                         </span>
                       )
-                    ) : detailsLoading ? (
+                    ) : d.runs.detailsLoading ? (
                       <span className={styles.terminalPlaceholder}>
                         <span className={styles.waitingLogs}>
-                          <span className={styles.pulsingText}>{lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
+                          <span className={styles.pulsingText}>{d.lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
                         </span>
                       </span>
                     ) : (
                       <span className={styles.terminalPlaceholder}>
-                        {t('noLogsAvailable')}
+                        {d.t('noLogsAvailable')}
                       </span>
                     )}
                   </div>
                 </div>
 
                 {/* Arguments box */}
-                {selectedRun.args && selectedRun.args.length > 0 && (
+                {d.runs.selectedRun.args && d.runs.selectedRun.args.length > 0 && (
                   <div className={styles.argsBlock}>
-                    <h4>{t('pytestArguments')}</h4>
+                    <h4>{d.t('pytestArguments')}</h4>
                     <div className={styles.argsWrapper}>
-                      {selectedRun.args.map((arg: string, idx: number) => (
+                      {d.runs.selectedRun.args.map((arg: string, idx: number) => (
                         <code key={idx} className={styles.argBadge}>{arg}</code>
                       ))}
                     </div>
@@ -295,86 +267,86 @@ export function RunDetailsDrawer({
                 )}
 
                 {/* Error logs container */}
-                {selectedRun.error && (
+                {d.runs.selectedRun.error && (
                   <div className={styles.errorLogSection}>
                     <div className={styles.errorLogHeader}>
-                      <h4>{t('executionStacktrace')}</h4>
+                      <h4>{d.t('executionStacktrace')}</h4>
                       <button 
                         className={styles.copyButton}
-                        onClick={() => copyToClipboard(selectedRun.error || '')}
+                        onClick={() => d.terminal.copyToClipboard(d.runs.selectedRun?.error || '')}
                       >
-                        {copySuccess ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
-                        <span>{copySuccess ? t('copied') : t('copy')}</span>
+                        {d.terminal.copySuccess ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
+                        <span>{d.terminal.copySuccess ? d.t('copied') : d.t('copy')}</span>
                       </button>
                     </div>
                     <pre className={styles.errorText}>
-                      <code>{selectedRun.error}</code>
+                      <code>{d.runs.selectedRun.error}</code>
                     </pre>
                   </div>
                 )}
               </>
             )}
 
-            {drawerTab === 'report' && (
+            {d.terminal.drawerTab === 'report' && (
               <>
                 {/* Dynamic summary chart block */}
-                {selectedRun.summary ? (
+                {d.runs.selectedRun.summary ? (
                   <div className={styles.compactSummaryBar}>
                     <div className={styles.compactSummaryMetrics}>
                       <span className={`${styles.compactMetric} ${styles.compactMetricPassed}`}>
                         <CheckCircle2 size={12} />
-                        <span>{t('passed')}:</span>
-                        <strong>{selectedRun.summary.passed}</strong>
+                        <span>{d.t('passed')}:</span>
+                        <strong>{d.runs.selectedRun.summary.passed}</strong>
                       </span>
                       <span className={`${styles.compactMetric} ${styles.compactMetricFailed}`}>
                         <XCircle size={12} />
-                        <span>{t('failed')}:</span>
-                        <strong>{selectedRun.summary.failed}</strong>
+                        <span>{d.t('failed')}:</span>
+                        <strong>{d.runs.selectedRun.summary.failed}</strong>
                       </span>
                       <span className={`${styles.compactMetric} ${styles.compactMetricError}`}>
                         <AlertTriangle size={12} />
-                        <span>{t('error')}:</span>
-                        <strong>{selectedRun.summary.error}</strong>
+                        <span>{d.t('error')}:</span>
+                        <strong>{d.runs.selectedRun.summary.error}</strong>
                       </span>
                       <span className={`${styles.compactMetric} ${styles.compactMetricSkipped}`}>
                         <Clock size={12} />
-                        <span>{t('skipped')}:</span>
-                        <strong>{selectedRun.summary.skipped}</strong>
+                        <span>{d.t('skipped')}:</span>
+                        <strong>{d.runs.selectedRun.summary.skipped}</strong>
                       </span>
                       <span className={styles.compactMetricDuration}>
                         <Clock size={12} />
-                        <span>{t('durationLabel')}: {formatDuration(selectedRun.summary.duration_ms)}</span>
+                        <span>{d.t('durationLabel')}: {formatDuration(d.runs.selectedRun.summary.duration_ms)}</span>
                       </span>
                     </div>
 
                     {/* Multi-segmented single bar chart */}
                     <div className={styles.compactSegmentBar}>
-                      {selectedRun.summary.passed > 0 && (
+                      {d.runs.selectedRun.summary.passed > 0 && (
                         <div 
                           className={styles.segmentPassed} 
-                          style={{ width: `${(selectedRun.summary.passed / selectedRun.summary.total) * 100}%` }}
-                          title={`${t('passed')}: ${selectedRun.summary.passed}`}
+                          style={{ width: `${(d.runs.selectedRun.summary.passed / d.runs.selectedRun.summary.total) * 100}%` }}
+                          title={`${d.t('passed')}: ${d.runs.selectedRun.summary.passed}`}
                         ></div>
                       )}
-                      {selectedRun.summary.failed > 0 && (
+                      {d.runs.selectedRun.summary.failed > 0 && (
                         <div 
                           className={styles.segmentFailed} 
-                          style={{ width: `${(selectedRun.summary.failed / selectedRun.summary.total) * 100}%` }}
-                          title={`${t('failed')}: ${selectedRun.summary.failed}`}
+                          style={{ width: `${(d.runs.selectedRun.summary.failed / d.runs.selectedRun.summary.total) * 100}%` }}
+                          title={`${d.t('failed')}: ${d.runs.selectedRun.summary.failed}`}
                         ></div>
                       )}
-                      {selectedRun.summary.error > 0 && (
+                      {d.runs.selectedRun.summary.error > 0 && (
                         <div 
                           className={styles.segmentError} 
-                          style={{ width: `${(selectedRun.summary.error / selectedRun.summary.total) * 100}%` }}
-                          title={`${t('error')}: ${selectedRun.summary.error}`}
+                          style={{ width: `${(d.runs.selectedRun.summary.error / d.runs.selectedRun.summary.total) * 100}%` }}
+                          title={`${d.t('error')}: ${d.runs.selectedRun.summary.error}`}
                         ></div>
                       )}
-                      {selectedRun.summary.skipped > 0 && (
+                      {d.runs.selectedRun.summary.skipped > 0 && (
                         <div 
                           className={styles.segmentSkipped} 
-                          style={{ width: `${(selectedRun.summary.skipped / selectedRun.summary.total) * 100}%` }}
-                          title={`${t('skipped')}: ${selectedRun.summary.skipped}`}
+                          style={{ width: `${(d.runs.selectedRun.summary.skipped / d.runs.selectedRun.summary.total) * 100}%` }}
+                          title={`${d.t('skipped')}: ${d.runs.selectedRun.summary.skipped}`}
                         ></div>
                       )}
                     </div>
@@ -382,50 +354,50 @@ export function RunDetailsDrawer({
                 ) : (
                   <div className={styles.summaryPlaceholder}>
                     <Activity size={24} className={styles.pulseIcon} style={{ color: '#06b6d4', marginBottom: '0.75rem' }} />
-                    <p>{t('execInProgress')}</p>
-                    <span>{t('execInProgressDesc')}</span>
+                    <p>{d.t('execInProgress')}</p>
+                    <span>{d.t('execInProgressDesc')}</span>
                   </div>
                 )}
 
                 {/* Premium Allure Report Portal Actions */}
-                {selectedRun.report?.html_generated && selectedRun.report?.allure_report_file ? (
+                {d.runs.selectedRun.report?.html_generated && d.runs.selectedRun.report?.allure_report_file ? (
                   <div className={styles.reportPortalCardCompact}>
                     <div className={styles.portalActions} style={{ marginTop: 0 }}>
                       <button
                         type="button"
                         className={styles.portalBtnPrimary}
-                        onClick={() => setIsReportFullscreen(true)}
-                        title={lang === 'zh' ? '全屏查看测试报告' : 'View Test Report in Fullscreen'}
+                        onClick={() => d.terminal.setIsReportFullscreen(true)}
+                        title={d.lang === 'zh' ? '全屏查看测试报告' : 'View Test Report in Fullscreen'}
                       >
                         <Maximize2 size={14} />
-                        <span>{lang === 'zh' ? '全屏查看报告' : 'Fullscreen Report'}</span>
+                        <span>{d.lang === 'zh' ? '全屏查看报告' : 'Fullscreen Report'}</span>
                       </button>
 
                       <a 
-                        href={`/runs/${selectedRun.id}/report`}
+                        href={`/runs/${d.runs.selectedRun.id}/report`}
                         target="_blank"
                         rel="noreferrer"
                         className={styles.portalBtnSecondary}
-                        title={lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
+                        title={d.lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
                       >
                         <ExternalLink size={14} />
-                        <span>{lang === 'zh' ? '在新窗口打开' : 'Open in New Window'}</span>
+                        <span>{d.lang === 'zh' ? '在新窗口打开' : 'Open in New Window'}</span>
                       </a>
                     </div>
                   </div>
                 ) : (
                   <div className={styles.reportPlaceholder}>
-                    {selectedRun.status === 'running' || selectedRun.status === 'queued' ? (
+                    {d.runs.selectedRun.status === 'running' || d.runs.selectedRun.status === 'queued' ? (
                       <>
                         <RotateCw size={24} className={styles.spinIcon} style={{ color: '#a855f7', marginBottom: '0.75rem' }} />
-                        <p>{t('generatingAllureReport')}</p>
-                        <span>{t('generatingAllureReportDesc')}</span>
+                        <p>{d.t('generatingAllureReport')}</p>
+                        <span>{d.t('generatingAllureReportDesc')}</span>
                       </>
                     ) : (
                       <>
                         <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
-                        <p>{t('noReportGenerated')}</p>
-                        <span>{t('noReportGeneratedDesc')}</span>
+                        <p>{d.t('noReportGenerated')}</p>
+                        <span>{d.t('noReportGeneratedDesc')}</span>
                       </>
                     )}
                   </div>

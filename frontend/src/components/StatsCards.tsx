@@ -1,33 +1,11 @@
 import { Activity, CheckCircle2, RotateCw, XCircle } from 'lucide-react'
 import styles from '../App.module.css'
-import type { TranslationKey } from '../i18n'
+import { useDashboard } from '../hooks/DashboardContext'
 
-interface StatsCardsProps {
-  t: (key: TranslationKey) => string
-  totalRuns: number
-  manualRunsCount: number
-  scheduledRunsCount: number
-  overallSuccessRate: string
-  passedTestCases: number
-  failedTestCases: number
-  totalTestCases: number
-  failedRunsCount: number
-  activeRunsCount: number
-}
+/** Dashboard header summary cards. Reads stats from DashboardContext. */
+export function StatsCards() {
+  const d = useDashboard()
 
-/** Dashboard header summary cards: total / success-rate / failed / active-queue. */
-export function StatsCards({
-  t,
-  totalRuns,
-  manualRunsCount,
-  scheduledRunsCount,
-  overallSuccessRate,
-  passedTestCases,
-  failedTestCases,
-  totalTestCases,
-  failedRunsCount,
-  activeRunsCount
-}: StatsCardsProps) {
   return (
     <section className={styles.statsContainer}>
       <div className={styles.statCard} data-testid="stat-total">
@@ -35,10 +13,10 @@ export function StatsCards({
           <Activity size={20} />
         </div>
         <div className={styles.statDetails}>
-          <span className={styles.statLabel}>{t('totalExecutions')}</span>
-          <h2 className={styles.statValue}>{totalRuns}</h2>
+          <span className={styles.statLabel}>{d.t('totalExecutions')}</span>
+          <h2 className={styles.statValue}>{d.runs.totalRuns}</h2>
           <span className={styles.statSubLabel}>
-            {t('manualRuns')}: {manualRunsCount} | {t('scheduledRuns')}: {scheduledRunsCount}
+            {d.t('manualRuns')}: {d.runs.manualRunsCount} | {d.t('scheduledRuns')}: {d.runs.scheduledRunsCount}
           </span>
         </div>
       </div>
@@ -48,14 +26,14 @@ export function StatsCards({
           <CheckCircle2 size={20} />
         </div>
         <div className={styles.statDetails}>
-          <span className={styles.statLabel}>{t('successRate')}</span>
-          <h2 className={styles.statValue}>{overallSuccessRate}%</h2>
+          <span className={styles.statLabel}>{d.t('successRate')}</span>
+          <h2 className={styles.statValue}>{d.runs.overallSuccessRate}%</h2>
           <span className={styles.statSubLabel}>
-            <span style={{ color: 'var(--semi-color-success)', fontWeight: 600 }}>{t('passedCases')}: {passedTestCases}</span>
+            <span style={{ color: 'var(--semi-color-success)', fontWeight: 600 }}>{d.t('passedCases')}: {d.runs.passedTestCases}</span>
             <span style={{ color: 'var(--semi-color-text-3)', margin: '0 4px' }}>|</span>
-            <span style={{ color: 'var(--semi-color-danger)', fontWeight: 600 }}>{t('failedCases')}: {failedTestCases}</span>
+            <span style={{ color: 'var(--semi-color-danger)', fontWeight: 600 }}>{d.t('failedCases')}: {d.runs.failedTestCases}</span>
             <span style={{ color: 'var(--semi-color-text-3)', margin: '0 4px' }}>|</span>
-            <span style={{ color: 'var(--semi-color-text-2)' }}>{t('totalCases')}: {totalTestCases}</span>
+            <span style={{ color: 'var(--semi-color-text-2)' }}>{d.t('totalCases')}: {d.runs.totalTestCases}</span>
           </span>
         </div>
       </div>
@@ -65,20 +43,18 @@ export function StatsCards({
           <XCircle size={20} />
         </div>
         <div className={styles.statDetails}>
-          <span className={styles.statLabel}>{t('failedRuns')}</span>
-          <h2 className={styles.statValue}>
-            {failedRunsCount}
-          </h2>
+          <span className={styles.statLabel}>{d.t('failedRuns')}</span>
+          <h2 className={styles.statValue}>{d.runs.failedRunsCount}</h2>
         </div>
       </div>
 
       <div className={styles.statCard} data-testid="stat-active">
-        <div className={styles.statIconWrapper} style={{ backgroundColor: activeRunsCount > 0 ? 'rgba(113, 113, 122, 0.16)' : 'rgba(113, 113, 122, 0.07)', color: '#71717a' }}>
-          <RotateCw size={20} className={activeRunsCount > 0 ? styles.spinIcon : ''} />
+        <div className={styles.statIconWrapper} style={{ backgroundColor: d.runs.activeRunsCount > 0 ? 'rgba(113, 113, 122, 0.16)' : 'rgba(113, 113, 122, 0.07)', color: '#71717a' }}>
+          <RotateCw size={20} className={d.runs.activeRunsCount > 0 ? styles.spinIcon : ''} />
         </div>
         <div className={styles.statDetails}>
-          <span className={styles.statLabel}>{t('activeQueue')}</span>
-          <h2 className={styles.statValue}>{activeRunsCount}</h2>
+          <span className={styles.statLabel}>{d.t('activeQueue')}</span>
+          <h2 className={styles.statValue}>{d.runs.activeRunsCount}</h2>
         </div>
       </div>
     </section>

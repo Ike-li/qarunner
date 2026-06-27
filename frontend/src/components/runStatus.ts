@@ -8,7 +8,7 @@ import type { Run } from '../types'
  * `red`. This keeps the two visually distinct — previously both were `red` and
  * the status column could not tell "finished with failures" from "crashed".
  */
-export function statusTagColor(status: Run['status'], passed: boolean | null): string {
+export function statusTagColor(status: Run['status'], passed: boolean | null) {
   switch (status) {
     case 'queued':
       return 'grey'
@@ -21,7 +21,7 @@ export function statusTagColor(status: Run['status'], passed: boolean | null): s
     case 'timeout':
       return 'amber'
     default:
-      return 'default'
+      return 'grey'
   }
 }
 

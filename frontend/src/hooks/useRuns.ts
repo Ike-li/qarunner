@@ -1,0 +1,309 @@
+import { useState, useEffect, useCallback, useRef } from 'react'
+import type { Run } from '../types'
+
+interface UseRunsOpts {
+  apiFetch: (path: string, opts?: RequestInit) => Promise<Response>
+  /** Only fetch / poll when true. */
+  enabled: boolean
+}
+
+/**
+ * Runs data layer — list, detail, SSE streaming, polling, lock toggle, and
+ * derived aggregates.  Everything the dashboard needs about runs lives here.
+ */
+export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
+  const [runs, setRuns] = useState<Run[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunDetails, setSelectedRunDetails] = useState<Run | null>(null)
+  const [detailsLoading, setDetailsLoading] = useState(false)
+  const [streamedStdout, setStreamedStdout] = useState('')
+  const [isStreaming, setIsStreaming] = useState(false)
+
+  // ── fetch helpers ──────────────────────────────────────────────────────
+
+  const fetchRuns = useCallback(async () => {
+    try {
+      const resp = await apiFetch('/runs')
+      if (resp.ok) {
+        const data = await resp.json()
+        setRuns(data.runs)
+      }
+    } catch (err) {
+      console.error('Error fetching runs:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [apiFetch])
+
+  const fetchSelectedRunDetails = useCallback(
+    async (runId: string) => {
+      setDetailsLoading(true)
+      try {
+        const resp = await apiFetch(`/runs/${runId}`)
+        if (resp.ok) {
+          const data = await resp.json()
+          setSelectedRunDetails(data)
+        }
+      } catch (err) {
+        console.error('Error fetching run details:', err)
+      } finally {
+        setDetailsLoading(false)
+      }
+    },
+    [apiFetch],
+  )
+
+  // ── lock toggle ────────────────────────────────────────────────────────
+
+  const handleToggleLock = useCallback(
+    async (runId: string, e: React.MouseEvent) => {
+      e.stopPropagation()
+      const run = runs.find((r) => r.id === runId)
+      if (!run) return
+      const newLocked = !run.locked
+
+      try {
+        const resp = await apiFetch(`/runs/${runId}/lock`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locked: newLocked }),
+        })
+        if (resp.ok) {
+          setRuns((prev) =>
+            prev.map((r) => (r.id === runId ? { ...r, locked: newLocked } : r)),
+          )
+          if (selectedRunDetails?.id === runId) {
+            setSelectedRunDetails((prev) =>
+              prev ? { ...prev, locked: newLocked } : null,
+            )
+          }
+        } else {
+          const err = await resp.json()
+          alert(err.detail || 'Failed to toggle lock status.')
+        }
+      } catch (err) {
+        console.error('Error toggling lock:', err)
+      }
+    },
+    [runs, selectedRunDetails, apiFetch],
+  )
+
+  // ── SSE streaming ──────────────────────────────────────────────────────
+
+  // Snapshot refs so the SSE effect doesn't depend on frequently-changing state.
+  const runsRef = useRef(runs)
+  const selectedRunIdRef = useRef(selectedRunId)
+  const selectedRunDetailsRef = useRef(selectedRunDetails)
+
+  useEffect(() => { runsRef.current = runs }, [runs])
+  useEffect(() => { selectedRunIdRef.current = selectedRunId }, [selectedRunId])
+  useEffect(() => {
+    selectedRunDetailsRef.current = selectedRunDetails
+  }, [selectedRunDetails])
+
+  useEffect(() => {
+    if (!selectedRunId) {
+      setStreamedStdout('')
+      setIsStreaming(false)
+      return
+    }
+
+    const findRun = (): Run | null | undefined =>
+      runsRef.current.find((r) => r.id === selectedRunId) ||
+      selectedRunDetailsRef.current
+    const isActive = (r: Run | null | undefined): boolean =>
+      r?.status === 'running' || r?.status === 'queued'
+
+    if (!isActive(findRun())) {
+      setIsStreaming(false)
+      return
+    }
+
+    setStreamedStdout('')
+    setIsStreaming(true)
+
+    let eventSource: EventSource | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectAttempts = 0
+    let disposed = false
+
+    const connect = () => {
+      if (disposed) return
+      eventSource = new EventSource(`/runs/${selectedRunId}/stream`)
+
+      eventSource.onopen = () => {
+        reconnectAttempts = 0
+      }
+
+      eventSource.onmessage = (event) => {
+        setStreamedStdout((prev) => prev + event.data + '\n')
+      }
+
+      eventSource.onerror = () => {
+        eventSource?.close()
+        eventSource = null
+        if (disposed) return
+
+        if (!isActive(findRun())) {
+          setIsStreaming(false)
+          fetchSelectedRunDetails(selectedRunId)
+          return
+        }
+
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 15000)
+        reconnectAttempts += 1
+        reconnectTimer = setTimeout(connect, delay)
+      }
+    }
+
+    connect()
+
+    return () => {
+      disposed = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      eventSource?.close()
+      setIsStreaming(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRunId, fetchSelectedRunDetails])
+
+  // ── transition fetch (active → inactive) ───────────────────────────────
+
+  const lastStatusRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedRunId) {
+      lastStatusRef.current = null
+      return
+    }
+    const shallowRun = runs.find((r) => r.id === selectedRunId)
+    const currentStatus =
+      shallowRun?.status || selectedRunDetails?.status || null
+    const wasActive =
+      lastStatusRef.current === 'running' || lastStatusRef.current === 'queued'
+    const isInactive =
+      currentStatus && currentStatus !== 'running' && currentStatus !== 'queued'
+
+    if (wasActive && isInactive) {
+      fetchSelectedRunDetails(selectedRunId)
+      fetchRuns()
+    }
+    lastStatusRef.current = currentStatus
+  }, [selectedRunId, runs, selectedRunDetails?.status, fetchSelectedRunDetails, fetchRuns])
+
+  // ── polling ────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!enabled) return
+
+    const interval = setInterval(() => {
+      const currentRuns = runsRef.current
+      const currentSelectedId = selectedRunIdRef.current
+      const currentDetails = selectedRunDetailsRef.current
+
+      const hasActiveRuns = currentRuns.some(
+        (r) => r.status === 'queued' || r.status === 'running',
+      )
+      const activeSelectedRun =
+        currentDetails ||
+        currentRuns.find((r) => r.id === currentSelectedId) ||
+        null
+      const isSelectedActive =
+        activeSelectedRun &&
+        (activeSelectedRun.status === 'queued' ||
+          activeSelectedRun.status === 'running')
+
+      if (hasActiveRuns || isSelectedActive) {
+        fetchRuns()
+        if (currentSelectedId && isSelectedActive) {
+          fetchSelectedRunDetails(currentSelectedId)
+        }
+      }
+    }, 1500)
+
+    return () => clearInterval(interval)
+  }, [enabled, fetchRuns, fetchSelectedRunDetails])
+
+  // ── initial load ───────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (enabled) {
+      fetchRuns()
+    }
+  }, [enabled, fetchRuns])
+
+  // ── derived ────────────────────────────────────────────────────────────
+
+  const selectedRun =
+    selectedRunDetails || runs.find((r) => r.id === selectedRunId) || null
+
+  const totalRuns = runs.length
+  const completedRuns = runs.filter((r) => r.status === 'completed')
+  const passedRunsCount = completedRuns.filter((r) => r.passed).length
+  const overallSuccessRate =
+    completedRuns.length > 0
+      ? ((passedRunsCount / completedRuns.length) * 100).toFixed(0)
+      : '0'
+  const activeRunsCount = runs.filter(
+    (r) => r.status === 'queued' || r.status === 'running',
+  ).length
+  const failedRunsCount = runs.filter(
+    (r) => r.status === 'failed' || (r.status === 'completed' && !r.passed),
+  ).length
+  const manualRunsCount = runs.filter(
+    (r) => r.created_by !== 'system:schedule',
+  ).length
+  const scheduledRunsCount = runs.filter(
+    (r) => r.created_by === 'system:schedule',
+  ).length
+  const passedTestCases = runs.reduce(
+    (sum, r) => sum + (r.summary?.passed ?? 0),
+    0,
+  )
+  const failedTestCases = runs.reduce(
+    (sum, r) => sum + (r.summary ? r.summary.failed + r.summary.error : 0),
+    0,
+  )
+  const totalTestCases = runs.reduce(
+    (sum, r) => sum + (r.summary?.total ?? 0),
+    0,
+  )
+
+  return {
+    // state
+    runs,
+    loading,
+    selectedRunId,
+    setSelectedRunId,
+    selectedRunDetails,
+    detailsLoading,
+    streamedStdout,
+    isStreaming,
+    selectedRun,
+    // actions
+    fetchRuns,
+    fetchSelectedRunDetails,
+    handleToggleLock,
+    // derived
+    totalRuns,
+    completedRuns,
+    overallSuccessRate,
+    activeRunsCount,
+    failedRunsCount,
+    manualRunsCount,
+    scheduledRunsCount,
+    passedTestCases,
+    failedTestCases,
+    totalTestCases,
+    // reset
+    _reset: () => {
+      setRuns([])
+      setLoading(true)
+      setSelectedRunId(null)
+      setSelectedRunDetails(null)
+      setDetailsLoading(false)
+      setStreamedStdout('')
+      setIsStreaming(false)
+    },
+  } as const
+}

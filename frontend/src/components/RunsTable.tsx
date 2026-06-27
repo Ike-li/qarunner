@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { Table, Tag, Progress, Button, Radio, RadioGroup, Tooltip, Spin, Input, Select } from '@douyinfe/semi-ui'
 import {
   IconLock,
@@ -19,67 +19,51 @@ import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
 import { formatDuration } from '../logUtils'
 import { passRateColor, statusTagColor } from './runStatus'
-import type { Lang, TranslationKey } from '../i18n'
 import type { Run } from '../types'
-
-interface RunsTableProps {
-  t: (key: TranslationKey) => string
-  lang: Lang
-  runs: Run[]
-  filteredRuns: Run[]
-  loading: boolean
-  logFilterTab: 'All' | 'Manual' | 'Scheduled'
-  setLogFilterTab: (value: 'All' | 'Manual' | 'Scheduled') => void
-  selectedRunId: string | null
-  setSelectedRunId: (value: string | null) => void
-  setIsTriggerModalOpen: (value: boolean) => void
-  fetchRuns: () => void
-  handleToggleLock: (runId: string, e: React.MouseEvent) => void
-  formatDate: (isoStr: string | null) => string
-  searchRunId: string
-  setSearchRunId: (value: string) => void
-  filterStatus: string
-  setFilterStatus: (value: string) => void
-  filterEngine: string
-  setFilterEngine: (value: string) => void
-  filterOwner: string
-  setFilterOwner: (value: string) => void
-  uniqueOwners: string[]
-}
+import { useDashboard } from '../hooks/DashboardContext'
 
 /**
  * Right column: execution-records table leveraging Semi UI Table component.
  * Includes segmented All/Manual/Scheduled filter, refresh button, status colors,
  * progress bars, and Lock controls.
  */
-export function RunsTable({
-  t,
-  lang,
-  runs,
-  filteredRuns,
-  loading,
-  logFilterTab,
-  setLogFilterTab,
-  selectedRunId,
-  setSelectedRunId,
-  setIsTriggerModalOpen,
-  fetchRuns,
-  handleToggleLock,
-  formatDate,
-  searchRunId,
-  setSearchRunId,
-  filterStatus,
-  setFilterStatus,
-  filterEngine,
-  setFilterEngine,
-  filterOwner,
-  setFilterOwner,
-  uniqueOwners,
-}: RunsTableProps) {
+export function RunsTable() {
+  const d = useDashboard()
+
+  const filteredRuns = useMemo(
+    () =>
+      d.runs.runs.filter((r) => {
+        if (d.selectedSuiteFilter && r.tests_path !== d.selectedSuiteFilter) return false
+        if (d.logFilterTab === 'Manual' && r.created_by === 'system:schedule') return false
+        if (d.logFilterTab === 'Scheduled' && r.created_by !== 'system:schedule') return false
+        if (d.searchRunId && !r.id.toLowerCase().includes(d.searchRunId.toLowerCase())) return false
+        if (d.filterStatus !== 'ALL' && r.status !== d.filterStatus) return false
+        if (d.filterEngine !== 'ALL' && r.executor_mode !== d.filterEngine) return false
+        if (d.filterOwner !== 'ALL' && r.created_by !== d.filterOwner) return false
+        return true
+      }),
+    [
+      d.runs.runs,
+      d.selectedSuiteFilter,
+      d.logFilterTab,
+      d.searchRunId,
+      d.filterStatus,
+      d.filterEngine,
+      d.filterOwner,
+    ],
+  )
+
+  const uniqueOwners = useMemo(
+    () => [...new Set(d.runs.runs.map((r) => r.created_by))].sort(),
+    [d.runs.runs],
+  )
+
+  const formatDate = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleString() : '-'
 
   const columns = [
     {
-      title: t('runId'),
+      title: d.t('runId'),
       dataIndex: 'id',
       key: 'id',
       render: (text: string) => <code style={{ fontFamily: 'var(--font-mono)' }}>{text.slice(0, 8)}</code>
@@ -92,8 +76,8 @@ export function RunsTable({
       render: (locked: boolean, record: Run) => (
         <Tooltip
           content={locked
-            ? (lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
-            : (lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
+            ? (d.lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
+            : (d.lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
           }
         >
           <Button
@@ -102,14 +86,14 @@ export function RunsTable({
             size="small"
             onClick={(e) => {
               e.stopPropagation()
-              handleToggleLock(record.id, e)
+              d.runs.handleToggleLock(record.id, e)
             }}
           />
         </Tooltip>
       )
     },
     {
-      title: t('targetSuite'),
+      title: d.t('targetSuite'),
       dataIndex: 'tests_path',
       key: 'tests_path',
       render: (text: string) => (
@@ -120,11 +104,11 @@ export function RunsTable({
       )
     },
     {
-      title: t('status'),
+      title: d.t('status'),
       dataIndex: 'status',
       key: 'status',
       render: (status: Run['status'], record: Run) => {
-        const color: any = statusTagColor(status, record.passed)
+        const color = statusTagColor(status, record.passed)
         let icon: React.ReactNode = null
         if (status === 'queued') {
           icon = <IconRefresh spin />
@@ -135,24 +119,24 @@ export function RunsTable({
         return (
           <Tag color={color} size="large" style={{ textTransform: 'capitalize', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
             {icon}
-            {t(`status_${status}`)}
+            {d.t(`status_${status}`)}
           </Tag>
         )
       }
     },
     {
-      title: t('engine'),
+      title: d.t('engine'),
       dataIndex: 'executor_mode',
       key: 'executor_mode',
       render: (mode: Run['executor_mode']) => (
         <Tag color="grey" size="large">
           {mode === 'docker' ? <IconBox style={{ marginRight: '4px' }} /> : <IconServer style={{ marginRight: '4px' }} />}
-          {t(`engine_${mode}`)}
+          {d.t(`engine_${mode}`)}
         </Tag>
       )
     },
     {
-      title: t('owner'),
+      title: d.t('owner'),
       dataIndex: 'created_by',
       key: 'created_by',
       render: (text: string) => {
@@ -160,7 +144,7 @@ export function RunsTable({
       }
     },
     {
-      title: t('results'),
+      title: d.t('results'),
       dataIndex: 'summary',
       key: 'summary',
       render: (summary: Run['summary']) => {
@@ -177,7 +161,7 @@ export function RunsTable({
       }
     },
     {
-      title: t('passRate'),
+      title: d.t('passRate'),
       dataIndex: 'summary',
       key: 'passRate',
       render: (summary: Run['summary']) => {
@@ -193,7 +177,7 @@ export function RunsTable({
       }
     },
     {
-      title: t('duration'),
+      title: d.t('duration'),
       dataIndex: 'summary',
       key: 'duration',
       render: (summary: Run['summary']) => (
@@ -203,7 +187,7 @@ export function RunsTable({
       )
     },
     {
-      title: t('createdAt'),
+      title: d.t('createdAt'),
       dataIndex: 'created_at',
       key: 'created_at',
       render: (text: string) => (
@@ -219,68 +203,68 @@ export function RunsTable({
     }
   ]
 
-  const onRow = (record: any) => {
+  const onRow = (record: Run | undefined) => {
     return {
       onClick: () => {
-        if (record) setSelectedRunId(record.id)
+        if (record) d.runs.setSelectedRunId(record.id)
       },
       onKeyDown: activateOnKey(() => {
-        if (record) setSelectedRunId(record.id)
+        if (record) d.runs.setSelectedRunId(record.id)
       }),
-      className: record?.id === selectedRunId ? styles.rowSelected : ''
+      className: record?.id === d.runs.selectedRunId ? styles.rowSelected : ''
     }
   }
 
   const resetFilters = () => {
-    setSearchRunId('')
-    setFilterStatus('ALL')
-    setFilterEngine('ALL')
-    setFilterOwner('ALL')
+    d.setSearchRunId('')
+    d.setFilterStatus('ALL')
+    d.setFilterEngine('ALL')
+    d.setFilterOwner('ALL')
   }
 
-  const isFilterActive = !!(searchRunId || filterStatus !== 'ALL' || filterEngine !== 'ALL' || filterOwner !== 'ALL')
+  const isFilterActive = !!(d.searchRunId || d.filterStatus !== 'ALL' || d.filterEngine !== 'ALL' || d.filterOwner !== 'ALL')
 
   return (
     <div className={styles.tableCard}>
       <div className={styles.tableHeader} style={{ flexWrap: 'wrap', gap: '1rem' }}>
         <div className={styles.tableTitleGroup}>
           <IconActivity size="large" style={{ color: 'var(--semi-color-text-2)' }} />
-          <h2 data-testid="execution-records-title" style={{ margin: 0 }}>{t('executionRecords')}</h2>
+          <h2 data-testid="execution-records-title" style={{ margin: 0 }}>{d.t('executionRecords')}</h2>
         </div>
 
         {/* Segmented Filter Radio Group */}
         <RadioGroup
           type="button"
           buttonSize="middle"
-          value={logFilterTab}
-          onChange={e => setLogFilterTab(e.target.value as any)}
+          value={d.logFilterTab}
+          onChange={e => d.setLogFilterTab(e.target.value as any)}
           style={{ marginRight: 'auto' }}
         >
           <Radio value="All">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconActivity />
-              <span>{lang === 'zh' ? '全部记录' : 'All Runs'}</span>
+              <span>{d.lang === 'zh' ? '全部记录' : 'All Runs'}</span>
             </span>
           </Radio>
           <Radio value="Manual">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconUser />
-              <span>{lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
+              <span>{d.lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
             </span>
           </Radio>
           <Radio value="Scheduled">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconClock />
-              <span>{lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
+              <span>{d.lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
             </span>
           </Radio>
         </RadioGroup>
 
         <Button
           icon={<IconRefresh />}
-          onClick={fetchRuns}
-          aria-label={t('refreshLogs')}
-          title={t('refreshLogs')}
+          onClick={d.runs.fetchRuns}
+          aria-label={d.t('refreshLogs')}
+          title={d.t('refreshLogs')}
         />
       </div>
 
@@ -289,48 +273,48 @@ export function RunsTable({
         {/* Run ID 搜索输入框 */}
         <Input
           prefix={<IconSearch style={{ color: 'var(--semi-color-text-3)' }} />}
-          placeholder={t('searchRunIdPlaceholder')}
-          value={searchRunId}
-          onChange={value => setSearchRunId(value)}
+          placeholder={d.t('searchRunIdPlaceholder')}
+          value={d.searchRunId}
+          onChange={value => d.setSearchRunId(value)}
           showClear
           style={{ width: '220px' }}
         />
 
         {/* 状态筛选下拉框 */}
         <Select
-          value={filterStatus}
-          onChange={value => setFilterStatus(value as string)}
+          value={d.filterStatus}
+          onChange={value => d.setFilterStatus(value as string)}
           style={{ width: '150px' }}
-          placeholder={t('filterStatusPlaceholder')}
+          placeholder={d.t('filterStatusPlaceholder')}
         >
-          <Select.Option value="ALL">{t('filterStatusPlaceholder')}</Select.Option>
-          <Select.Option value="queued">{t('status_queued')}</Select.Option>
-          <Select.Option value="running">{t('status_running')}</Select.Option>
-          <Select.Option value="completed">{t('status_completed')}</Select.Option>
-          <Select.Option value="failed">{t('status_failed')}</Select.Option>
-          <Select.Option value="timeout">{t('status_timeout')}</Select.Option>
+          <Select.Option value="ALL">{d.t('filterStatusPlaceholder')}</Select.Option>
+          <Select.Option value="queued">{d.t('status_queued')}</Select.Option>
+          <Select.Option value="running">{d.t('status_running')}</Select.Option>
+          <Select.Option value="completed">{d.t('status_completed')}</Select.Option>
+          <Select.Option value="failed">{d.t('status_failed')}</Select.Option>
+          <Select.Option value="timeout">{d.t('status_timeout')}</Select.Option>
         </Select>
 
         {/* 引擎筛选下拉框 */}
         <Select
-          value={filterEngine}
-          onChange={value => setFilterEngine(value as string)}
+          value={d.filterEngine}
+          onChange={value => d.setFilterEngine(value as string)}
           style={{ width: '150px' }}
-          placeholder={t('filterEnginePlaceholder')}
+          placeholder={d.t('filterEnginePlaceholder')}
         >
-          <Select.Option value="ALL">{t('filterEnginePlaceholder')}</Select.Option>
-          <Select.Option value="subprocess">{t('engine_subprocess')}</Select.Option>
-          <Select.Option value="docker">{t('engine_docker')}</Select.Option>
+          <Select.Option value="ALL">{d.t('filterEnginePlaceholder')}</Select.Option>
+          <Select.Option value="subprocess">{d.t('engine_subprocess')}</Select.Option>
+          <Select.Option value="docker">{d.t('engine_docker')}</Select.Option>
         </Select>
 
         {/* 执行人筛选下拉框 */}
         <Select
-          value={filterOwner}
-          onChange={value => setFilterOwner(value as string)}
+          value={d.filterOwner}
+          onChange={value => d.setFilterOwner(value as string)}
           style={{ width: '150px' }}
-          placeholder={t('filterOwnerPlaceholder')}
+          placeholder={d.t('filterOwnerPlaceholder')}
         >
-          <Select.Option value="ALL">{t('filterOwnerPlaceholder')}</Select.Option>
+          <Select.Option value="ALL">{d.t('filterOwnerPlaceholder')}</Select.Option>
           {uniqueOwners.map(owner => (
             <Select.Option key={owner} value={owner}>
               {owner}
@@ -346,29 +330,29 @@ export function RunsTable({
             onClick={resetFilters}
             style={{ marginLeft: 'auto' }}
           >
-            {t('clearFilters')}
+            {d.t('clearFilters')}
           </Button>
         )}
       </div>
 
-      {loading && runs.length === 0 ? (
+      {d.runs.loading && d.runs.runs.length === 0 ? (
         <div className={styles.loadingState}>
           <Spin size="large" />
-          <p style={{ marginTop: '1rem' }}>{t('loadingHistory')}</p>
+          <p style={{ marginTop: '1rem' }}>{d.t('loadingHistory')}</p>
         </div>
-      ) : runs.length === 0 ? (
+      ) : d.runs.runs.length === 0 ? (
         <div className={styles.emptyState}>
           <IconBolt style={{ color: 'var(--semi-color-warning)', fontSize: '48px' }} />
-          <h3>{t('noRunsTitle')}</h3>
-          <p>{t('noRunsDesc')}</p>
+          <h3>{d.t('noRunsTitle')}</h3>
+          <p>{d.t('noRunsDesc')}</p>
           <Button
             theme="solid"
             type="primary"
             icon={<IconPlay />}
-            onClick={() => setIsTriggerModalOpen(true)}
+            onClick={() => d.setIsTriggerModalOpen(true)}
             style={{ marginTop: '1.5rem' }}
           >
-            {t('launchFirstRun')}
+            {d.t('launchFirstRun')}
           </Button>
         </div>
       ) : (
