@@ -706,6 +706,19 @@ async def delete_test_suite(
     return {"status": "success", "message": f"Suite {suite_name} deleted"}
 
 
+# Test-file suffixes surfaced in the file tree: pytest (.py with test_ prefix /
+# _test.py suffix) plus Playwright/JS-TS specs (*.spec.* / *.test.*). Without the
+# JS/TS suffixes a Playwright suite (e.g. my-e2e-suite) renders an empty
+# tree and the UI can't browse or select any test.
+_JS_TEST_SUFFIXES = (".spec.ts", ".spec.js", ".spec.mjs", ".test.ts", ".test.js", ".test.mjs")
+
+
+def _is_test_tree_file(name: str) -> bool:
+    if name.endswith(".py"):
+        return name.startswith("test_") or name.endswith("_test.py")
+    return name.endswith(_JS_TEST_SUFFIXES)
+
+
 @router.get("/tests/{suite_name}/tree")
 async def get_test_tree(
     request: Request,
@@ -737,7 +750,7 @@ async def get_test_tree(
                 relative_path = str(entry.relative_to(base_dir))
                 if entry.is_dir():
                     children = walk_dir(entry, base_dir)
-                    # Only include folders if they contain python files (recursively)
+                    # Only include folders that (recursively) contain test files.
                     if children:
                         nodes.append({
                             "name": entry.name,
@@ -745,13 +758,12 @@ async def get_test_tree(
                             "is_dir": True,
                             "children": children
                         })
-                elif entry.is_file() and entry.suffix == ".py":
-                    if entry.name.startswith("test_") or entry.name.endswith("_test.py"):
-                        nodes.append({
-                            "name": entry.name,
-                            "path": relative_path,
-                            "is_dir": False
-                        })
+                elif entry.is_file() and _is_test_tree_file(entry.name):
+                    nodes.append({
+                        "name": entry.name,
+                        "path": relative_path,
+                        "is_dir": False
+                    })
         except OSError:
             logger.warning("Failed to scan test directory %s", current_path, exc_info=True)
         return nodes
@@ -885,19 +897,6 @@ async def create_run(
 ) -> RunResponse:
     """Create a new test run and return its initial state."""
     container = request.app.state.container
-    # Stop-gate: the bundled docker executor image is python-only, so a playwright
-    # run there fails with a confusing npx-not-found. Reject the combination up
-    # front rather than letting it become a FAILED run (a playwright-capable
-    # executor image is future work).
-    if req.runner == "playwright" and req.executor_mode == "docker":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "The 'playwright' runner is not supported on the docker executor "
-                "(the bundled executor image is python-only). Run playwright with "
-                "executor_mode='subprocess' or a playwright-capable executor."
-            ),
-        )
     if (
         req.executor_mode == "subprocess"
         and current_user.role != UserRole.ADMIN
@@ -1319,4 +1318,3 @@ async def delete_schedule(
     except ScheduleNotFound:
         raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found") from None
     return {"status": "success", "message": f"Schedule {schedule_id} deleted"}
-

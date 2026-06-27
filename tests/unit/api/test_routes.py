@@ -230,6 +230,7 @@ class FakeOrchestrator:
             args=req.args,
             allure_enabled=req.allure,
             timeout=req.timeout,
+            executor_mode=req.executor_mode,
             created_at=NOW,
         )
         await self.store.save(run)
@@ -391,10 +392,9 @@ def test_create_run_subprocess_non_admin_restricted() -> None:
     assert "restricted" in resp.json()["detail"].lower()
 
 
-def test_create_run_playwright_docker_rejected() -> None:
-    # Stop-gate: the bundled docker executor image is python-only, so a playwright
-    # run on it would fail with a confusing npx-not-found. Reject up front (400),
-    # even for admins, instead of letting it become a FAILED run.
+def test_create_run_playwright_docker_allowed() -> None:
+    # The docker executor now has a Playwright-capable image path. The route must
+    # accept the combination and leave execution details to the orchestrator.
     container = _make_container()
     app = create_app(container)
     _override_user(app, "admin_user", UserRole.ADMIN)
@@ -403,8 +403,9 @@ def test_create_run_playwright_docker_rejected() -> None:
             "/runs",
             json={"tests_path": "tests/", "runner": "playwright", "executor_mode": "docker"},
         )
-    assert resp.status_code == 400
-    assert "playwright" in resp.json()["detail"].lower()
+    assert resp.status_code == 202
+    assert resp.json()["runner"] == "playwright"
+    assert resp.json()["executor_mode"] == "docker"
 
 
 def test_create_run_subprocess_admin_always_allowed() -> None:
@@ -1339,6 +1340,43 @@ def parse_error_here(
         assert resp_markers_missing.json() == []
 
 
+def test_get_tree_includes_playwright_specs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Playwright suites must expose ``*.spec.ts``/``*.test.ts`` files in the tree.
+
+    The walker historically surfaced only pytest ``.py`` files, leaving Playwright
+    suites (e.g. my-e2e-suite) with an empty tree — the UI could not browse
+    or select any test. JS/TS test files must appear; non-test files (config) and
+    folders without any test file stay excluded.
+    """
+    tests_dir = tmp_path / "external_tests"
+    tests_dir.mkdir()
+    suite_dir = tests_dir / "my-e2e-suite"
+    suite_dir.mkdir()
+    (suite_dir / "smoke.spec.ts").write_text("test('x', () => {});", encoding="utf-8")
+    specs = suite_dir / "specs"
+    specs.mkdir()
+    (specs / "messaging.spec.ts").write_text("test('y', () => {});", encoding="utf-8")
+    # Non-test source files must NOT be surfaced (filter is specific, not "all .ts").
+    (suite_dir / "playwright.config.ts").write_text("export default {};", encoding="utf-8")
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/tests/my-e2e-suite/tree")
+
+    assert resp.status_code == 200
+    tree = resp.json()
+    top = {n["name"] for n in tree}
+    assert "smoke.spec.ts" in top
+    assert "specs" in top  # folder retained because it contains a spec
+    assert "playwright.config.ts" not in top  # config is not a test file
+    specs_node = next(n for n in tree if n["name"] == "specs")
+    assert {c["name"] for c in specs_node["children"]} == {"messaging.spec.ts"}
+
+
 def test_create_profile_rejects_unknown_executor_mode() -> None:
     # P2-6: executor_mode is a closed set; an unknown value is a 422, not a
     # silent fallback to subprocess.
@@ -1374,6 +1412,7 @@ def test_profile_crud_endpoints() -> None:
             "name": "Integration Profile",
             "description": "Integration testing profile",
             "tests_path": "tests/unit",
+            "runner": "playwright",
             "selected_files": ["test_routes.py"],
             "selected_markers": ["unit"],
             "extra_args": "-vv",
@@ -1385,6 +1424,7 @@ def test_profile_crud_endpoints() -> None:
         assert resp.status_code == 201
         profile_id = resp.json()["id"]
         assert resp.json()["name"] == "Integration Profile"
+        assert resp.json()["runner"] == "playwright"
         # TEST-2: env must survive the create round-trip verbatim (request schema
         # → ProfileService.create → store → profile_to_response). A regression
         # dropping env anywhere in that chain turns this red.
@@ -1410,6 +1450,7 @@ def test_profile_crud_endpoints() -> None:
             "name": "Updated Profile",
             "description": "Updated desc",
             "tests_path": "tests/unit",
+            "runner": "pytest",
             "selected_files": ["test_routes.py"],
             "selected_markers": ["unit"],
             "extra_args": "-v",
@@ -1420,6 +1461,7 @@ def test_profile_crud_endpoints() -> None:
         resp_update = client.put(f"/profiles/{profile_id}", json=update_payload)
         assert resp_update.status_code == 200
         assert resp_update.json()["name"] == "Updated Profile"
+        assert resp_update.json()["runner"] == "pytest"
         assert resp_update.json()["executor_mode"] == "docker"
         # TEST-2: update replaces env wholesale — the new map is returned and the
         # create-time keys (FEATURE_FLAG) are gone. Catches an update path that
@@ -2899,5 +2941,3 @@ def test_prepare_git_npm_ci_failure(
 
     assert resp.status_code == 502
     assert "npm ci failed" in resp.json()["detail"]
-
-
