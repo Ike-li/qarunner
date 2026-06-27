@@ -54,6 +54,7 @@ smoke-results/
 # T14 dogfooding 导入状态（本地）
 .qap-import-state.json
 .reasonix
+reasonix.toml
 .codegraph
 
 # qarunner project
