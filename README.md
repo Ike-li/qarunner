@@ -147,108 +147,6 @@ automatically (no token is ever placed in a URL). Therefore:
   one instance and moving scheduling out — otherwise a starting replica fails
   runs still executing in its siblings, and each cron point fires N times.
 
-## API
-
-All paths below are relative to the server origin (e.g. `http://localhost:8000`).
-
-**Auth column**
-
-- **None** — unauthenticated.
-- **User** — any authenticated user. Send `Authorization: Bearer <token>` (API
-  clients) or rely on the HttpOnly `token` cookie (browser). The legacy
-  `?token=` query parameter is **no longer accepted** (SEC-6).
-- **User†** — authenticated **and** object-level access: only the run's owner or
-  an admin may touch it; others get 403/404 (SEC-4).
-- **Admin** — admin role only.
-
-### Health
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/health` | None | Liveness + readiness probe; 200 only when the DB round-trips, else 503 |
-
-### Authentication & Users
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/auth/login` | None | Authenticate; returns a JWT in the body **and** sets the HttpOnly auth cookie. Rate-limited with backoff lockout (SEC-5) |
-| `POST` | `/auth/logout` | None | Clear the auth cookie (works even on an expired session) |
-| `GET` | `/auth/me` | User | Current user's profile |
-| `POST` | `/users` | Admin | Create a user account |
-| `GET` | `/users` | Admin | List all users |
-
-### Test discovery
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/tests` | User | List test suite directories under `tests_root` |
-| `GET` | `/tests/{suite}/tree` | User | File tree for a suite |
-| `GET` | `/tests/{suite}/markers` | User | Pytest markers declared in a suite |
-
-### Test suites
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/suites` | User | List suites with source metadata (local / git / repo / ref) |
-| `POST` | `/tests/link` | User | Symlink a local directory as a suite |
-| `POST` | `/tests/clone` | User | Clone a git repository as a suite |
-| `POST` | `/tests/{suite}/pull` | User | Pull latest changes for a git suite (owner or admin) |
-| `POST` | `/tests/{suite}/prepare` | User | Install node dependencies for a git suite (owner or admin) |
-| `DELETE` | `/tests/{suite}` | User | Remove a suite (owner or admin) |
-
-### Profiles (saved run configurations)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/profiles` | User | Create a run profile |
-| `GET` | `/profiles` | User | List profiles |
-| `PUT` | `/profiles/{id}` | User | Update a profile |
-| `DELETE` | `/profiles/{id}` | User | Delete a profile |
-
-### Runs
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/runs` | User | Trigger a test run (202 + id). Per-user in-flight cap → 429 when exceeded (admins exempt); `subprocess` executor mode is admin/opt-in (see Executor) |
-| `GET` | `/runs` | User | List runs, newest first (non-admins see only their own, SEC-4) |
-| `GET` | `/runs/{id}` | User† | Run details + summary |
-| `GET` | `/runs/{id}/report` | User† | Allure HTML report (the browser embeds it via the same-origin cookie) |
-| `GET` | `/runs/{id}/report/{path}` | User† | Allure report static assets (path-traversal-safe) |
-| `GET` | `/runs/{id}/stream` | User† | Live stdout via Server-Sent Events |
-| `PUT` | `/runs/{id}/lock` | User† | Toggle a run's lock to protect it from cleanup |
-| `POST` | `/runs/cleanup` | Admin | Delete artifacts of unlocked runs older than `retention_days` (default 30); metadata is kept |
-
-### Schedules (cron)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/schedules/preview` | User | Preview the next fire times for a cron expression |
-| `POST` | `/schedules` | User | Create a schedule |
-| `GET` | `/schedules` | User | List schedules |
-| `GET` | `/schedules/{id}` | User | Get a schedule |
-| `PUT` | `/schedules/{id}` | User | Update a schedule |
-| `DELETE` | `/schedules/{id}` | User | Delete a schedule |
-
-### Example (API client)
-
-```bash
-# 1. Sign in to obtain an access token (programmatic clients use the body token)
-TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d "{\"username\": \"admin\", \"password\": \"$QARUNNER_ADMIN_PASSWORD\"}" | jq -r '.access_token')
-
-# 2. Trigger a run with the Authorization header
-curl -X POST http://localhost:8000/runs \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"tests_path": "sample_tests"}'
-
-# 3. Poll for results
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/runs/<id>
-```
-
-Browsers authenticate via the HttpOnly cookie set at login instead of the header.
-
 ## Configuration
 
 All settings are read from environment variables with the `QARUNNER_` prefix.
@@ -278,6 +176,32 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_STATIC_ROOT` | (project `frontend/dist`) | Directory of the built SPA to serve at `/`. The platform image sets this; override for a custom layout |
 | `QARUNNER_CRASH_RECOVERY_ON_STARTUP` | `true` | Fail QUEUED/RUNNING runs left by a previous process on startup. Assumes a single instance owns the DB — set `false` on all but one replica when scaling out, or sibling runs in flight will be wrongly failed |
 | `QARUNNER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS` | `30` | Grace period on shutdown to let in-flight runs persist their terminal state before the DB closes. Runs still executing after this are cancelled (and recovered as FAILED on the next start) |
+
+## API
+
+The full endpoint reference for external / integration testing lives in
+[docs/API_REFERENCE.md](docs/API_REFERENCE.md) — every route, request/response
+field, status code, and auth rule, cross-checked against the source. The
+running server also serves FastAPI's built-in docs:
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- OpenAPI schema (authoritative): `http://localhost:8000/openapi.json`
+
+Quick smoke test — log in as the seeded admin (default username `admin`, using
+the password you exported above), then list the available test suites:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\": \"admin\", \"password\": \"$QARUNNER_ADMIN_PASSWORD\"}" \
+  | jq -r '.access_token')
+
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/tests
+```
+
+Triggering runs, polling results, and the SSE log stream are documented in
+[docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 
 ## Architecture
 
