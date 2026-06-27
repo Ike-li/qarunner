@@ -24,6 +24,7 @@ services:
       # to start if unset. Never hard-code real secrets here (SEC-2).
       - QARUNNER_SECRET_KEY=${QARUNNER_SECRET_KEY:?set QARUNNER_SECRET_KEY (see .env.example)}
       - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:?set QARUNNER_ADMIN_PASSWORD (see .env.example)}
+      - QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS=${QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS:-}
     volumes:
       - ./artifacts:${PWD}/artifacts
       # Writable suites root: the single-instance platform clones/pulls/prepares
@@ -48,4 +49,3 @@ services:
         limits:
           cpus: "2.0"
           memory: 2G
-

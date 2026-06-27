@@ -127,13 +127,20 @@ automatically (no token is ever placed in a URL). Therefore:
   executor runs test code **in the platform process**, so it is opt-in: admins
   always, non-admins only when `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true`
   (default false; the dev compose enables it as a single-host convenience). In dev
-  the executor image is built on demand; in production set
-  `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build it
-  (`docker build -f Dockerfile -t qarunner-executor:latest .`) so a missing image
-  fails fast instead of being silently (re)built. The executor image is
-  **python-only** (pytest + allure), so the **`playwright` runner** needs
-  `executor_mode='subprocess'` (admin) or a playwright-capable executor image —
-  `playwright` + `docker` is rejected with a 400.
+  the executor images are built on demand; in production set
+  `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build them so a missing image
+  fails fast instead of being silently (re)built:
+  `docker build -f Dockerfile -t qarunner-executor:latest .` and
+  `docker build -f Dockerfile.playwright -t qarunner-playwright-executor:latest .`.
+  `pytest` runs use the python executor image; `playwright` runs use the
+  Playwright executor image and may run with `executor_mode='docker'`.
+- **Playwright external paths**: docker executor containers only get the per-run
+  workspace and artifact directory by default. If a Playwright profile needs an
+  explicit env directory such as `APP_REPO_PATH=/Users/me/code/app`, set
+  `QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS` to an allowlisted parent mounted at
+  the same path by the platform (for local dev, `docker-compose.dev.yml` sets it
+  from `QARUNNER_PROJECTS_ROOT`). Matching env directory values are mounted
+  read-only into the executor.
 - **Single instance only**: crash recovery and the in-process scheduler assume
   one instance owns the DB (CONC-2). Do **not** scale `platform` beyond one
   replica without setting `QARUNNER_CRASH_RECOVERY_ON_STARTUP=false` on all but
@@ -177,6 +184,17 @@ All paths below are relative to the server origin (e.g. `http://localhost:8000`)
 | `GET` | `/tests` | User | List test suite directories under `tests_root` |
 | `GET` | `/tests/{suite}/tree` | User | File tree for a suite |
 | `GET` | `/tests/{suite}/markers` | User | Pytest markers declared in a suite |
+
+### Test suites
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/suites` | User | List suites with source metadata (local / git / repo / ref) |
+| `POST` | `/tests/link` | User | Symlink a local directory as a suite |
+| `POST` | `/tests/clone` | User | Clone a git repository as a suite |
+| `POST` | `/tests/{suite}/pull` | User | Pull latest changes for a git suite (owner or admin) |
+| `POST` | `/tests/{suite}/prepare` | User | Install node dependencies for a git suite (owner or admin) |
+| `DELETE` | `/tests/{suite}` | User | Remove a suite (owner or admin) |
 
 ### Profiles (saved run configurations)
 
@@ -250,6 +268,8 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_MAX_INFLIGHT_RUNS_PER_USER` | `20` | Per-user cap on simultaneously queued/running runs; over it `POST /runs` returns 429 (admins exempt). `0` disables the limit |
 | `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | Let non-admins use the in-process `subprocess` executor (which runs test code in the platform process). Keep `false` in production; the dev compose sets it `true` |
 | `QARUNNER_EXECUTOR_AUTOBUILD` | `true` | Build the `qarunner-executor:latest` image at runtime if missing. **Set `false` in production** and pre-build the image, so a missing image fails fast instead of being silently (re)built and drifting from the Dockerfile |
+| `QARUNNER_PLAYWRIGHT_EXECUTOR_IMAGE` | `qarunner-playwright-executor:latest` | Docker image used for `runner=playwright` docker executions |
+| `QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS` | empty | `os.pathsep`-separated allowlist of roots whose explicit env directory values may be mounted read-only into executor containers |
 | `QARUNNER_SECRET_KEY` | **(required)** | JWT signing secret. No default; known placeholders rejected. Generate via `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
 | `QARUNNER_ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | JWT / auth-cookie lifetime in minutes |
 | `QARUNNER_COOKIE_SECURE` | `false` | Add the `Secure` flag to the HttpOnly auth cookie. **Set `true` in production** (HTTPS) so the cookie never rides a plaintext connection (SEC-6) |
@@ -261,11 +281,16 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 
 ## Architecture
 
-Hexagonal (ports & adapters) architecture with 7 ports:
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 
-- **Core**: orchestrator, runners, junit parser, allure command builder, path safety
-- **Ports**: ProcessRunner, Clock, IdGenerator, RunStore, TaskScheduler, ResultCollector, AllureReporter
-- **Adapters**: subprocess, sqlite (WAL), asyncio scheduler, junit collector, allure CLI reporter
+Quick summary: **Hexagonal (ports & adapters)** architecture — 7 abstract ports,
+9 adapters, explicit DI container, zero FastAPI imports in `core/`.
+
+| Layer | Contents |
+|-------|----------|
+| **Core** | orchestrator, runners (pytest + playwright), junit parser, allure command builder, path safety, auth (JWT + bcrypt), cron validation, login throttle, profile service, schedule service |
+| **Ports** | Store, ProcessRunner, Clock, IdGenerator, TaskScheduler, ResultCollector, AllureReporter, SchedulePort |
+| **Adapters** | sqlite_store, subprocess_runner, docker_runner, asyncio_scheduler, apscheduler_schedule, junit_collector, allure_cli_reporter, system_clock, uuid_ids |
 
 ## License
 
