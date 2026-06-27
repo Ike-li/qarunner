@@ -75,6 +75,20 @@ async def test_platform_secrets_stripped(runner: SubprocessRunner, monkeypatch) 
     assert "ABSENT" in result.stdout
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT is POSIX-only")
+async def test_rlimit_applied_in_child(runner: SubprocessRunner) -> None:
+    """SEC-3 H-4: subprocess child must have RLIMIT_CPU set by preexec_fn."""
+    code = (
+        "import resource; "
+        "soft, hard = resource.getrlimit(resource.RLIMIT_CPU); "
+        "print(f'CPU_SOFT={soft}'); "
+        "print(f'CPU_HARD={hard}')"
+    )
+    result = await runner.run([sys.executable, "-c", code], cwd=".")
+    assert result.exit_code == 0
+    assert "CPU_SOFT=3600" in result.stdout, f"Expected soft limit 3600, got: {result.stdout}"
+
+
 async def test_non_allowlisted_host_env_not_forwarded(
     runner: SubprocessRunner, monkeypatch
 ) -> None:

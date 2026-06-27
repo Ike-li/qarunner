@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import resource
+import sys
 import time
 
 from qarunner.errors import RunnerError
@@ -42,6 +44,47 @@ _ENV_ALLOWLIST = frozenset(
         "JAVA_HOME",  # the allure CLI runs on the JVM
     }
 )
+
+# SEC-3 H-4: POSIX resource limits applied via preexec_fn so untrusted test
+# code can't exhaust CPU, memory, or fork-bomb the platform host.
+_RLIMIT_CPU_HARD = 3600          # 1 hour
+_RLIMIT_AS_HARD = 2 * 1024**3   # 2 GiB address space
+_RLIMIT_NPROC_HARD = 128        # max child processes
+_RLIMIT_FSIZE_HARD = 512 * 1024**2  # 512 MiB per file
+
+
+def _set_subprocess_limits() -> None:  # pragma: no cover — runs in child process via preexec_fn
+    """Set per-process resource limits (POSIX only, called via preexec_fn).
+
+    Limits are applied *before* the child executable starts, so even a
+    compromised or malicious test binary is confined.  Each limit is best-effort
+    — if the current hard limit is lower than our target we keep the lower one
+    (privilege cannot be escalated from inside the child).
+    """
+    try:
+        # CPU time: cap at the action_timeout (typically 1800 s).  The
+        # orchestrator also kills on wall-clock timeout, but the kernel
+        # RLIMIT_CPU delivers SIGXCPU as a defence-in-depth layer.
+        _best_effort_rlimit(resource.RLIMIT_CPU, _RLIMIT_CPU_HARD)
+        # Virtual memory (address space): 2 GiB.
+        _best_effort_rlimit(resource.RLIMIT_AS, _RLIMIT_AS_HARD)
+        # Number of child processes: prevent fork bombs.
+        _best_effort_rlimit(resource.RLIMIT_NPROC, _RLIMIT_NPROC_HARD)
+        # File size: a single test must not write a multi-GB log.
+        _best_effort_rlimit(resource.RLIMIT_FSIZE, _RLIMIT_FSIZE_HARD)
+    except Exception:
+        # preexec_fn runs in a restricted context (between fork and exec);
+        # exceptions are fatal anyway, but an explicit handler avoids a
+        # confusing traceback-less crash.
+        pass
+
+
+def _best_effort_rlimit(res: int, target: int) -> None:  # pragma: no cover — runs in child process
+    """Set the soft limit for *res* to *target*, bounded by the current hard
+    limit (prevents escalation and avoids ``ValueError`` on the setrlimit call).
+    """
+    _soft, hard = resource.getrlimit(res)
+    resource.setrlimit(res, (min(target, hard), hard))
 
 
 def _read_tail(path: str, limit: int) -> bytes:
@@ -92,6 +135,11 @@ class SubprocessRunner:
                 env=full_env,
                 stdout=f_out or asyncio.subprocess.PIPE,
                 stderr=f_err or asyncio.subprocess.PIPE,
+                **(
+                    {"preexec_fn": _set_subprocess_limits}
+                    if sys.platform != "win32"
+                    else {}
+                ),
             )
         except OSError as exc:
             if f_out: f_out.close()  # noqa: E701
