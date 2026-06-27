@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,37 +32,51 @@ class DockerRunner:
     """Execute pytest commands inside an isolated Docker container."""
 
     def __init__(
-        self, client: DockerClient | None = None, *, allow_runtime_build: bool = True
+        self,
+        client: DockerClient | None = None,
+        *,
+        allow_runtime_build: bool = True,
+        executor_image: str = "qarunner-executor:latest",
+        playwright_executor_image: str = "qarunner-playwright-executor:latest",
+        extra_readonly_roots: Sequence[str] | None = None,
     ) -> None:
         self._client = client
         self._allow_runtime_build = allow_runtime_build
+        self._executor_image = executor_image
+        self._playwright_executor_image = playwright_executor_image
+        self._extra_readonly_roots = [
+            Path(root).expanduser().resolve()
+            for root in (extra_readonly_roots or [])
+            if root
+        ]
 
     def _get_client(self) -> DockerClient:
         if self._client is None:
             self._client = docker.from_env()
         return self._client
 
-    def _ensure_image(self, client: DockerClient) -> None:
+    def _ensure_image(
+        self, client: DockerClient, image: str, *, dockerfile: str | None = None
+    ) -> None:
         try:
-            client.images.get("qarunner-executor:latest")
+            client.images.get(image)
         except ImageNotFound:
             if not self._allow_runtime_build:
                 # DEP-5: in production the executor image must be pre-built. A
                 # silent runtime build re-resolves the Dockerfile and can drift
                 # (and masks a missing image), so fail fast instead.
                 raise RunnerError(
-                    "Executor image 'qarunner-executor:latest' not found and runtime "
-                    "build is disabled (QARUNNER_EXECUTOR_AUTOBUILD=false). Pre-build it: "
-                    "docker build -f Dockerfile -t qarunner-executor:latest ."
+                    f"Executor image {image!r} not found and runtime build is disabled "
+                    "(QARUNNER_EXECUTOR_AUTOBUILD=false). Pre-build it with the "
+                    "matching Dockerfile."
                 ) from None
-            logger.info("Base image 'qarunner-executor:latest' not found. Building...")
+            logger.info("Executor image %r not found. Building...", image)
             root = self._find_project_root()
-            client.images.build(
-                path=str(root),
-                tag="qarunner-executor:latest",
-                rm=True,
-            )
-            logger.info("Base image 'qarunner-executor:latest' built successfully.")
+            build_kwargs = {"path": str(root), "tag": image, "rm": True}
+            if dockerfile:
+                build_kwargs["dockerfile"] = dockerfile
+            client.images.build(**build_kwargs)
+            logger.info("Executor image %r built successfully.", image)
 
     def _find_project_root(self) -> Path:
         curr = Path(__file__).resolve()
@@ -71,6 +86,34 @@ class DockerRunner:
             if (parent / "pyproject.toml").exists():
                 return parent
         return Path.cwd()
+
+    def _image_for_command(self, cmd: list[str]) -> tuple[str, str | None, bool]:
+        is_playwright = len(cmd) >= 3 and cmd[:3] == ["npx", "playwright", "test"]
+        if is_playwright:
+            return self._playwright_executor_image, "Dockerfile.playwright", True
+        return self._executor_image, None, False
+
+    def _extra_readonly_volumes(self, env: dict[str, str]) -> dict[str, dict[str, str]]:
+        volumes: dict[str, dict[str, str]] = {}
+        if not self._extra_readonly_roots:
+            return volumes
+
+        for value in env.values():
+            candidate = Path(value).expanduser()
+            if not candidate.is_absolute():
+                continue
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if not resolved.is_dir():
+                continue
+            for root in self._extra_readonly_roots:
+                if resolved == root or resolved.is_relative_to(root):
+                    host_path = str(resolved)
+                    volumes[host_path] = {"bind": host_path, "mode": "ro"}
+                    break
+        return volumes
 
     async def run(
         self,
@@ -86,16 +129,25 @@ class DockerRunner:
         exit_code = -1
         stdout_bytes = b""
         stderr_bytes = b""
+        proc_env = dict(env or {})
+        image, dockerfile, is_playwright = self._image_for_command(cmd)
+        if is_playwright:
+            proc_env["HOME"] = "/tmp"
+            proc_env["XDG_CACHE_HOME"] = "/tmp/.cache"
+            proc_env["PLAYWRIGHT_BROWSERS_PATH"] = "/ms-playwright"
+            proc_env["NODE_PATH"] = "/usr/local/lib/node_modules"
 
         # 1. Get client & ensure image exists
         try:
             client = await asyncio.to_thread(self._get_client)
-            await asyncio.to_thread(self._ensure_image, client)
+            await asyncio.to_thread(self._ensure_image, client, image, dockerfile=dockerfile)
         except Exception as exc:
             raise RunnerError(f"Docker initialization failed: {exc}") from exc
 
         # 2. Command rewriting: swap virtualenv python with python inside container
         mapped_cmd = list(cmd)
+        if is_playwright and mapped_cmd[:2] == ["npx", "playwright"]:
+            mapped_cmd = ["playwright", *mapped_cmd[2:]]
         if mapped_cmd and (
             mapped_cmd[0].endswith("python")
             or mapped_cmd[0].endswith("python3")
@@ -110,6 +162,8 @@ class DockerRunner:
             if arg.startswith("--junitxml=") or arg.startswith("--alluredir="):
                 results_path = arg.split("=", 1)[1]
                 results_dir = os.path.dirname(results_path)
+        if proc_env.get("PLAYWRIGHT_JUNIT_OUTPUT_NAME"):
+            results_dir = os.path.dirname(proc_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"])
 
         # Pre-create results_dir on host to avoid permission/root creation issues
         if results_dir:
@@ -121,18 +175,19 @@ class DockerRunner:
         # Mount results_dir if different
         if results_dir and results_dir != cwd:
             volumes[results_dir] = {"bind": results_dir, "mode": "rw"}
+        for path, spec in self._extra_readonly_volumes(proc_env).items():
+            volumes.setdefault(path, spec)
 
         container = None
         log_task = None
         try:
             # 4. Run container in detached mode
             def _start_container():
-                return client.containers.run(
-                    "qarunner-executor:latest",
+                run_kwargs = dict(
                     command=mapped_cmd,
                     volumes=volumes,
                     working_dir=cwd,
-                    environment=env or {},
+                    environment=proc_env,
                     detach=True,
                     stdout=True,
                     stderr=True,
@@ -153,6 +208,12 @@ class DockerRunner:
                     read_only=True,
                     tmpfs={"/tmp": ""},
                 )
+                if is_playwright:
+                    # Chromium needs more shared memory than Docker's tiny
+                    # default /dev/shm; keep it container-local rather than
+                    # using host IPC.
+                    run_kwargs["shm_size"] = "1g"
+                return client.containers.run(image, **run_kwargs)
 
             container = await asyncio.to_thread(_start_container)
 
@@ -248,4 +309,3 @@ class DockerRunner:
             duration_ms=elapsed_ms,
             timed_out=timed_out,
         )
-

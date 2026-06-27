@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # pinned image. Set false in production and pre-build the image so a missing
     # one fails fast instead of being silently (re)built.
     executor_autobuild: bool = True
+    playwright_executor_image: str = "qarunner-playwright-executor:latest"
+    # os.pathsep-separated allowlist of host/container roots whose explicit env
+    # directory values may be mounted read-only into executor containers.
+    executor_extra_readonly_roots: str = ""
     # JWT signing secret — required, no default (SEC-2). Missing → ValidationError
     # at startup; a known placeholder is rejected by the validator below.
     secret_key: str

@@ -179,6 +179,7 @@ def profile_to_response(profile: TestProfile) -> TestProfileResponse:
         name=profile.name,
         description=profile.description,
         tests_path=profile.tests_path,
+        runner=profile.runner,
         selected_files=profile.selected_files,
         selected_markers=profile.selected_markers,
         extra_args=profile.extra_args,

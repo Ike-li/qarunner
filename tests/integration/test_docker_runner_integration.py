@@ -113,6 +113,34 @@ async def test_real_container_runs_pytest_and_lands_artifacts(docker_client, tmp
 
 
 @pytest.mark.asyncio
+async def test_real_container_runs_playwright_and_lands_junit(docker_client, tmp_path):
+    """A minimal Playwright suite runs in the Playwright executor image and
+    writes junit.xml through PLAYWRIGHT_JUNIT_OUTPUT_NAME."""
+    tests_dir = tmp_path / "playwright-suite"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "smoke.spec.js").write_text(
+        "const { test, expect } = require('@playwright/test');\n"
+        "test('math works', async () => {\n"
+        "  expect(1 + 1).toBe(2);\n"
+        "});\n"
+    )
+    results_dir = tmp_path / "pw-results"
+
+    runner = DockerRunner(client=docker_client)
+    result = await runner.run(
+        ["npx", "playwright", "test", "--reporter=junit"],
+        cwd=str(tests_dir),
+        env={"PLAYWRIGHT_JUNIT_OUTPUT_NAME": f"{results_dir}/junit.xml"},
+        timeout=300,
+    )
+
+    assert result.exit_code == 0
+    assert result.timed_out is False
+    assert (results_dir / "junit.xml").is_file()
+    assert "math works" in (results_dir / "junit.xml").read_text()
+
+
+@pytest.mark.asyncio
 async def test_real_container_failing_test_returns_nonzero(docker_client, tmp_path):
     """A failing suite propagates pytest's exit code 1 from the real container."""
     tests_dir = tmp_path / "suite"

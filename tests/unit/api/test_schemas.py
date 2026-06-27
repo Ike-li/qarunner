@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from qarunner.api.schemas import RunListResponse, RunResponse, run_to_response
+from qarunner.api.schemas import RunListResponse, RunResponse, profile_to_response, run_to_response
 from qarunner.models import (
     ReportRef,
     Run,
     RunStatus,
+    TestProfile,
     TestSummary,
 )
 
@@ -50,6 +51,23 @@ def test_run_to_response_copies_fields() -> None:
     assert resp.created_at == NOW
     assert resp.started_at is None
     assert resp.finished_at is None
+
+
+def test_profile_to_response_preserves_runner() -> None:
+    profile = TestProfile(
+        id="profile-001",
+        name="Playwright daily",
+        tests_path="my-e2e-suite",
+        runner="playwright",
+        executor_mode="docker",
+        created_by="test_user",
+        created_at=NOW,
+    )
+
+    resp = profile_to_response(profile)
+
+    assert resp.runner == "playwright"
+    assert resp.executor_mode == "docker"
 
 
 def test_run_to_response_with_summary_and_report() -> None:

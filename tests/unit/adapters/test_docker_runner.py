@@ -206,6 +206,88 @@ async def test_docker_runner_alternate_args_and_mapping() -> None:
     }
 
 
+async def test_docker_runner_uses_playwright_image_and_env_junit_mount() -> None:
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    await runner.run(
+        ["npx", "playwright", "test", "--reporter=junit"],
+        cwd="/tmp/playwright-suite",
+        env={"PLAYWRIGHT_JUNIT_OUTPUT_NAME": "/tmp/results/junit.xml"},
+    )
+
+    assert mock_client.run_args == ("qarunner-playwright-executor:latest",)
+    assert mock_client.run_kwargs["command"] == ["playwright", "test", "--reporter=junit"]
+    assert mock_client.run_kwargs["volumes"] == {
+        "/tmp/playwright-suite": {"bind": "/tmp/playwright-suite", "mode": "rw"},
+        "/tmp/results": {"bind": "/tmp/results", "mode": "rw"},
+    }
+    assert mock_client.run_kwargs["environment"]["HOME"] == "/tmp"
+    assert mock_client.run_kwargs["environment"]["XDG_CACHE_HOME"] == "/tmp/.cache"
+    assert mock_client.run_kwargs["environment"]["PLAYWRIGHT_BROWSERS_PATH"] == "/ms-playwright"
+    assert mock_client.run_kwargs["shm_size"] == "1g"
+
+
+async def test_docker_runner_mounts_allowlisted_env_directory_readonly(tmp_path: Path) -> None:
+    project_root = tmp_path / "projects"
+    repo = project_root / "my-app"
+    repo.mkdir(parents=True)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client, extra_readonly_roots=[str(project_root)])
+
+    await runner.run(
+        ["npx", "playwright", "test", "--reporter=junit"],
+        cwd="/tmp/playwright-suite",
+        env={
+            "PLAYWRIGHT_JUNIT_OUTPUT_NAME": "/tmp/results/junit.xml",
+            "APP_REPO_PATH": str(repo),
+            "UNRELATED_PATH": str(unrelated),
+        },
+    )
+
+    assert mock_client.run_kwargs["volumes"][str(repo)] == {"bind": str(repo), "mode": "ro"}
+    assert str(unrelated) not in mock_client.run_kwargs["volumes"]
+
+
+async def test_docker_runner_skips_relative_and_file_env_mounts(tmp_path: Path) -> None:
+    project_root = tmp_path / "projects"
+    project_root.mkdir()
+    config_file = project_root / "config.json"
+    config_file.write_text("{}")
+
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client, extra_readonly_roots=[str(project_root)])
+
+    await runner.run(
+        ["npx", "playwright", "test", "--reporter=junit"],
+        cwd="/tmp/playwright-suite",
+        env={
+            "RELATIVE_REPO": "relative/path",
+            "CONFIG_FILE": str(config_file),
+            "PLAYWRIGHT_JUNIT_OUTPUT_NAME": "/tmp/results/junit.xml",
+        },
+    )
+
+    assert str(config_file) not in mock_client.run_kwargs["volumes"]
+
+
+async def test_docker_runner_playwright_image_not_found_builds_playwright_dockerfile() -> None:
+    mock_client = MockClient(images_exist=False, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    await runner.run(["npx", "playwright", "test", "--reporter=junit"], cwd="/tmp/tests")
+
+    assert mock_client.build_called is True
+    assert mock_client.images.build.call_args.kwargs["dockerfile"] == "Dockerfile.playwright"
+    assert (
+        mock_client.images.build.call_args.kwargs["tag"]
+        == "qarunner-playwright-executor:latest"
+    )
+
+
 async def test_docker_runner_image_not_found_causes_build() -> None:
     mock_client = MockClient(images_exist=False, wait_status=0)
     runner = DockerRunner(client=mock_client)
@@ -446,6 +528,3 @@ async def test_docker_runner_streamer_cancellation_and_sleep() -> None:
 
     assert result.exit_code == 0
     assert result.stdout == "hello"
-
-
-

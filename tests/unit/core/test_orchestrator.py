@@ -995,18 +995,47 @@ class TestPlaywrightRunnerExecution:
             await orch.create(req)
 
     @pytest.mark.asyncio
-    async def test_playwright_on_docker_rejected(self):
-        # Domain invariant: the python-only docker executor can't run playwright,
-        # so create() rejects it for every caller (route + scheduler), not just
-        # the API route's stop-gate.
-        from qarunner.errors import UnsupportedExecutor
+    async def test_playwright_on_docker_uses_docker_process(self):
+        orch = _make_orchestrator(
+            collector_preset=CollectResult(
+                summary=TestSummary(
+                    total=1,
+                    passed=1,
+                    failed=0,
+                    skipped=0,
+                    error=0,
+                    duration_ms=10,
+                ),
+                cases=[],
+            )
+        )
+        captured_cmd = None
+        captured_env = None
 
-        orch = _make_orchestrator()
+        def docker_handler(cmd, cwd, env, timeout):
+            nonlocal captured_cmd, captured_env
+            captured_cmd = cmd
+            captured_env = env
+            return ProcessResult(
+                exit_code=0,
+                stdout="docker-playwright-ok",
+                stderr="",
+                duration_ms=10,
+            )
+
+        orch._process_docker = FakeProcessRunner(handler=docker_handler)
         req = RunRequest(
             tests_path="playwright_suite",
             runner="playwright",
             executor_mode="docker",
         )
-        with pytest.raises(UnsupportedExecutor):
-            await orch.create(req)
+        run = await orch.create(req)
+        await orch.execute(run.id)
 
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.COMPLETED
+        assert captured_cmd == ["npx", "playwright", "test", "--reporter=junit"]
+        assert (
+            captured_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"]
+            == f"/artifacts/{run.id}/results/junit.xml"
+        )
