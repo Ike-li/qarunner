@@ -20,6 +20,8 @@ export function statusTagColor(status: Run['status'], passed: boolean | null) {
       return 'red'
     case 'timeout':
       return 'amber'
+    case 'cancelled':
+      return 'grey'
     default:
       return 'grey'
   }

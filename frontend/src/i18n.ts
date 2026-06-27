@@ -55,6 +55,7 @@ export const translations = {
     status_completed: "completed",
     status_failed: "failed",
     status_timeout: "timeout",
+    status_cancelled: "cancelled",
 
     // Engine badges
     engine_docker: "Docker",
@@ -214,6 +215,7 @@ export const translations = {
     status_completed: "已完成",
     status_failed: "执行失败",
     status_timeout: "执行超时",
+    status_cancelled: "已取消",
 
     // Engine badges
     engine_docker: "Docker 隔离",

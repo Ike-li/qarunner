@@ -1,5 +1,5 @@
 import {
-  Activity, AlertTriangle, BarChart3, Box, Check, CheckCircle2, Clock, Copy, Cpu, Download,
+  Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, Clock, Copy, Cpu, Download,
   ExternalLink, Maximize2, RotateCw, Terminal, XCircle,
 } from 'lucide-react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
@@ -60,6 +60,37 @@ export function RunDetailsDrawer() {
             <h3 id="run-details-title" style={{ margin: 0 }}>{d.t('executionDetails')}</h3>
             <code>{d.t('id')}: {d.runs.selectedRun?.id}</code>
           </div>
+          {(d.runs.selectedRun?.status === 'running' ||
+            d.runs.selectedRun?.status === 'queued') && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    d.lang === 'zh' ? '确定要取消这个运行吗？' : 'Cancel this run?',
+                  )
+                ) {
+                  d.runs.handleCancelRun(d.runs.selectedRun!.id)
+                }
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.75rem',
+                marginRight: '2.5rem',
+                cursor: 'pointer',
+                background: 'transparent',
+                color: 'var(--semi-color-danger)',
+                border: '1px solid var(--semi-color-danger)',
+                borderRadius: '4px',
+                fontSize: '0.85rem',
+              }}
+            >
+              <Ban size={15} />
+              {d.lang === 'zh' ? '终止运行' : 'Cancel Run'}
+            </button>
+          )}
         </div>
       }
       closable={true}

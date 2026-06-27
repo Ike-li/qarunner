@@ -19,7 +19,7 @@ export interface ReportRef {
 
 export interface Run {
   id: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'timeout'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled'
   runner: string
   created_by: string
   tests_path: string

@@ -89,6 +89,37 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     [runs, selectedRunDetails, apiFetch],
   )
 
+  // ── cancel a queued / running run ──────────────────────────────────────
+
+  const handleCancelRun = useCallback(
+    async (runId: string) => {
+      try {
+        const resp = await apiFetch(`/runs/${runId}/cancel`, { method: 'POST' })
+        if (resp.ok) {
+          const updated = await resp.json()
+          setRuns((prev) =>
+            prev.map((r) =>
+              r.id === runId
+                ? { ...r, status: updated.status, finished_at: updated.finished_at }
+                : r,
+            ),
+          )
+          setSelectedRunDetails((prev) =>
+            prev && prev.id === runId
+              ? { ...prev, status: updated.status, finished_at: updated.finished_at }
+              : prev,
+          )
+        } else {
+          const err = await resp.json()
+          alert(err.detail || 'Failed to cancel run.')
+        }
+      } catch (err) {
+        console.error('Error cancelling run:', err)
+      }
+    },
+    [apiFetch],
+  )
+
   // ── SSE streaming ──────────────────────────────────────────────────────
 
   // Snapshot refs so the SSE effect doesn't depend on frequently-changing state.
@@ -284,6 +315,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     fetchRuns,
     fetchSelectedRunDetails,
     handleToggleLock,
+    handleCancelRun,
     // derived
     totalRuns,
     completedRuns,
