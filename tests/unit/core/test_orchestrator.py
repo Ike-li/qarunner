@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime
+
 import pytest
 
 from qarunner.core.orchestrator import RunOrchestrator
@@ -13,6 +16,7 @@ from qarunner.models import (
     CollectResult,
     ProcessResult,
     ReportRef,
+    Run,
     RunRequest,
     RunStatus,
     TestSummary,
@@ -28,10 +32,12 @@ from tests.fakes.fake_store import InMemoryRunStore
 
 def _make_orchestrator(
     *,
+    process=None,
     process_handler=None,
     collector_preset=None,
     report_preset=None,
     tests_root="/work/tests",
+    artifacts_root="/artifacts",
     worker_node_id="default-node",
 ):
     """Helper to build an orchestrator wired to fakes."""
@@ -57,17 +63,116 @@ def _make_orchestrator(
         registry=registry,
         store=InMemoryRunStore(),
         scheduler=FakeScheduler(),
-        process=FakeProcessRunner(handler=process_handler),
+        process=process if process is not None else FakeProcessRunner(handler=process_handler),
         collector=FakeResultCollector(preset=collector_preset),
         reporter=FakeAllureReporter(preset=report_preset),
         clock=FakeClock(),
         ids=FakeIdGenerator(),
         tests_root=tests_root,
-        artifacts_root="/artifacts",
+        artifacts_root=artifacts_root,
         executable="/usr/bin/python3",
         default_timeout=600,
         worker_node_id=worker_node_id,
     )
+
+
+class TestCancel:
+    """RunOrchestrator.cancel() stops a queued/running run and persists CANCELLED."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_running_run_marks_cancelled(self):
+        orch = _make_orchestrator()
+        run = Run(
+            id="r-run",
+            status=RunStatus.RUNNING,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite",
+            created_at=datetime.now(UTC),
+        )
+        await orch._store.save(run)
+        result = await orch.cancel("r-run")
+        assert result.status == RunStatus.CANCELLED
+        assert result.finished_at is not None
+        assert "r-run" in orch._scheduler.cancelled_keys
+
+    @pytest.mark.asyncio
+    async def test_cancel_does_not_clobber_terminal_run(self):
+        orch = _make_orchestrator()
+        run = Run(
+            id="r-done",
+            status=RunStatus.COMPLETED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite",
+            created_at=datetime.now(UTC),
+        )
+        await orch._store.save(run)
+        result = await orch.cancel("r-done")
+        assert result.status == RunStatus.COMPLETED  # terminal status preserved
+
+    @pytest.mark.asyncio
+    async def test_execute_cancellation_persists_cancelled_status(self, tmp_path):
+        (tmp_path / "suite").mkdir()
+        started = asyncio.Event()
+
+        class _BlockingRunner:
+            async def run(
+                self, cmd, cwd, env=None, timeout=1800, stdout_file=None, stderr_file=None
+            ):
+                started.set()
+                await asyncio.sleep(60)  # hang until cancelled
+                return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=0)
+
+        orch = _make_orchestrator(
+            process=_BlockingRunner(),
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path / "art"),
+        )
+        run = await orch.create(RunRequest(tests_path="suite", executor_mode="subprocess"))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        result = await orch.cancel(run.id)
+        assert result.status == RunStatus.CANCELLED
+        await asyncio.sleep(0.05)  # let execute's CancelledError branch persist
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_execute_cancellation_save_failure_is_swallowed(self, tmp_path, monkeypatch):
+        (tmp_path / "suite").mkdir()
+        started = asyncio.Event()
+
+        class _BlockingRunner:
+            async def run(
+                self, cmd, cwd, env=None, timeout=1800, stdout_file=None, stderr_file=None
+            ):
+                started.set()
+                await asyncio.sleep(60)
+                return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=0)
+
+        orch = _make_orchestrator(
+            process=_BlockingRunner(),
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path / "art"),
+        )
+        original_save = orch._store.save
+
+        async def _save_failing_on_cancel(run):
+            if run.status == RunStatus.CANCELLED:
+                raise RuntimeError("db unavailable")
+            await original_save(run)
+
+        monkeypatch.setattr(orch._store, "save", _save_failing_on_cancel)
+
+        run = await orch.create(RunRequest(tests_path="suite", executor_mode="subprocess"))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        # Cancel directly so execute hits its CancelledError branch, where the
+        # CANCELLED save raises and must be swallowed + logged (never propagated).
+        orch._scheduler.cancel(run.id)
+        await asyncio.sleep(0.05)
+        # The failed CANCELLED save leaves the run RUNNING; the error was logged.
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.RUNNING
 
 
 class TestDrain:
@@ -628,7 +733,7 @@ class TestWorkspaceJail:
 
         class NoopScheduler:
             scheduled = 0
-            def schedule(self, coro):
+            def schedule(self, coro, *, key=None):
                 self.scheduled += 1
                 coro.close()
 
@@ -681,7 +786,7 @@ class TestWorkspaceJail:
 
         class NoopScheduler:
             scheduled = 0
-            def schedule(self, coro):
+            def schedule(self, coro, *, key=None):
                 self.scheduled += 1
                 coro.close()
 
@@ -878,7 +983,7 @@ class TestWorkspaceJail:
         registry.register(PytestRunner())
 
         class NoopScheduler:
-            def schedule(self, coro):
+            def schedule(self, coro, *, key=None):
                 coro.close()
 
         orch = RunOrchestrator(

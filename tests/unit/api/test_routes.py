@@ -239,6 +239,15 @@ class FakeOrchestrator:
     async def drain(self, timeout: float | None = None) -> None:
         return None
 
+    async def cancel(self, run_id: str) -> Run:
+        run = await self.store.get(run_id)
+        if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+            run = run.model_copy(
+                update={"status": RunStatus.CANCELLED, "finished_at": NOW}
+            )
+            await self.store.save(run)
+        return run
+
 
 def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> Container:
     store = FakeStore()
@@ -667,6 +676,55 @@ def _override_user(app: FastAPI, username: str, role: UserRole) -> None:
         return User(username=username, role=role, created_at=NOW)
 
     app.dependency_overrides[get_current_user] = _u
+
+
+# ── POST /runs/{run_id}/cancel ──────────────────────────────────────────
+
+
+def test_cancel_run_owner_marks_cancelled() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-cancel", created_by="alice", status=RunStatus.RUNNING
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/r-cancel/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+
+
+def test_cancel_run_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-cancel", created_by="bob", status=RunStatus.RUNNING
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/r-cancel/cancel")
+    assert resp.status_code == 403
+
+
+def test_cancel_run_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/ghost/cancel")
+    assert resp.status_code == 404
+
+
+def test_cancel_run_terminal_returns_409() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-done", created_by="alice", status=RunStatus.COMPLETED
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/r-done/cancel")
+    assert resp.status_code == 409
 
 
 def test_get_run_forbidden_for_non_owner() -> None:

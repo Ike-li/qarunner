@@ -45,7 +45,7 @@ from qarunner.errors import (
     UnknownRunner,
     UnsafePath,
 )
-from qarunner.models import Run, RunRequest, TestSuite, User, UserRole
+from qarunner.models import Run, RunRequest, RunStatus, TestSuite, User, UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -1075,11 +1075,14 @@ async def stream_run_logs(
 
     import asyncio
 
-    from qarunner.models import RunStatus
-
     cfg = container.settings
     stdout_file = Path(cfg.artifacts_root) / run_id / "stdout.log"
-    terminal_states = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT)
+    terminal_states = (
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.TIMEOUT,
+        RunStatus.CANCELLED,
+    )
 
     async def event_generator():
         loop = asyncio.get_running_loop()
@@ -1171,6 +1174,28 @@ async def lock_run(
     await container.store.lock_run(run_id, req.locked)
     updated_run = await container.store.get(run_id)
     return run_to_response(updated_run)
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunResponse)
+async def cancel_run(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunResponse:
+    """Cancel a queued or running run (owner/admin). Terminal runs return 409."""
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+    if run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
+        raise HTTPException(
+            status_code=409,
+            detail="Run is not in a cancellable state (already finished).",
+        )
+    cancelled = await container.orchestrator.cancel(run_id)
+    return run_to_response(cancelled)
 
 
 @router.post("/runs/cleanup")

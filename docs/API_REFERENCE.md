@@ -233,6 +233,11 @@
 
 - **成功**：`200` `RunResponse`。 · **错误**：`404` · `403`。
 
+### `POST /runs/{run_id}/cancel` — owner
+取消一个排队中或运行中的 run（运行中的会终止其子进程 / 容器，并释放并发槽）。无请求体。
+- **成功**：`200` `RunResponse`（`status="cancelled"`）。
+- **错误**：`404`（不存在）· `403`（他人）· `409`（已是终态 completed/failed/timeout/cancelled，不可取消）。
+
 ### `POST /runs/cleanup` — admin
 - 查询参数：`retention_days`（默认 `30`，约束 `>=1`，否则 422）。
 - 删除超期且未锁定 run 的物理产物（元数据保留）。
@@ -314,7 +319,7 @@
 `success: bool` · `suite_name: str` · `is_accessible: bool` · `message: str`
 
 ### 枚举
-- **RunStatus**：`queued` → `running` → 终态 `completed` / `failed` / `timeout`。
+- **RunStatus**：`queued` → `running` → 终态 `completed` / `failed` / `timeout` / `cancelled`（用户主动取消）。
 - **UserRole**：`admin` / `user`。
 
 ---

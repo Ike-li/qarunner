@@ -132,3 +132,81 @@ async def test_drain_cancels_task_exceeding_timeout() -> None:
     # The hung task is cancelled before finishing; its side effect never runs.
     assert completed == []
     assert scheduler._tasks == set()
+
+
+async def test_cancel_by_key_cancels_running_task() -> None:
+    scheduler = AsyncioScheduler()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def long_task() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    scheduler.schedule(long_task(), key="run-1")
+    await started.wait()
+    assert scheduler.cancel("run-1") is True
+    await asyncio.sleep(0.05)
+    assert cancelled.is_set()
+    # Both references are dropped once the cancelled task settles.
+    assert scheduler._tasks == set()
+    assert scheduler._keyed == {}
+
+
+async def test_cancel_unknown_key_returns_false() -> None:
+    scheduler = AsyncioScheduler()
+    assert scheduler.cancel("nope") is False
+
+
+async def test_cancel_completed_key_returns_false() -> None:
+    scheduler = AsyncioScheduler()
+
+    async def quick() -> None:
+        return None
+
+    scheduler.schedule(quick(), key="run-2")
+    await asyncio.sleep(0.05)
+    # The task finished and was dereferenced; nothing live to cancel.
+    assert scheduler.cancel("run-2") is False
+
+
+async def test_unkeyed_schedule_is_not_cancellable() -> None:
+    scheduler = AsyncioScheduler()
+    started = asyncio.Event()
+
+    async def long_task() -> None:
+        started.set()
+        await asyncio.sleep(10)
+
+    scheduler.schedule(long_task())  # no key
+    await started.wait()
+    assert scheduler.cancel("anything") is False
+    # Clean up the still-running task so the test doesn't leak it.
+    next(iter(scheduler._tasks)).cancel()
+    await asyncio.sleep(0.01)
+
+
+async def test_keyed_cleanup_scans_past_non_matching_tasks() -> None:
+    scheduler = AsyncioScheduler()
+    release = asyncio.Event()
+
+    async def keep_running() -> None:
+        await release.wait()
+
+    async def quick() -> None:
+        return None
+
+    # "slow" is inserted first, "fast" second; when "fast" finishes its done
+    # callback scans past the non-matching "slow" entry to reach its own.
+    scheduler.schedule(keep_running(), key="slow")
+    scheduler.schedule(quick(), key="fast")
+    await asyncio.sleep(0.05)
+    assert "fast" not in scheduler._keyed
+    assert "slow" in scheduler._keyed  # still running, reference retained
+    release.set()
+    await asyncio.sleep(0.05)
+    assert scheduler._keyed == {}

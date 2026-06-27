@@ -229,8 +229,8 @@ class RunOrchestrator:
         )
         await self._store.save(run)
 
-        # 4. Schedule background execution
-        self._scheduler.schedule(self.execute(run_id))
+        # 4. Schedule background execution (keyed by run id so it can be cancelled)
+        self._scheduler.schedule(self.execute(run_id), key=run_id)
 
         return run
 
@@ -372,6 +372,23 @@ class RunOrchestrator:
             )
             await self._store.save(run)
 
+        except asyncio.CancelledError:
+            # User-initiated cancel (or a shutdown drain past its deadline):
+            # CancelledError is a BaseException, so the ``except Exception`` below
+            # never sees it — without this branch the run would be stranded in
+            # RUNNING. Persist a terminal CANCELLED state, then re-raise to keep
+            # cancellation semantics intact (the runner's own finally already
+            # killed the subprocess / container).
+            try:
+                run = _replace(
+                    run,
+                    status=RunStatus.CANCELLED,
+                    finished_at=self._clock.now(),
+                )
+                await self._store.save(run)
+            except Exception:
+                logger.exception("failed to persist cancelled state for run %s", run_id)
+            raise
         except Exception as exc:
             # API-facing error: the exception's repr (type + message) only,
             # truncated. The full traceback goes to the server log via
@@ -401,6 +418,27 @@ class RunOrchestrator:
                     logger.warning(
                         "Failed to cleanup Workspace Jail at %s: %r", jail_dir, clean_exc
                     )
+
+    async def cancel(self, run_id: str) -> Run:
+        """Cancel a queued or running run.
+
+        Cancels the background task (propagating ``CancelledError`` into the
+        execution, whose runner finally kills the subprocess / container), then
+        re-reads and — if still in flight — persists a terminal CANCELLED state.
+        A run that finished on its own in the meantime is returned unchanged, so
+        a real terminal status is never clobbered. Raises ``RunNotFound`` if the
+        id is unknown.
+        """
+        self._scheduler.cancel(run_id)
+        run = await self._store.get(run_id)
+        if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+            run = _replace(
+                run,
+                status=RunStatus.CANCELLED,
+                finished_at=self._clock.now(),
+            )
+            await self._store.save(run)
+        return run
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 

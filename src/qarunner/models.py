@@ -17,6 +17,7 @@ class RunStatus(enum.StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 class UserRole(enum.StrEnum):

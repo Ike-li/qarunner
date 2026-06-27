@@ -23,14 +23,38 @@ class AsyncioScheduler:
     def __init__(self, max_concurrency: int = 4) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._tasks: set[asyncio.Task[None]] = set()
+        # run_id -> task, so a specific in-flight execution can be cancelled.
+        self._keyed: dict[str, asyncio.Task[None]] = {}
 
-    def schedule(self, coro: Coroutine[Any, Any, None]) -> None:
+    def schedule(self, coro: Coroutine[Any, Any, None], *, key: str | None = None) -> None:
         task = asyncio.create_task(self._run(coro))
         self._tasks.add(task)
+        if key is not None:
+            self._keyed[key] = task
         task.add_done_callback(self._on_task_done)
+
+    def cancel(self, key: str) -> bool:
+        """Cancel a scheduled task by *key* (a run id).
+
+        Returns True if a live (not-yet-done) task was found and cancelled.
+        Cancellation propagates ``CancelledError`` into the running coroutine,
+        whose own cleanup (kill subprocess / stop container, persist the
+        terminal state) then runs.
+        """
+        task = self._keyed.get(key)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
 
     def _on_task_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
+        # Drop the keyed reference too (linear scan; the keyed map only holds
+        # in-flight run executions, so it stays small).
+        for key, keyed_task in list(self._keyed.items()):
+            if keyed_task is task:
+                del self._keyed[key]
+                break
         # Guard cancelled() first: calling exception() on a cancelled task raises.
         if not task.cancelled() and task.exception() is not None:
             logger.error("scheduled task failed", exc_info=task.exception())

@@ -10,7 +10,14 @@ from typing import Any, Protocol, runtime_checkable
 class TaskScheduler(Protocol):
     """Port for scheduling background coroutines."""
 
-    def schedule(self, coro: Coroutine[Any, Any, None]) -> None: ...
+    def schedule(self, coro: Coroutine[Any, Any, None], *, key: str | None = None) -> None: ...
+
+    def cancel(self, key: str) -> bool:
+        """Cancel a scheduled task by *key*.
+
+        Returns True if a live (not-yet-done) task was found and cancelled.
+        """
+        ...
 
     async def drain(self, timeout: float | None = None) -> None:
         """Wait for in-flight scheduled tasks to finish (graceful shutdown).
