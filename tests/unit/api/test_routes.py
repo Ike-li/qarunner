@@ -2341,6 +2341,50 @@ def test_clone_success_records_git_suite(
     assert str(tests_root / "my-suite") in args
 
 
+def test_clone_save_failure_rolls_back_cloned_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-5: if ``save_suite`` fails after a successful clone, the on-disk working
+    tree is removed (no orphan) and the caller gets a 503 — never a directory
+    that exists on disk but is unknown to the store."""
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+
+    # Emulate ``git clone`` materialising the working tree on disk (the mock
+    # otherwise never touches the filesystem, so there'd be nothing to roll back).
+    def _git_materialises_dir(*_args: object, **_kwargs: object) -> MagicMock:
+        (tests_root / "orphan").mkdir(parents=True, exist_ok=True)
+        return _git_proc(0)
+
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_exec", AsyncMock(side_effect=_git_materialises_dir)
+    )
+
+    async def _boom(_suite: object) -> None:
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(container.store, "save_suite", _boom)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={
+                "url": "https://example.com/org/demo.git",
+                "name": "orphan",
+                "ref": "v1.0",
+            },
+        )
+
+    assert resp.status_code == 503
+    # The cloned directory must be gone — no orphan left behind.
+    assert not (tests_root / "orphan").exists()
+    # And nothing half-registered in the store.
+    assert "orphan" not in container.store._suites  # type: ignore[attr-defined]
+
+
 def test_clone_records_default_branch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

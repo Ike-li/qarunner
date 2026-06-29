@@ -532,17 +532,29 @@ async def clone_test_suite(
         )
         ref = out2.strip() if (rc2 == 0 and out2.strip()) else None
 
-    await store.save_suite(
-        TestSuite(
-            name=name,
-            source="git",
-            repo_url=payload.url,
-            ref=ref,
-            credential_ref=payload.credential_ref,
-            created_by=current_user.username,
-            created_at=datetime.now(UTC),
+    try:
+        await store.save_suite(
+            TestSuite(
+                name=name,
+                source="git",
+                repo_url=payload.url,
+                ref=ref,
+                credential_ref=payload.credential_ref,
+                created_by=current_user.username,
+                created_at=datetime.now(UTC),
+            )
         )
-    )
+    except Exception:
+        # The working tree is on disk but persistence failed. Roll it back so a
+        # later /pull or /delete can't trip over an orphan the store can't see
+        # (P1-5). rmtree is best-effort — a cleanup failure must not mask the 503.
+        import shutil
+
+        await asyncio.to_thread(shutil.rmtree, suite_path, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to register suite '{name}'; cloned files were rolled back.",
+        )
     return LinkTestSuiteResponse(
         success=True,
         suite_name=name,

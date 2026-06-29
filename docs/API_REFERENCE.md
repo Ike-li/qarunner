@@ -117,7 +117,7 @@
 | credential_ref | str | 否 | | 凭证引用 |
 
 - **成功**：`200` `LinkTestSuiteResponse`。
-- **错误**：`400`（URL 不在白名单）· `409`（套件名已存在）· `502`（git clone 失败）。
+- **错误**：`400`（URL 不在白名单）· `409`（套件名已存在）· `502`（git clone 失败）· `503`（克隆成功但登记失败，已回滚克隆目录）。
 
 ### `POST /tests/{suite_name}/pull` — owner
 - 路径参数：`suite_name`。无请求体。
