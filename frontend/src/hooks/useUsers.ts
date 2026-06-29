@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { UserProfile } from '../types'
+import { apiMutate } from './useApi'
 
 interface UseUsersOpts {
   apiFetch: (path: string, opts?: RequestInit) => Promise<Response>
@@ -80,60 +81,47 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
 
   const handleDeleteUser = useCallback(
     async (username: string) => {
-      try {
-        const resp = await apiFetch(`/users/${encodeURIComponent(username)}`, {
-          method: 'DELETE',
-        })
-        if (resp.ok) {
-          await fetchUsers()
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to delete user.')
-        }
-      } catch (err) {
-        console.error('Error deleting user:', err)
-      }
+      const resp = await apiMutate(
+        apiFetch,
+        `/users/${encodeURIComponent(username)}`,
+        { method: 'DELETE' },
+        'Failed to delete user.',
+      )
+      if (resp) await fetchUsers()
     },
     [apiFetch, fetchUsers],
   )
 
   const handleUpdateUserRole = useCallback(
     async (username: string, role: 'admin' | 'user') => {
-      try {
-        const resp = await apiFetch(`/users/${encodeURIComponent(username)}`, {
+      const resp = await apiMutate(
+        apiFetch,
+        `/users/${encodeURIComponent(username)}`,
+        {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ role }),
-        })
-        if (resp.ok) {
-          await fetchUsers()
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to update role.')
-        }
-      } catch (err) {
-        console.error('Error updating role:', err)
-      }
+        },
+        'Failed to update role.',
+      )
+      if (resp) await fetchUsers()
     },
     [apiFetch, fetchUsers],
   )
 
   const handleUpdateUserPassword = useCallback(
     async (username: string, password: string): Promise<boolean> => {
-      try {
-        const resp = await apiFetch(`/users/${encodeURIComponent(username)}`, {
+      const resp = await apiMutate(
+        apiFetch,
+        `/users/${encodeURIComponent(username)}`,
+        {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
-        })
-        if (resp.ok) return true
-        const err = await resp.json()
-        alert(err.detail || 'Failed to update password.')
-        return false
-      } catch (err) {
-        console.error('Error updating password:', err)
-        return false
-      }
+        },
+        'Failed to update password.',
+      )
+      return resp !== null
     },
     [apiFetch],
   )

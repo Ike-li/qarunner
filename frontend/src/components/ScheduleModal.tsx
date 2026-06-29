@@ -10,6 +10,12 @@ export function ScheduleModal() {
 
   if (!s.isScheduleModalOpen || !s.scheduleProfile) return null
 
+  // The schedule (if any) already saved for this profile — computed once and
+  // reused by the Delete / Run Now render guards and their handlers.
+  const existing = s.schedules.find(
+    (sc) => sc.profile_id === s.scheduleProfile?.id,
+  )
+
   return (
     <Modal
       title={
@@ -87,28 +93,21 @@ export function ScheduleModal() {
         )}
 
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          {s.schedules.find((sc) => sc.profile_id === s.scheduleProfile?.id) && (
+          {existing && (
             <Button
               type="danger"
               theme="light"
-              onClick={() => {
-                const found = s.schedules.find((sc) => sc.profile_id === s.scheduleProfile?.id)
-                if (found) s.handleDeleteSchedule(found.id)
-              }}
+              onClick={() => s.handleDeleteSchedule(existing.id)}
             >
               {d.lang === 'zh' ? '删除调度' : 'Delete'}
             </Button>
           )}
-          {s.schedules.find((sc) => sc.profile_id === s.scheduleProfile?.id) && (
+          {existing && (
             <Button
               theme="light"
               icon={<Play size={14} />}
               onClick={async () => {
-                const found = s.schedules.find(
-                  (sc) => sc.profile_id === s.scheduleProfile?.id,
-                )
-                if (!found) return
-                const ok = await s.handleTriggerSchedule(found.id)
+                const ok = await s.handleTriggerSchedule(existing.id)
                 if (ok) {
                   d.runs.fetchRuns()
                   s.setIsScheduleModalOpen(false)

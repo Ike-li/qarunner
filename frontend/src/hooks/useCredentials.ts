@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Credential } from '../types'
+import { apiMutate } from './useApi'
 
 interface UseCredentialsOpts {
   apiFetch: (path: string, opts?: RequestInit) => Promise<Response>
@@ -31,41 +32,33 @@ export function useCredentials({ apiFetch, enabled }: UseCredentialsOpts) {
 
   const createCredential = useCallback(
     async (name: string, secret: string): Promise<Credential | null> => {
-      try {
-        const resp = await apiFetch('/credentials', {
+      const resp = await apiMutate(
+        apiFetch,
+        '/credentials',
+        {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, type: 'https_token', secret }),
-        })
-        if (resp.ok) {
-          const cred = (await resp.json()) as Credential
-          await fetchCredentials()
-          return cred
-        }
-        const err = await resp.json()
-        alert(err.detail || 'Failed to create credential.')
-        return null
-      } catch (err) {
-        console.error('Error creating credential:', err)
-        return null
-      }
+        },
+        'Failed to create credential.',
+      )
+      if (!resp) return null
+      const cred = (await resp.json()) as Credential
+      await fetchCredentials()
+      return cred
     },
     [apiFetch, fetchCredentials],
   )
 
   const deleteCredential = useCallback(
     async (id: string) => {
-      try {
-        const resp = await apiFetch(`/credentials/${id}`, { method: 'DELETE' })
-        if (resp.ok) {
-          await fetchCredentials()
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to delete credential.')
-        }
-      } catch (err) {
-        console.error('Error deleting credential:', err)
-      }
+      const resp = await apiMutate(
+        apiFetch,
+        `/credentials/${id}`,
+        { method: 'DELETE' },
+        'Failed to delete credential.',
+      )
+      if (resp) await fetchCredentials()
     },
     [apiFetch, fetchCredentials],
   )

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Run } from '../types'
+import { apiMutate } from './useApi'
 
 interface UseRunsOpts {
   apiFetch: (path: string, opts?: RequestInit) => Promise<Response>
@@ -93,29 +94,26 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
   const handleCancelRun = useCallback(
     async (runId: string) => {
-      try {
-        const resp = await apiFetch(`/runs/${runId}/cancel`, { method: 'POST' })
-        if (resp.ok) {
-          const updated = await resp.json()
-          setRuns((prev) =>
-            prev.map((r) =>
-              r.id === runId
-                ? { ...r, status: updated.status, finished_at: updated.finished_at }
-                : r,
-            ),
-          )
-          setSelectedRunDetails((prev) =>
-            prev && prev.id === runId
-              ? { ...prev, status: updated.status, finished_at: updated.finished_at }
-              : prev,
-          )
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to cancel run.')
-        }
-      } catch (err) {
-        console.error('Error cancelling run:', err)
-      }
+      const resp = await apiMutate(
+        apiFetch,
+        `/runs/${runId}/cancel`,
+        { method: 'POST' },
+        'Failed to cancel run.',
+      )
+      if (!resp) return
+      const updated = await resp.json()
+      setRuns((prev) =>
+        prev.map((r) =>
+          r.id === runId
+            ? { ...r, status: updated.status, finished_at: updated.finished_at }
+            : r,
+        ),
+      )
+      setSelectedRunDetails((prev) =>
+        prev && prev.id === runId
+          ? { ...prev, status: updated.status, finished_at: updated.finished_at }
+          : prev,
+      )
     },
     [apiFetch],
   )
@@ -124,21 +122,16 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
   const handleDeleteRun = useCallback(
     async (runId: string) => {
-      try {
-        const resp = await apiFetch(`/runs/${runId}`, { method: 'DELETE' })
-        if (resp.ok) {
-          setRuns((prev) => prev.filter((r) => r.id !== runId))
-          setSelectedRunId((prev) => (prev === runId ? null : prev))
-          setSelectedRunDetails((prev) =>
-            prev && prev.id === runId ? null : prev,
-          )
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to delete run.')
-        }
-      } catch (err) {
-        console.error('Error deleting run:', err)
-      }
+      const resp = await apiMutate(
+        apiFetch,
+        `/runs/${runId}`,
+        { method: 'DELETE' },
+        'Failed to delete run.',
+      )
+      if (!resp) return
+      setRuns((prev) => prev.filter((r) => r.id !== runId))
+      setSelectedRunId((prev) => (prev === runId ? null : prev))
+      setSelectedRunDetails((prev) => (prev && prev.id === runId ? null : prev))
     },
     [apiFetch],
   )
@@ -147,17 +140,13 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
   const handleRerunRun = useCallback(
     async (runId: string) => {
-      try {
-        const resp = await apiFetch(`/runs/${runId}/rerun`, { method: 'POST' })
-        if (resp.ok) {
-          await fetchRuns()
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to re-run.')
-        }
-      } catch (err) {
-        console.error('Error re-running:', err)
-      }
+      const resp = await apiMutate(
+        apiFetch,
+        `/runs/${runId}/rerun`,
+        { method: 'POST' },
+        'Failed to re-run.',
+      )
+      if (resp) await fetchRuns()
     },
     [apiFetch, fetchRuns],
   )

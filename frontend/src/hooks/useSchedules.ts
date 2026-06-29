@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Profile, Schedule } from '../types'
+import { apiMutate } from './useApi'
 
 interface UseSchedulesOpts {
   apiFetch: (path: string, opts?: RequestInit) => Promise<Response>
@@ -185,18 +186,13 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
 
   const handleTriggerSchedule = useCallback(
     async (scheduleId: string): Promise<boolean> => {
-      try {
-        const resp = await apiFetch(`/schedules/${scheduleId}/trigger`, {
-          method: 'POST',
-        })
-        if (resp.ok) return true
-        const err = await resp.json()
-        alert(err.detail || 'Failed to trigger schedule.')
-        return false
-      } catch (err) {
-        console.error('Error triggering schedule:', err)
-        return false
-      }
+      const resp = await apiMutate(
+        apiFetch,
+        `/schedules/${scheduleId}/trigger`,
+        { method: 'POST' },
+        'Failed to trigger schedule.',
+      )
+      return resp !== null
     },
     [apiFetch],
   )

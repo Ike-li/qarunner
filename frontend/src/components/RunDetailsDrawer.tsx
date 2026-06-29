@@ -2,10 +2,26 @@ import {
   Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, Clock, Copy, Cpu, Download,
   ExternalLink, Maximize2, RotateCw, Terminal, Trash2, XCircle,
 } from 'lucide-react'
+import type { CSSProperties } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { formatDuration } from '../logUtils'
 import { useDashboard } from '../hooks/DashboardContext'
+
+/** Shared outline style for the drawer's header action buttons (cancel / re-run
+ *  / delete) — they differ only by colour. */
+const actionBtnStyle = (color: string): CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '0.4rem',
+  padding: '0.35rem 0.75rem',
+  cursor: 'pointer',
+  background: 'transparent',
+  color,
+  border: `1px solid ${color}`,
+  borderRadius: '4px',
+  fontSize: '0.85rem',
+})
 
 /** Slide-in run-details drawer: status badge, info matrix, and a logs/report tab
  *  switch. Logs tab = console terminal (search/level/font/height/fullscreen
@@ -73,19 +89,7 @@ export function RunDetailsDrawer() {
                   d.runs.handleCancelRun(d.runs.selectedRun!.id)
                 }
               }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.35rem 0.75rem',
-                marginRight: '2.5rem',
-                cursor: 'pointer',
-                background: 'transparent',
-                color: 'var(--semi-color-danger)',
-                border: '1px solid var(--semi-color-danger)',
-                borderRadius: '4px',
-                fontSize: '0.85rem',
-              }}
+              style={{ ...actionBtnStyle('var(--semi-color-danger)'), marginRight: '2.5rem' }}
             >
               <Ban size={15} />
               {d.lang === 'zh' ? '终止运行' : 'Cancel Run'}
@@ -98,18 +102,7 @@ export function RunDetailsDrawer() {
               <button
                 type="button"
                 onClick={() => d.runs.handleRerunRun(d.runs.selectedRun!.id)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.35rem 0.75rem',
-                  cursor: 'pointer',
-                  background: 'transparent',
-                  color: 'var(--semi-color-primary)',
-                  border: '1px solid var(--semi-color-primary)',
-                  borderRadius: '4px',
-                  fontSize: '0.85rem',
-                }}
+                style={actionBtnStyle('var(--semi-color-primary)')}
               >
                 <RotateCw size={15} />
                 {d.lang === 'zh' ? '重新运行' : 'Re-run'}
@@ -128,18 +121,7 @@ export function RunDetailsDrawer() {
                       d.runs.handleDeleteRun(d.runs.selectedRun!.id)
                     }
                   }}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                    padding: '0.35rem 0.75rem',
-                    cursor: 'pointer',
-                    background: 'transparent',
-                    color: 'var(--semi-color-danger)',
-                    border: '1px solid var(--semi-color-danger)',
-                    borderRadius: '4px',
-                    fontSize: '0.85rem',
-                  }}
+                  style={actionBtnStyle('var(--semi-color-danger)')}
                 >
                   <Trash2 size={15} />
                   {d.lang === 'zh' ? '删除运行' : 'Delete Run'}
