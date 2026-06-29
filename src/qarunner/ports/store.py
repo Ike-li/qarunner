@@ -37,6 +37,18 @@ class UserStore(Protocol):
 
     async def list_users(self) -> list[dict]: ...
 
+    async def delete_user(self, username: str) -> bool:
+        """Delete a user. Returns True if a row was removed (P1-3)."""
+        ...
+
+    async def update_password(self, username: str, password_hash: str) -> bool:
+        """Set a user's password hash. Returns True if the user existed (P1-3)."""
+        ...
+
+    async def update_role(self, username: str, role: str) -> bool:
+        """Set a user's role. Returns True if the user existed (P1-3)."""
+        ...
+
 
 @runtime_checkable
 class ProfileStore(Protocol):

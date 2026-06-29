@@ -29,6 +29,7 @@ from qarunner.api.schemas import (
     TestScheduleUpdateRequest,
     TokenResponse,
     UserCreateRequest,
+    UserUpdateRequest,
     UserListResponse,
     UserResponse,
     profile_to_response,
@@ -336,6 +337,74 @@ async def list_users(
         for u in users_records
     ]
     return UserListResponse(users=users)
+
+
+@router.delete("/users/{username}")
+async def delete_user(
+    username: str,
+    request: Request,
+    admin_user: User = Depends(get_current_admin),
+) -> dict:
+    """Delete a user (Admin-only). An admin can't delete their own account —
+    locking yourself out is never the intent and a self-delete mid-session would
+    invalidate the live token."""
+    container = request.app.state.container
+    if username == admin_user.username:
+        raise HTTPException(
+            status_code=400, detail="You cannot delete your own account."
+        )
+    existing = await container.store.get_user(username)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+    await container.store.delete_user(username)
+    return {"status": "success", "message": f"User {username} deleted"}
+
+
+@router.put("/users/{username}", response_model=UserResponse)
+async def update_user(
+    username: str,
+    req: UserUpdateRequest,
+    request: Request,
+    _admin_user: User = Depends(get_current_admin),
+) -> UserResponse:
+    """Update a user's password and/or role (Admin-only).
+
+    The last remaining admin can't be demoted, or the platform would lock itself
+    out of every admin-only operation (covers demoting yourself when you're the
+    sole admin, as well as demoting another sole admin).
+    """
+    container = request.app.state.container
+    if req.password is None and req.role is None:
+        raise HTTPException(
+            status_code=400, detail="Nothing to update: provide password and/or role."
+        )
+    existing = await container.store.get_user(username)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+
+    if (
+        req.role is not None
+        and existing["role"] == "admin"
+        and req.role.value != "admin"
+    ):
+        users = await container.store.list_users()
+        admin_count = sum(1 for u in users if u["role"] == "admin")
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400, detail="Cannot demote the last remaining admin."
+            )
+
+    if req.password is not None:
+        await container.store.update_password(username, hash_password(req.password))
+    if req.role is not None:
+        await container.store.update_role(username, req.role.value)
+
+    new_role = req.role.value if req.role is not None else existing["role"]
+    return UserResponse(
+        username=existing["username"],
+        role=new_role,
+        created_at=existing["created_at"],
+    )
 
 
 # ── Run Orchestration Endpoints (Secured with JWT) ───────────────────────

@@ -119,6 +119,13 @@ class UserCreateRequest(BaseModel):
     role: UserRole = UserRole.USER
 
 
+class UserUpdateRequest(BaseModel):
+    """Payload to update a user (Admin-only); at least one field required."""
+
+    password: str | None = None
+    role: UserRole | None = None
+
+
 class UserResponse(BaseModel):
     """JSON representation of a user."""
 

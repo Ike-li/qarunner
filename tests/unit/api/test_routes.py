@@ -99,6 +99,21 @@ class FakeStore:
             for u in sorted(self._users.values(), key=lambda x: x["username"])
         ]
 
+    async def delete_user(self, username: str) -> bool:
+        return self._users.pop(username, None) is not None
+
+    async def update_password(self, username: str, password_hash: str) -> bool:
+        if username not in self._users:
+            return False
+        self._users[username]["password_hash"] = password_hash
+        return True
+
+    async def update_role(self, username: str, role: str) -> bool:
+        if username not in self._users:
+            return False
+        self._users[username]["role"] = role
+        return True
+
     async def save(self, run: Run) -> None:
         self._runs[run.id] = run
 
@@ -1281,6 +1296,146 @@ def test_create_user_missing_after_create_returns_500(monkeypatch: pytest.Monkey
             json={"username": "ghost", "password": "secret_password", "role": "user"},
         )
     assert resp.status_code == 500
+
+
+# ── User management: delete / update (P1-3) ──────────────────────────────
+
+
+def _seed_user(
+    store: FakeStore, username: str, *, role: str = "user", password: str = "pw"
+) -> None:
+    from qarunner.core.auth import hash_password
+
+    store._users[username] = {  # type: ignore[attr-defined]
+        "username": username,
+        "password_hash": hash_password(password),
+        "role": role,
+        "created_at": "2026-06-20T16:00:00Z",
+    }
+
+
+def test_delete_user_admin_removes_target() -> None:
+    container = _make_container()
+    _seed_user(container.store, "bob")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.delete("/users/bob")
+    assert resp.status_code == 200
+    assert "bob" not in container.store._users  # type: ignore[attr-defined]
+
+
+def test_delete_user_cannot_delete_self() -> None:
+    container = _make_container()  # default test_user is admin
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.delete("/users/test_user")
+    assert resp.status_code == 400
+    assert "test_user" in container.store._users  # type: ignore[attr-defined]
+
+
+def test_delete_user_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.delete("/users/ghost")
+    assert resp.status_code == 404
+
+
+def test_delete_user_requires_admin() -> None:
+    container = _make_container()
+    _seed_user(container.store, "bob")
+    app = create_app(container)
+    _override_user(app, "carol", UserRole.USER)
+    # create_app mock-overrides get_current_admin to always allow; drop it so the
+    # real admin guard runs against the (non-admin) overridden user.
+    del app.dependency_overrides[get_current_admin]
+    with TestClient(app) as client:
+        resp = client.delete("/users/bob")
+    assert resp.status_code == 403
+    assert "bob" in container.store._users  # type: ignore[attr-defined]
+
+
+def test_update_user_password_takes_effect() -> None:
+    from qarunner.core.auth import verify_password
+
+    container = _make_container()
+    _seed_user(container.store, "bob", password="oldpw")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/bob", json={"password": "newpw"})
+    assert resp.status_code == 200
+    new_hash = container.store._users["bob"]["password_hash"]  # type: ignore[attr-defined]
+    assert verify_password("newpw", new_hash)
+    assert not verify_password("oldpw", new_hash)
+
+
+def test_update_user_promote_to_admin() -> None:
+    container = _make_container()
+    _seed_user(container.store, "bob", role="user")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/bob", json={"role": "admin"})
+    assert resp.status_code == 200
+    assert resp.json()["role"] == "admin"
+    assert container.store._users["bob"]["role"] == "admin"  # type: ignore[attr-defined]
+
+
+def test_update_user_cannot_demote_last_admin() -> None:
+    container = _make_container()  # test_user is the only admin
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/test_user", json={"role": "user"})
+    assert resp.status_code == 400
+    assert container.store._users["test_user"]["role"] == "admin"  # type: ignore[attr-defined]
+
+
+def test_update_user_demote_admin_when_others_exist() -> None:
+    container = _make_container()  # test_user admin
+    _seed_user(container.store, "bob", role="admin")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/bob", json={"role": "user"})
+    assert resp.status_code == 200
+    assert container.store._users["bob"]["role"] == "user"  # type: ignore[attr-defined]
+
+
+def test_update_user_empty_payload_rejected() -> None:
+    container = _make_container()
+    _seed_user(container.store, "bob")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/bob", json={})
+    assert resp.status_code == 400
+
+
+def test_update_user_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/ghost", json={"role": "admin"})
+    assert resp.status_code == 404
+
+
+def test_update_user_requires_admin() -> None:
+    container = _make_container()
+    _seed_user(container.store, "bob")
+    app = create_app(container)
+    _override_user(app, "carol", UserRole.USER)
+    # create_app mock-overrides get_current_admin to always allow; drop it so the
+    # real admin guard runs against the (non-admin) overridden user.
+    del app.dependency_overrides[get_current_admin]
+    with TestClient(app) as client:
+        resp = client.put("/users/bob", json={"role": "admin"})
+    assert resp.status_code == 403
 
 
 # ── SEC-5: login brute-force protection ─────────────────────────────────

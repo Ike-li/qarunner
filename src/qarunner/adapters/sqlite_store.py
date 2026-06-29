@@ -349,6 +349,32 @@ class SqliteStore:
             for r in rows
         ]
 
+    async def delete_user(self, username: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "DELETE FROM users WHERE username = ?", (username,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def update_password(self, username: str, password_hash: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE users SET password_hash = ? WHERE username = ?",
+                (password_hash, username),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def update_role(self, username: str, role: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE users SET role = ? WHERE username = ?",
+                (role, username),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def save(self, run: Run) -> None:
         # Row-preserving upsert that deliberately omits `locked` from the
         # conflict update. `locked` is owned by lock_run (a targeted UPDATE) and

@@ -75,7 +75,7 @@
 - **认证** — JWT(HS256)+ bcrypt;令牌走 `Authorization: Bearer` 或 HttpOnly Cookie。
 - **角色** — `admin` / `user` 两级。
 - **owner-scope 对象级授权** — 非 admin 只能访问 / 改自己创建的 run / profile / schedule(他人资源 `403`,不存在 `404`;列表静默过滤)。
-- **用户管理** — admin 建用户、列用户。
+- **用户管理** — admin 建用户、列用户、改用户密码 / 角色(`PUT /users/{username}`)、删用户(`DELETE`)。守护:不能删自己、不能降级最后一个 admin。
 - **登录限流** — 同 `用户名|IP` 连错 5 次指数退避锁定(60→900s),防爆破。
 → `core/auth.py`、`core/login_throttle.py`、`api/routes.py`
 

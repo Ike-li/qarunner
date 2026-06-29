@@ -59,6 +59,78 @@ export function UserManagementModal() {
                 key: 'created_at',
                 render: (iso: string) => formatDate(iso),
               },
+              {
+                title: d.lang === 'zh' ? '操作' : 'Actions',
+                key: 'actions',
+                render: (_: unknown, record: { username: string; role: string }) => {
+                  const isSelf = record.username === u.currentUsername
+                  return (
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                      <Button
+                        size="small"
+                        theme="borderless"
+                        data-testid="user-change-password"
+                        onClick={() => {
+                          const pw = window.prompt(
+                            d.lang === 'zh'
+                              ? `为 ${record.username} 设置新密码：`
+                              : `New password for ${record.username}:`,
+                          )
+                          if (pw && pw.trim()) {
+                            u.handleUpdateUserPassword(record.username, pw).then((ok) => {
+                              if (ok)
+                                alert(d.lang === 'zh' ? '密码已更新' : 'Password updated')
+                            })
+                          }
+                        }}
+                      >
+                        {d.lang === 'zh' ? '改密码' : 'Password'}
+                      </Button>
+                      {!isSelf && (
+                        <Button
+                          size="small"
+                          theme="borderless"
+                          data-testid="user-toggle-role"
+                          onClick={() =>
+                            u.handleUpdateUserRole(
+                              record.username,
+                              record.role === 'admin' ? 'user' : 'admin',
+                            )
+                          }
+                        >
+                          {record.role === 'admin'
+                            ? d.lang === 'zh'
+                              ? '降为 User'
+                              : 'Make User'
+                            : d.lang === 'zh'
+                              ? '升为 Admin'
+                              : 'Make Admin'}
+                        </Button>
+                      )}
+                      {!isSelf && (
+                        <Button
+                          size="small"
+                          theme="borderless"
+                          type="danger"
+                          icon={<Trash2 size={13} />}
+                          data-testid="user-delete"
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                d.lang === 'zh'
+                                  ? `确定删除用户 ${record.username}？`
+                                  : `Delete user ${record.username}?`,
+                              )
+                            ) {
+                              u.handleDeleteUser(record.username)
+                            }
+                          }}
+                        />
+                      )}
+                    </div>
+                  )
+                },
+              },
             ]}
           />
         </div>

@@ -212,6 +212,27 @@ async def test_user_operations(store: SqliteStore) -> None:
     assert "admin" in usernames
 
 
+async def test_user_delete_and_update(store: SqliteStore) -> None:
+    await store.create_user("dave", "h1", "user")
+
+    # Updates against an existing row report a hit and persist.
+    assert await store.update_password("dave", "h2") is True
+    assert await store.update_role("dave", "admin") is True
+    user = await store.get_user("dave")
+    assert user is not None
+    assert user["password_hash"] == "h2"
+    assert user["role"] == "admin"
+
+    # Updates against a missing user report no hit.
+    assert await store.update_password("ghost", "x") is False
+    assert await store.update_role("ghost", "admin") is False
+
+    # Delete removes the row; deleting again is a no-op.
+    assert await store.delete_user("dave") is True
+    assert await store.get_user("dave") is None
+    assert await store.delete_user("dave") is False
+
+
 async def test_schema_migration_adds_created_by(tmp_path) -> None:
     import aiosqlite
     db_file = tmp_path / "legacy.db"

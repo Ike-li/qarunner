@@ -78,6 +78,66 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
     [apiFetch, newUsername, newPassword, newUserRole, fetchUsers],
   )
 
+  const handleDeleteUser = useCallback(
+    async (username: string) => {
+      try {
+        const resp = await apiFetch(`/users/${encodeURIComponent(username)}`, {
+          method: 'DELETE',
+        })
+        if (resp.ok) {
+          await fetchUsers()
+        } else {
+          const err = await resp.json()
+          alert(err.detail || 'Failed to delete user.')
+        }
+      } catch (err) {
+        console.error('Error deleting user:', err)
+      }
+    },
+    [apiFetch, fetchUsers],
+  )
+
+  const handleUpdateUserRole = useCallback(
+    async (username: string, role: 'admin' | 'user') => {
+      try {
+        const resp = await apiFetch(`/users/${encodeURIComponent(username)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role }),
+        })
+        if (resp.ok) {
+          await fetchUsers()
+        } else {
+          const err = await resp.json()
+          alert(err.detail || 'Failed to update role.')
+        }
+      } catch (err) {
+        console.error('Error updating role:', err)
+      }
+    },
+    [apiFetch, fetchUsers],
+  )
+
+  const handleUpdateUserPassword = useCallback(
+    async (username: string, password: string): Promise<boolean> => {
+      try {
+        const resp = await apiFetch(`/users/${encodeURIComponent(username)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        })
+        if (resp.ok) return true
+        const err = await resp.json()
+        alert(err.detail || 'Failed to update password.')
+        return false
+      } catch (err) {
+        console.error('Error updating password:', err)
+        return false
+      }
+    },
+    [apiFetch],
+  )
+
   return {
     usersList,
     usersLoading,
@@ -95,8 +155,12 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
     isCleaningStorage,
     setIsCleaningStorage,
     isAdmin,
+    currentUsername: currentUser?.username ?? null,
     fetchUsers,
     handleCreateUserSubmit,
+    handleDeleteUser,
+    handleUpdateUserRole,
+    handleUpdateUserPassword,
     _reset: () => {
       setUsersList([])
       setUsersLoading(false)
