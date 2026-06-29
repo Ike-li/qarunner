@@ -116,6 +116,9 @@ class FakeStore:
             run = self._runs[run_id]
             self._runs[run_id] = run.model_copy(update={"locked": locked})
 
+    async def delete_run(self, run_id: str) -> bool:
+        return self._runs.pop(run_id, None) is not None
+
     async def count_inflight_runs(self, created_by: str) -> int:
         return sum(
             1
@@ -724,6 +727,105 @@ def test_cancel_run_terminal_returns_409() -> None:
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
         resp = client.post("/runs/r-done/cancel")
+    assert resp.status_code == 409
+
+
+# ── DELETE /runs/{run_id} (P1-4) ─────────────────────────────────────────
+
+
+def test_delete_run_owner_removes_row_and_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-4: deleting a finished, unlocked run drops its DB row and wipes its
+    artifact directory."""
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-del", created_by="alice", status=RunStatus.COMPLETED
+    )
+    run_dir = tmp_path / "r-del"
+    run_dir.mkdir()
+    (run_dir / "stdout.log").write_text("log")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.delete("/runs/r-del")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "success"
+    assert not run_dir.exists()
+    assert "r-del" not in container.store._runs  # type: ignore[attr-defined]
+
+
+def test_delete_run_without_artifact_dir_still_deletes_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-4: a run whose artifact dir was already cleaned up still deletes its row
+    (covers the ``run_dir`` absent branch)."""
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-bare", created_by="alice", status=RunStatus.FAILED
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.delete("/runs/r-bare")
+
+    assert resp.status_code == 200
+    assert "r-bare" not in container.store._runs  # type: ignore[attr-defined]
+
+
+def test_delete_run_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-del", created_by="bob", status=RunStatus.COMPLETED
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/runs/r-del")
+    assert resp.status_code == 403
+    assert "r-del" in container.store._runs  # type: ignore[attr-defined]
+
+
+def test_delete_run_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/runs/ghost")
+    assert resp.status_code == 404
+
+
+def test_delete_run_locked_returns_409() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store,
+        id="r-lock",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        locked=True,
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/runs/r-lock")
+    assert resp.status_code == 409
+    assert "r-lock" in container.store._runs  # type: ignore[attr-defined]
+
+
+def test_delete_run_active_returns_409() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-run", created_by="alice", status=RunStatus.RUNNING
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/runs/r-run")
     assert resp.status_code == 409
 
 

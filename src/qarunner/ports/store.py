@@ -92,6 +92,10 @@ class Store(RunStore, UserStore, ProfileStore, ScheduleStore, SuiteStore, Protoc
 
     async def lock_run(self, run_id: str, locked: bool) -> None: ...
 
+    async def delete_run(self, run_id: str) -> bool:
+        """Delete a run's row. Returns True if a row was removed (P1-4)."""
+        ...
+
     async def count_inflight_runs(self, created_by: str) -> int:
         """Count a user's queued+running runs (for the P2-7 per-user cap)."""
         ...

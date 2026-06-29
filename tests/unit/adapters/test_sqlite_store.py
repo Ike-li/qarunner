@@ -594,6 +594,19 @@ async def test_sqlite_store_lock_run(store: SqliteStore) -> None:
     assert retrieved.locked is False
 
 
+async def test_sqlite_store_delete_run(store: SqliteStore) -> None:
+    run = _make_run(id="run-del")
+    await store.save(run)
+
+    # Deleting an existing run removes the row and reports a hit.
+    assert await store.delete_run("run-del") is True
+    with pytest.raises(RunNotFound):
+        await store.get("run-del")
+
+    # Deleting an already-absent run is a no-op that reports no hit.
+    assert await store.delete_run("run-del") is False
+
+
 async def test_save_does_not_clobber_concurrent_lock(store: SqliteStore) -> None:
     """A lifecycle save() must not overwrite a lock toggled meanwhile (BUG-4).
 

@@ -1210,6 +1210,44 @@ async def cancel_run(
     return run_to_response(cancelled)
 
 
+@router.delete("/runs/{run_id}")
+async def delete_run(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Delete a run's metadata and physical artifacts (owner/admin).
+
+    A locked run is protected and a queued/running run must be cancelled first —
+    both return 409. Artifact removal is best-effort (``ignore_errors``): a run
+    the caller asked to delete always leaves the store, even if its directory
+    can't be removed, so deletion can't strand a row pointing at gone files.
+    """
+    container = request.app.state.container
+    cfg = container.settings
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+    if run.locked:
+        raise HTTPException(
+            status_code=409, detail="Run is locked; unlock it before deleting."
+        )
+    if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+        raise HTTPException(
+            status_code=409, detail="Run is still active; cancel it before deleting."
+        )
+
+    import shutil
+
+    run_dir = Path(cfg.artifacts_root) / run_id
+    if run_dir.exists():
+        await asyncio.to_thread(shutil.rmtree, run_dir, ignore_errors=True)
+    await container.store.delete_run(run_id)
+    return {"status": "success", "message": f"Run {run_id} deleted"}
+
+
 @router.post("/runs/cleanup")
 async def cleanup_runs(
     request: Request,

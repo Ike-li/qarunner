@@ -238,6 +238,11 @@
 - **成功**：`200` `RunResponse`（`status="cancelled"`）。
 - **错误**：`404`（不存在）· `403`（他人）· `409`（已是终态 completed/failed/timeout/cancelled，不可取消）。
 
+### `DELETE /runs/{run_id}` — owner
+彻底删除一个 run 的元数据行与物理产物目录（产物删除尽力而为，删不掉也仍删行）。无请求体。
+- **成功**：`200` `{"status":"success","message":...}`。
+- **错误**：`404`（不存在）· `403`（他人）· `409`（run 被锁定，或仍在 queued/running——需先解锁 / 取消）。
+
 ### `POST /runs/cleanup` — admin
 - 查询参数：`retention_days`（默认 `30`，约束 `>=1`，否则 422）。
 - 删除超期且未锁定 run 的物理产物（元数据保留）。

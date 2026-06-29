@@ -120,6 +120,29 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     [apiFetch],
   )
 
+  // ── delete a run (metadata + artifacts) ────────────────────────────────
+
+  const handleDeleteRun = useCallback(
+    async (runId: string) => {
+      try {
+        const resp = await apiFetch(`/runs/${runId}`, { method: 'DELETE' })
+        if (resp.ok) {
+          setRuns((prev) => prev.filter((r) => r.id !== runId))
+          setSelectedRunId((prev) => (prev === runId ? null : prev))
+          setSelectedRunDetails((prev) =>
+            prev && prev.id === runId ? null : prev,
+          )
+        } else {
+          const err = await resp.json()
+          alert(err.detail || 'Failed to delete run.')
+        }
+      } catch (err) {
+        console.error('Error deleting run:', err)
+      }
+    },
+    [apiFetch],
+  )
+
   // ── SSE streaming ──────────────────────────────────────────────────────
 
   // Snapshot refs so the SSE effect doesn't depend on frequently-changing state.
@@ -316,6 +339,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     fetchSelectedRunDetails,
     handleToggleLock,
     handleCancelRun,
+    handleDeleteRun,
     // derived
     totalRuns,
     completedRuns,

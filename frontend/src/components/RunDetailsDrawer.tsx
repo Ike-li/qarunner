@@ -1,6 +1,6 @@
 import {
   Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, Clock, Copy, Cpu, Download,
-  ExternalLink, Maximize2, RotateCw, Terminal, XCircle,
+  ExternalLink, Maximize2, RotateCw, Terminal, Trash2, XCircle,
 } from 'lucide-react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
@@ -89,6 +89,41 @@ export function RunDetailsDrawer() {
             >
               <Ban size={15} />
               {d.lang === 'zh' ? '终止运行' : 'Cancel Run'}
+            </button>
+          )}
+          {d.runs.selectedRun &&
+            d.runs.selectedRun.status !== 'running' &&
+            d.runs.selectedRun.status !== 'queued' &&
+            !d.runs.selectedRun.locked && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    d.lang === 'zh'
+                      ? '确定删除此运行及其产物吗？此操作不可撤销。'
+                      : 'Delete this run and its artifacts? This cannot be undone.',
+                  )
+                ) {
+                  d.runs.handleDeleteRun(d.runs.selectedRun!.id)
+                }
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.75rem',
+                marginRight: '2.5rem',
+                cursor: 'pointer',
+                background: 'transparent',
+                color: 'var(--semi-color-danger)',
+                border: '1px solid var(--semi-color-danger)',
+                borderRadius: '4px',
+                fontSize: '0.85rem',
+              }}
+            >
+              <Trash2 size={15} />
+              {d.lang === 'zh' ? '删除运行' : 'Delete Run'}
             </button>
           )}
         </div>

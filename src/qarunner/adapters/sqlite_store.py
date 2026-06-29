@@ -554,6 +554,12 @@ class SqliteStore:
             )
             await db.commit()
 
+    async def delete_run(self, run_id: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def count_inflight_runs(self, created_by: str) -> int:
         async with self._connect() as db:
             cursor = await db.execute(
