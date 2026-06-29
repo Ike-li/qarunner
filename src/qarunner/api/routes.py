@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
-from qarunner.api.deps import get_current_admin, get_current_user
+from qarunner.api.deps import Container, get_current_admin, get_current_user
 from qarunner.api.schemas import (
     CloneTestSuiteRequest,
     CredentialCreateRequest,
@@ -207,6 +207,10 @@ async def _resolve_credential_secret(
         )
     _require_owner_access(cred.created_by, current_user)
     enc = await store.get_credential_secret(credential_ref)  # type: ignore[attr-defined]
+    if enc is None:
+        # Raced with a concurrent delete after the existence check — degrade to
+        # no auth (like pull) instead of crashing on decrypt(None).
+        return None
     return CredentialCipher(secret_key).decrypt(enc)
 
 
@@ -1149,14 +1153,16 @@ async def delete_profile(
     return {"status": "success", "message": f"Profile {profile_id} deleted"}
 
 
-@router.post("/runs", status_code=202, response_model=RunResponse)
-async def create_run(
-    req: RunRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-) -> RunResponse:
-    """Create a new test run and return its initial state."""
-    container = request.app.state.container
+async def _create_run_guarded(
+    container: Container, req: RunRequest, current_user: User
+) -> Run:
+    """Shared run-creation chokepoint: subprocess-mode gate + per-user in-flight
+    cap (P2-7) + orchestrator error mapping.
+
+    POST /runs, POST /runs/{id}/rerun and POST /schedules/{id}/trigger all funnel
+    through here so a new run-creating caller can't silently bypass the guards —
+    they used to live only in the create_run route body.
+    """
     if (
         req.executor_mode == "subprocess"
         and current_user.role != UserRole.ADMIN
@@ -1177,11 +1183,24 @@ async def create_run(
                 detail="Too many in-flight runs; wait for existing runs to finish.",
             )
     try:
-        run = await container.orchestrator.create(req, created_by=current_user.username)
+        return await container.orchestrator.create(
+            req, created_by=current_user.username
+        )
     except UnknownRunner as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except UnsafePath as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/runs", status_code=202, response_model=RunResponse)
+async def create_run(
+    req: RunRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunResponse:
+    """Create a new test run and return its initial state."""
+    container = request.app.state.container
+    run = await _create_run_guarded(container, req, current_user)
     return run_to_response(run)
 
 
@@ -1514,8 +1533,8 @@ async def rerun_run(
     except RunNotFound:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(original, current_user)
-    new_run = await container.orchestrator.create(
-        RunRequest.from_run(original), created_by=current_user.username
+    new_run = await _create_run_guarded(
+        container, RunRequest.from_run(original), current_user
     )
     return run_to_response(new_run)
 
@@ -1696,7 +1715,7 @@ async def trigger_schedule(
             status_code=409,
             detail=f"Schedule's profile '{schedule.profile_id}' no longer exists.",
         )
-    run = await container.orchestrator.create(
-        RunRequest.from_profile(profile), created_by=current_user.username
+    run = await _create_run_guarded(
+        container, RunRequest.from_profile(profile), current_user
     )
     return run_to_response(run)

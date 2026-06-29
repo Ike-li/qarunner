@@ -2503,6 +2503,77 @@ def test_trigger_schedule_missing_profile_409() -> None:
     assert resp.status_code == 409
 
 
+# Run creation guards (subprocess gate + in-flight cap) must apply on every path
+# that reaches the orchestrator, not just POST /runs — else /rerun and /trigger
+# become bypasses.
+
+
+def test_rerun_respects_inflight_cap() -> None:
+    container = _make_container()
+    container.settings.max_inflight_runs_per_user = 1
+    # docker so the subprocess gate (checked first) doesn't mask the cap.
+    _make_run_in_store(
+        container.store,
+        id="orig",
+        status=RunStatus.COMPLETED,
+        created_by="normal_user",
+        executor_mode="docker",
+    )
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.RUNNING, created_by="normal_user"
+    )
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/orig/rerun")
+    assert resp.status_code == 429
+
+
+def test_rerun_respects_subprocess_gate() -> None:
+    container = _make_container()
+    container.settings.allow_subprocess_for_non_admins = False
+    _make_run_in_store(
+        container.store,
+        id="orig",
+        status=RunStatus.COMPLETED,
+        created_by="normal_user",
+        executor_mode="subprocess",
+    )
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/orig/rerun")
+    assert resp.status_code == 400
+
+
+def test_trigger_schedule_respects_inflight_cap() -> None:
+    container = _make_container()
+    container.settings.max_inflight_runs_per_user = 1
+    # Profiles default to subprocess; allow it so the cap is what's exercised.
+    container.settings.allow_subprocess_for_non_admins = True
+    _seed_schedule_with_profile(container, schedule_owner="normal_user")
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.RUNNING, created_by="normal_user"
+    )
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 429
+
+
+def test_trigger_schedule_respects_subprocess_gate() -> None:
+    container = _make_container()
+    container.settings.allow_subprocess_for_non_admins = False
+    # _seed_schedule_with_profile's profile defaults to executor_mode="subprocess".
+    _seed_schedule_with_profile(container, schedule_owner="normal_user")
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 400
+
+
 def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _make_container()
 
@@ -3009,6 +3080,40 @@ def test_clone_with_credential_injects_token_off_argv(
     assert env.get("GIT_TERMINAL_PROMPT") == "0"
     assert env.get("QARUNNER_GIT_PASS") == "ghp_secrettoken"
     assert "GIT_ASKPASS" in env
+
+
+def test_clone_credential_deleted_midflight_degrades_to_no_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TOCTOU: a credential passes the existence/owner check, then is deleted
+    before its secret is read — degrade to an unauthenticated clone, not a 500."""
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _seed_encrypted_credential(
+        container, cred_id="cred-1", owner="test_user", secret="ghp_x"
+    )
+
+    async def _gone(_credential_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(container.store, "get_credential_secret", _gone)
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0))
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={
+                "url": "https://example.com/org/repo.git",
+                "name": "s",
+                "ref": "v1.0",
+                "credential_ref": "cred-1",
+            },
+        )
+    assert resp.status_code == 200
+    # No secret resolvable → no auth env injected (parent env inherited).
+    assert mock.call_args.kwargs.get("env") is None
 
 
 def test_clone_unknown_credential_ref_rejected(
