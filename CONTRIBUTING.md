@@ -4,7 +4,7 @@
 
 ```bash
 # Clone and install
-git clone <repo-url> && cd qa_platform_v2
+git clone <repo-url> && cd qarunner
 uv sync --all-extras
 
 # Required secrets (app refuses to start without them)
