@@ -60,7 +60,7 @@ class RunRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
-    def from_profile(cls, profile: "TestProfile") -> "RunRequest":
+    def from_profile(cls, profile: TestProfile) -> RunRequest:
         """Build a run request from a saved profile.
 
         Single source of truth for the profile→run mapping shared by the cron
@@ -81,7 +81,7 @@ class RunRequest(BaseModel):
         )
 
     @classmethod
-    def from_run(cls, run: "Run") -> "RunRequest":
+    def from_run(cls, run: Run) -> RunRequest:
         """Rebuild a run request from a finished run, to re-run it (P2-7).
 
         ``run.args`` already holds the fully-compiled argv (markers / selected
@@ -135,6 +135,23 @@ class TestSuite(BaseModel):
     repo_url: str | None = None
     ref: str | None = None
     credential_ref: str | None = None
+    created_by: str
+    created_at: datetime
+
+
+class Credential(BaseModel):
+    """A stored git credential's metadata (P0-1).
+
+    The plaintext/encrypted secret is deliberately NOT a field here: this model
+    is what the API returns and what gets serialised, so the secret can never
+    leak through it. The ciphertext is persisted and fetched separately.
+    """
+
+    __test__ = False
+
+    id: str
+    name: str
+    type: str  # currently only "https_token"
     created_by: str
     created_at: datetime
 

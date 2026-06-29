@@ -44,6 +44,14 @@ export interface UserProfile {
   created_at: string
 }
 
+export interface Credential {
+  id: string
+  name: string
+  type: string
+  created_by: string
+  created_at: string
+}
+
 export interface Profile {
   id: string
   name: string

@@ -20,6 +20,7 @@ dependencies = [
     "apscheduler",
     "croniter",
     "defusedxml>=0.7.1",
+    "cryptography>=49.0.0",
 ]
 
 [project.optional-dependencies]

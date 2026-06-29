@@ -14,6 +14,7 @@ import aiosqlite
 
 from qarunner.errors import RunNotFound
 from qarunner.models import (
+    Credential,
     ReportRef,
     Run,
     RunStatus,
@@ -106,6 +107,19 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             "ref TEXT, "
             "credential_ref TEXT, "
             "created_by TEXT NOT NULL DEFAULT 'system', "
+            "created_at TEXT NOT NULL"
+            ");",
+        ),
+    ),
+    (
+        5,
+        (
+            "CREATE TABLE IF NOT EXISTS credentials ("
+            "id TEXT PRIMARY KEY, "
+            "name TEXT NOT NULL, "
+            "type TEXT NOT NULL, "
+            "enc_secret TEXT NOT NULL, "
+            "created_by TEXT NOT NULL, "
             "created_at TEXT NOT NULL"
             ");",
         ),
@@ -569,6 +583,76 @@ class SqliteStore:
     async def delete_suite(self, name: str) -> bool:
         async with self._connect() as db:
             cursor = await db.execute("DELETE FROM suites WHERE name = ?", (name,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def save_credential(
+        self, credential: Credential, encrypted_secret: str
+    ) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT INTO credentials (id, name, type, enc_secret, created_by, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    credential.id,
+                    credential.name,
+                    credential.type,
+                    encrypted_secret,
+                    credential.created_by,
+                    credential.created_at.isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def get_credential(self, credential_id: str) -> Credential | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT id, name, type, created_by, created_at FROM credentials "
+                "WHERE id = ?",
+                (credential_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return Credential(
+            id=row[0],
+            name=row[1],
+            type=row[2],
+            created_by=row[3],
+            created_at=datetime.fromisoformat(row[4]),
+        )
+
+    async def get_credential_secret(self, credential_id: str) -> str | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT enc_secret FROM credentials WHERE id = ?", (credential_id,)
+            )
+            row = await cursor.fetchone()
+        return row[0] if row is not None else None
+
+    async def list_credentials(self) -> list[Credential]:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT id, name, type, created_by, created_at FROM credentials "
+                "ORDER BY created_at"
+            )
+            rows = await cursor.fetchall()
+        return [
+            Credential(
+                id=r[0],
+                name=r[1],
+                type=r[2],
+                created_by=r[3],
+                created_at=datetime.fromisoformat(r[4]),
+            )
+            for r in rows
+        ]
+
+    async def delete_credential(self, credential_id: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "DELETE FROM credentials WHERE id = ?", (credential_id,)
+            )
             await db.commit()
             return cursor.rowcount > 0
 

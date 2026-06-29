@@ -9,6 +9,7 @@ import pytest
 from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.errors import RunNotFound
 from qarunner.models import (
+    Credential,
     ReportRef,
     Run,
     RunStatus,
@@ -210,6 +211,40 @@ async def test_user_operations(store: SqliteStore) -> None:
     usernames = [u["username"] for u in users]
     assert "alice" in usernames
     assert "admin" in usernames
+
+
+async def test_credential_crud(store: SqliteStore) -> None:
+    cred = Credential(
+        id="cred-1",
+        name="gh-token",
+        type="https_token",
+        created_by="alice",
+        created_at=datetime(2026, 6, 20, tzinfo=UTC),
+    )
+    # The encrypted secret is stored alongside the metadata but never lives on
+    # the model — so a serialised Credential can't leak it.
+    await store.save_credential(cred, "ENC(token-payload)")
+    assert not hasattr(cred, "secret")
+
+    got = await store.get_credential("cred-1")
+    assert got is not None
+    assert got.name == "gh-token"
+    assert got.type == "https_token"
+    assert got.created_by == "alice"
+
+    # The ciphertext is fetched only via the dedicated secret accessor.
+    assert await store.get_credential_secret("cred-1") == "ENC(token-payload)"
+
+    assert [c.id for c in await store.list_credentials()] == ["cred-1"]
+
+    # Misses report None rather than raising.
+    assert await store.get_credential("ghost") is None
+    assert await store.get_credential_secret("ghost") is None
+
+    # Delete removes it; deleting again is a no-op.
+    assert await store.delete_credential("cred-1") is True
+    assert await store.get_credential("cred-1") is None
+    assert await store.delete_credential("cred-1") is False
 
 
 async def test_user_delete_and_update(store: SqliteStore) -> None:

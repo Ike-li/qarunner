@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Modal, Button, Input, Banner, Tabs } from '@douyinfe/semi-ui'
-import { FolderPlus, GitBranch, Info, Link, Settings, Terminal } from 'lucide-react'
+import { Modal, Button, Input, Banner, Tabs, Select } from '@douyinfe/semi-ui'
+import { FolderPlus, GitBranch, KeyRound, Link, Settings, Terminal } from 'lucide-react'
 import { useDashboard } from '../hooks/DashboardContext'
 
 interface AddSuiteModalProps {
@@ -18,10 +18,30 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
   // Git clone tab state
   const [gitUrl, setGitUrl] = useState('')
   const [gitRef, setGitRef] = useState('')
-  const [gitCred, setGitCred] = useState('')
+  const [gitCred, setGitCred] = useState('') // selected credential id ('' = none)
   const [cloning, setCloning] = useState(false)
   const [gitFeedback, setGitFeedback] = useState<{ success: boolean; message: string } | null>(null)
   const [activeTab, setActiveTab] = useState<'local' | 'git'>('local')
+
+  // Inline "new credential" state (secret is write-only; never read back)
+  const [newCredName, setNewCredName] = useState('')
+  const [newCredSecret, setNewCredSecret] = useState('')
+  const [savingCred, setSavingCred] = useState(false)
+
+  const handleCreateCredential = async () => {
+    if (!newCredName.trim() || !newCredSecret.trim()) return
+    setSavingCred(true)
+    try {
+      const cred = await d.credentials.createCredential(newCredName.trim(), newCredSecret)
+      if (cred) {
+        setGitCred(cred.id) // auto-select the freshly created credential
+        setNewCredName('')
+        setNewCredSecret('')
+      }
+    } finally {
+      setSavingCred(false)
+    }
+  }
 
   const handleLink = async () => {
     const trimmedPath = path.trim()
@@ -136,13 +156,46 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
               prefix={<Settings size={14} />}
               data-testid="clone-ref-input"
             />
-            <Input
-              placeholder={isZh ? '凭据引用 (可选)' : 'Credential ref (optional)'}
+            <Select
+              placeholder={isZh ? '凭证 (私有仓库, 可选)' : 'Credential (private repos, optional)'}
               value={gitCred}
-              onChange={setGitCred}
-              prefix={<Info size={14} />}
-              data-testid="clone-cred-input"
-            />
+              onChange={(v) => setGitCred(v as string)}
+              style={{ width: '100%' }}
+              prefix={<KeyRound size={14} />}
+              data-testid="clone-cred-select"
+            >
+              <Select.Option value="">{isZh ? '— 无 (公开仓库) —' : '— None (public repo) —'}</Select.Option>
+              {d.credentials.credentials.map((c) => (
+                <Select.Option key={c.id} value={c.id}>
+                  {c.name}
+                </Select.Option>
+              ))}
+            </Select>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <Input
+                size="small"
+                placeholder={isZh ? '新凭证名' : 'New credential name'}
+                value={newCredName}
+                onChange={setNewCredName}
+                data-testid="clone-newcred-name"
+              />
+              <Input
+                size="small"
+                type="password"
+                placeholder={isZh ? 'HTTPS token' : 'HTTPS token'}
+                value={newCredSecret}
+                onChange={setNewCredSecret}
+                data-testid="clone-newcred-secret"
+              />
+              <Button
+                size="small"
+                loading={savingCred}
+                onClick={handleCreateCredential}
+                data-testid="clone-newcred-save"
+              >
+                {isZh ? '保存凭证' : 'Save'}
+              </Button>
+            </div>
             {gitFeedback && (
               <Banner
                 type={gitFeedback.success ? 'success' : 'danger'}

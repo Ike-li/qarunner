@@ -124,10 +124,10 @@
 | url | str | 是 | | 仅允许 `https://` 或 `git@`（scp 式），否则 400 |
 | name | str | 否 | 从 url 推导 | 套件目录名 |
 | ref | str | 否 | 默认分支 | 分支 / tag |
-| credential_ref | str | 否 | | 凭证引用 |
+| credential_ref | str | 否 | | 已存凭证的 id（见下「凭证」节）；私有仓库用，token 经 GIT_ASKPASS env 注入，不进 argv/URL/日志 |
 
 - **成功**：`200` `LinkTestSuiteResponse`。
-- **错误**：`400`（URL 不在白名单）· `409`（套件名已存在）· `502`（git clone 失败）· `503`（克隆成功但登记失败，已回滚克隆目录）。
+- **错误**：`400`（URL 不在白名单 / `credential_ref` 不存在）· `403`（`credential_ref` 属于他人）· `409`（套件名已存在）· `502`（git clone 失败）· `503`（克隆成功但登记失败，已回滚克隆目录）。
 
 ### `POST /tests/{suite_name}/pull` — owner
 - 路径参数：`suite_name`。无请求体。
@@ -153,6 +153,18 @@
 - 路径参数：`suite_name`。静态解析 pytest marker。
 - **成功**：`200` `["smoke", "slow", ...]`（不存在的套件返回 `[]`）。
 - **错误**：`400`（不安全路径）。
+
+### `POST /credentials` — 认证
+存储一个 git 凭证（私有仓库用）。请求体 `{name, type:"https_token", secret}`；`secret` **只写不回读**——加密落库（Fernet，密钥由 `SECRET_KEY` 经 HKDF 派生），API 永不返回明文。
+- **成功**：`201` `CredentialResponse`（含 id/name/type/created_by/created_at，**无 secret**）。
+- **错误**：`422`（`type` 非 `https_token`）· `401`。
+
+### `GET /credentials` — 认证（非 admin 只看自己的）
+- **成功**：`200` `{"credentials": [CredentialResponse, ...]}`（均无 secret）。
+
+### `DELETE /credentials/{credential_id}` — owner
+- **成功**：`200` `{"status":"success","message":...}`。
+- **错误**：`404`（不存在）· `403`（他人）。
 
 ---
 

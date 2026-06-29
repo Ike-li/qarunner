@@ -140,6 +140,30 @@ class UserListResponse(BaseModel):
     users: list[UserResponse]
 
 
+class CredentialCreateRequest(BaseModel):
+    """Payload to store a git credential (P0-1). ``secret`` is write-only."""
+
+    name: str
+    type: Literal["https_token"] = "https_token"
+    secret: str
+
+
+class CredentialResponse(BaseModel):
+    """A credential's metadata — deliberately carries no secret."""
+
+    id: str
+    name: str
+    type: str
+    created_by: str
+    created_at: str
+
+
+class CredentialListResponse(BaseModel):
+    """Collection wrapper for listing credentials."""
+
+    credentials: list[CredentialResponse]
+
+
 class LockRunRequest(BaseModel):
     """Payload to lock or unlock a run."""
 

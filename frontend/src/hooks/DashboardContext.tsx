@@ -7,6 +7,7 @@ import { useSchedules } from './useSchedules'
 import { useProfiles } from './useProfiles'
 import { useSuites } from './useSuites'
 import { useUsers } from './useUsers'
+import { useCredentials } from './useCredentials'
 import { useTriggerForm } from './useTriggerForm'
 import { useTerminalView } from './useTerminalView'
 import { useFileTreeSelection } from './useFileTreeSelection'
@@ -29,6 +30,7 @@ interface DashboardCtx {
   schedules: ReturnType<typeof useSchedules>
   suites: ReturnType<typeof useSuites>
   users: ReturnType<typeof useUsers>
+  credentials: ReturnType<typeof useCredentials>
   form: ReturnType<typeof useTriggerForm>
   terminal: ReturnType<typeof useTerminalView>
   // File-tree selection
@@ -136,6 +138,7 @@ export function DashboardProvider({
   const schedules = useSchedules({ apiFetch, enabled: auth.isAuthenticated === true, lang })
   const suites = useSuites({ apiFetch, enabled: auth.isAuthenticated === true, lang })
   const users = useUsers({ apiFetch, currentUser: auth.currentUser })
+  const credentials = useCredentials({ apiFetch, enabled: auth.isAuthenticated === true })
   const form = useTriggerForm({ apiFetch })
   const terminal = useTerminalView()
   const terminalRef = useRef<HTMLDivElement>(null)
@@ -148,6 +151,7 @@ export function DashboardProvider({
   useEffect(() => registerReset(schedules._reset), [registerReset, schedules._reset])
   useEffect(() => registerReset(suites._reset), [registerReset, suites._reset])
   useEffect(() => registerReset(users._reset), [registerReset, users._reset])
+  useEffect(() => registerReset(credentials._reset), [registerReset, credentials._reset])
   useEffect(() => registerReset(form.resetForm), [registerReset, form.resetForm])
 
   // Effects
@@ -207,7 +211,7 @@ export function DashboardProvider({
     <Ctx.Provider
       value={{
         apiFetch, handleLogout, lang, setLang, theme, setTheme, t,
-        auth, runs, profiles, schedules, suites, users, form, terminal,
+        auth, runs, profiles, schedules, suites, users, credentials, form, terminal,
         selectedFiles, setSelectedFiles,
         selectedMarkers, setSelectedMarkers,
         expandedFolders, setExpandedFolders,

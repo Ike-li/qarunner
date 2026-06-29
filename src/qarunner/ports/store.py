@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from qarunner.models import Run, TestProfile, TestSchedule, TestSuite
+from qarunner.models import Credential, Run, TestProfile, TestSchedule, TestSuite
 
 
 @runtime_checkable
@@ -92,7 +92,33 @@ class SuiteStore(Protocol):
 
 
 @runtime_checkable
-class Store(RunStore, UserStore, ProfileStore, ScheduleStore, SuiteStore, Protocol):
+class CredentialStore(Protocol):
+    """Persistence for git credentials (P0-1). Secret ciphertext is stored and
+    read back only via the dedicated accessor — never on the metadata model."""
+
+    async def save_credential(
+        self, credential: Credential, encrypted_secret: str
+    ) -> None: ...
+
+    async def get_credential(self, credential_id: str) -> Credential | None: ...
+
+    async def get_credential_secret(self, credential_id: str) -> str | None: ...
+
+    async def list_credentials(self) -> list[Credential]: ...
+
+    async def delete_credential(self, credential_id: str) -> bool: ...
+
+
+@runtime_checkable
+class Store(
+    RunStore,
+    UserStore,
+    ProfileStore,
+    ScheduleStore,
+    SuiteStore,
+    CredentialStore,
+    Protocol,
+):
     """Full persistence surface used by the API container.
 
     Combines the focused stores and adds lifecycle and run-maintenance methods.

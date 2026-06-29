@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
+import stat
+import tempfile
+import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +19,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from qarunner.api.deps import get_current_admin, get_current_user
 from qarunner.api.schemas import (
     CloneTestSuiteRequest,
+    CredentialCreateRequest,
+    CredentialListResponse,
+    CredentialResponse,
     LinkTestSuiteRequest,
     LinkTestSuiteResponse,
     LockRunRequest,
@@ -29,14 +38,15 @@ from qarunner.api.schemas import (
     TestScheduleUpdateRequest,
     TokenResponse,
     UserCreateRequest,
-    UserUpdateRequest,
     UserListResponse,
     UserResponse,
+    UserUpdateRequest,
     profile_to_response,
     run_to_response,
     schedule_to_response,
 )
 from qarunner.core.auth import create_access_token, hash_password, verify_password
+from qarunner.core.credentials import CredentialCipher
 from qarunner.errors import (
     InvalidScheduleRequest,
     LoginLockedOut,
@@ -46,7 +56,15 @@ from qarunner.errors import (
     UnknownRunner,
     UnsafePath,
 )
-from qarunner.models import Run, RunRequest, RunStatus, TestSuite, User, UserRole
+from qarunner.models import (
+    Credential,
+    Run,
+    RunRequest,
+    RunStatus,
+    TestSuite,
+    User,
+    UserRole,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,18 +108,24 @@ _NPM_TIMEOUT = 600.0
 
 
 async def _run_cmd(
-    cmd: list[str], *, cwd: str | None = None, timeout: float
+    cmd: list[str],
+    *,
+    cwd: str | None = None,
+    timeout: float,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run *cmd* with a parametrised argv (no shell) under a timeout.
 
     Returns ``(returncode, stdout, stderr)``. The argv form (never a shell
     string) keeps URLs / refs / paths from being interpreted as commands. On
     timeout the process is killed and a non-zero code is synthesised so callers
-    handle it exactly like any other failure.
+    handle it exactly like any other failure. ``env`` (when given) replaces the
+    child environment — used to inject git credentials off the argv (P0-1).
     """
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
+        env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -115,10 +139,75 @@ async def _run_cmd(
 
 
 async def _run_git(
-    args: list[str], *, cwd: str | None = None, timeout: float = _GIT_TIMEOUT
+    args: list[str],
+    *,
+    cwd: str | None = None,
+    timeout: float = _GIT_TIMEOUT,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run ``git <args>`` via :func:`_run_cmd` (parametrised argv + timeout)."""
-    return await _run_cmd(["git", *args], cwd=cwd, timeout=timeout)
+    return await _run_cmd(["git", *args], cwd=cwd, timeout=timeout, env=env)
+
+
+# A throwaway script git invokes when it needs a username/password. It carries
+# NO secret itself — the token rides ``QARUNNER_GIT_PASS`` in the child env, so it
+# never lands in argv, the URL, or on disk in plaintext. Username is a constant
+# accepted by GitHub/GitLab for PAT auth.
+_GIT_ASKPASS_SCRIPT = (
+    "#!/bin/sh\n"
+    'case "$1" in\n'
+    'Username*) printf "%s" "$QARUNNER_GIT_USER" ;;\n'
+    '*) printf "%s" "$QARUNNER_GIT_PASS" ;;\n'
+    "esac\n"
+)
+
+
+@contextlib.asynccontextmanager
+async def _git_auth_env(secret: str | None) -> AsyncIterator[dict[str, str] | None]:
+    """Yield a child env that injects an HTTPS token via ``GIT_ASKPASS`` (P0-1).
+
+    Returns ``None`` (inherit the parent env) when there's no credential. The
+    askpass script is written to a private temp file, made executable, and
+    removed on exit; the token is passed only through the environment.
+    """
+    if secret is None:
+        yield None
+        return
+    fd, path = tempfile.mkstemp(prefix="qa-askpass-", suffix=".sh")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(_GIT_ASKPASS_SCRIPT)
+        os.chmod(path, stat.S_IRWXU)  # 0o700 — owner-only
+        yield {
+            **os.environ,
+            "GIT_ASKPASS": path,
+            "GIT_TERMINAL_PROMPT": "0",
+            "QARUNNER_GIT_USER": "x-access-token",
+            "QARUNNER_GIT_PASS": secret,
+        }
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+
+
+async def _resolve_credential_secret(
+    store: object, credential_ref: str | None, current_user: User, secret_key: str
+) -> str | None:
+    """Resolve a credential_ref to a decrypted secret for git auth (P0-1).
+
+    Owner-scoped: a non-admin can only use their own credentials. Returns None
+    when no ref was given; raises 400 for an unknown ref, 403 for someone else's.
+    """
+    if not credential_ref:
+        return None
+    cred = await store.get_credential(credential_ref)  # type: ignore[attr-defined]
+    if cred is None:
+        raise HTTPException(
+            status_code=400, detail=f"Credential '{credential_ref}' not found"
+        )
+    _require_owner_access(cred.created_by, current_user)
+    enc = await store.get_credential_secret(credential_ref)  # type: ignore[attr-defined]
+    return CredentialCipher(secret_key).decrypt(enc)
 
 
 def _scrub_paths(text: str, *paths: str) -> str:
@@ -407,6 +496,76 @@ async def update_user(
     )
 
 
+# ── Git Credentials (P0-1) ───────────────────────────────────────────────
+
+
+def _credential_to_response(cred: Credential) -> CredentialResponse:
+    return CredentialResponse(
+        id=cred.id,
+        name=cred.name,
+        type=cred.type,
+        created_by=cred.created_by,
+        created_at=cred.created_at.isoformat(),
+    )
+
+
+@router.post("/credentials", status_code=201, response_model=CredentialResponse)
+async def create_credential(
+    req: CredentialCreateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> CredentialResponse:
+    """Store a git credential. The secret is encrypted at rest (Fernet, key
+    derived from SECRET_KEY) and never returned — only injected into git auth."""
+    container = request.app.state.container
+    cipher = CredentialCipher(container.settings.secret_key)
+    cred = Credential(
+        id=uuid.uuid4().hex,
+        name=req.name,
+        type=req.type,
+        created_by=current_user.username,
+        created_at=datetime.now(UTC),
+    )
+    await container.store.save_credential(cred, cipher.encrypt(req.secret))
+    return _credential_to_response(cred)
+
+
+@router.get("/credentials", response_model=CredentialListResponse)
+async def list_credentials(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> CredentialListResponse:
+    """List credential metadata (no secrets). Non-admins see only their own."""
+    container = request.app.state.container
+    creds = await container.store.list_credentials()
+    visible = [
+        c
+        for c in creds
+        if current_user.role == UserRole.ADMIN or c.created_by == current_user.username
+    ]
+    return CredentialListResponse(
+        credentials=[_credential_to_response(c) for c in visible]
+    )
+
+
+@router.delete("/credentials/{credential_id}")
+async def delete_credential(
+    credential_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Delete a credential (owner/admin)."""
+    container = request.app.state.container
+    existing = await container.store.get_credential(credential_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=404, detail=f"Credential {credential_id} not found"
+        )
+    _require_owner_access(existing.created_by, current_user)
+    await container.store.delete_credential(credential_id)
+    return {"status": "success", "message": f"Credential {credential_id} deleted"}
+
+
 # ── Run Orchestration Endpoints (Secured with JWT) ───────────────────────
 
 
@@ -581,11 +740,17 @@ async def clone_test_suite(
     if suite_path.exists() or await store.get_suite(name) is not None:
         raise HTTPException(status_code=409, detail=f"Suite '{name}' already exists")
 
+    # Resolve auth before touching the network so an unknown/forbidden
+    # credential_ref fails fast without spawning git.
+    secret = await _resolve_credential_secret(
+        store, payload.credential_ref, current_user, cfg.secret_key
+    )
     args = ["clone", "--depth", "1"]
     if payload.ref:
         args += ["-b", payload.ref]
     args += ["--", payload.url, str(suite_path)]
-    rc, _out, err = await _run_git(args)
+    async with _git_auth_env(secret) as env:
+        rc, _out, err = await _run_git(args, env=env)
     if rc != 0:
         msg = _scrub_paths(err.strip(), str(suite_path), str(tests_root))
         raise HTTPException(status_code=502, detail=f"git clone failed: {msg}")
@@ -620,10 +785,12 @@ async def clone_test_suite(
         import shutil
 
         await asyncio.to_thread(shutil.rmtree, suite_path, ignore_errors=True)
+        # `from None` drops the original persistence error from the chain so its
+        # (possibly sensitive) detail never reaches the client.
         raise HTTPException(
             status_code=503,
             detail=f"Failed to register suite '{name}'; cloned files were rolled back.",
-        )
+        ) from None
     return LinkTestSuiteResponse(
         success=True,
         suite_name=name,
@@ -658,20 +825,32 @@ async def pull_test_suite(
     suite_path = _safe_suite_path(tests_root, suite_name)
     ref = suite.ref or "HEAD"
 
-    # ``--`` separates the refspec from options so a ref can never be parsed as a
-    # git flag (defence in depth; clone uses the same guard).
-    rc, _out, err = await _run_git(
-        ["fetch", "--depth", "1", "origin", "--", ref], cwd=str(suite_path)
-    )
-    if rc != 0:
-        msg = _scrub_paths(err.strip(), str(suite_path), str(tests_root))
-        raise HTTPException(status_code=502, detail=f"git fetch failed: {msg}")
-    rc2, _out2, err2 = await _run_git(
-        ["reset", "--hard", "FETCH_HEAD"], cwd=str(suite_path)
-    )
-    if rc2 != 0:
-        msg = _scrub_paths(err2.strip(), str(suite_path), str(tests_root))
-        raise HTTPException(status_code=502, detail=f"git reset failed: {msg}")
+    # Re-inject the credential recorded at clone time. Unlike clone this is
+    # lenient — a since-deleted credential just means an unauthenticated fetch
+    # (git fails on its own if the repo is private) rather than a hard error.
+    secret: str | None = None
+    if suite.credential_ref:
+        enc = await store.get_credential_secret(suite.credential_ref)
+        if enc is not None:
+            secret = CredentialCipher(cfg.secret_key).decrypt(enc)
+
+    async with _git_auth_env(secret) as env:
+        # ``--`` separates the refspec from options so a ref can never be parsed
+        # as a git flag (defence in depth; clone uses the same guard).
+        rc, _out, err = await _run_git(
+            ["fetch", "--depth", "1", "origin", "--", ref],
+            cwd=str(suite_path),
+            env=env,
+        )
+        if rc != 0:
+            msg = _scrub_paths(err.strip(), str(suite_path), str(tests_root))
+            raise HTTPException(status_code=502, detail=f"git fetch failed: {msg}")
+        rc2, _out2, err2 = await _run_git(
+            ["reset", "--hard", "FETCH_HEAD"], cwd=str(suite_path), env=env
+        )
+        if rc2 != 0:
+            msg = _scrub_paths(err2.strip(), str(suite_path), str(tests_root))
+            raise HTTPException(status_code=502, detail=f"git reset failed: {msg}")
 
     return LinkTestSuiteResponse(
         success=True,

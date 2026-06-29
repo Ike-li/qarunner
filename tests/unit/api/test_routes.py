@@ -20,6 +20,7 @@ from qarunner.core.profile_service import ProfileService
 from qarunner.core.schedule_service import ScheduleService
 from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
 from qarunner.models import (
+    Credential,
     ReportRef,
     Run,
     RunRequest,
@@ -63,12 +64,14 @@ class FakeStore:
     _suites: dict[str, TestSuite] = field(default_factory=dict)
     _schedules: dict[str, TestSchedule] = field(default_factory=dict)
     _users: dict[str, dict] = field(default_factory=dict)
+    _credentials: dict[str, tuple] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._profiles = {}
         self._suites = {}
         self._schedules = {}
         self._users = {}
+        self._credentials = {}
         from qarunner.core.auth import hash_password
         self._users["test_user"] = {
             "username": "test_user",
@@ -113,6 +116,25 @@ class FakeStore:
             return False
         self._users[username]["role"] = role
         return True
+
+    async def save_credential(
+        self, credential: object, encrypted_secret: str
+    ) -> None:
+        self._credentials[credential.id] = (credential, encrypted_secret)  # type: ignore[attr-defined]
+
+    async def get_credential(self, credential_id: str) -> object | None:
+        entry = self._credentials.get(credential_id)
+        return entry[0] if entry else None
+
+    async def get_credential_secret(self, credential_id: str) -> str | None:
+        entry = self._credentials.get(credential_id)
+        return entry[1] if entry else None
+
+    async def list_credentials(self) -> list:
+        return [c for c, _ in self._credentials.values()]
+
+    async def delete_credential(self, credential_id: str) -> bool:
+        return self._credentials.pop(credential_id, None) is not None
 
     async def save(self, run: Run) -> None:
         self._runs[run.id] = run
@@ -1515,6 +1537,128 @@ def test_update_user_requires_admin() -> None:
     assert resp.status_code == 403
 
 
+# ── Credentials: create / list / delete (P0-1) ───────────────────────────
+
+
+def _seed_credential(
+    container: Container, *, cred_id: str, owner: str, name: str = "c"
+) -> None:
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(
+        container.store.save_credential(
+            Credential(
+                id=cred_id,
+                name=name,
+                type="https_token",
+                created_by=owner,
+                created_at=NOW,
+            ),
+            "ENC-PLACEHOLDER",
+        )
+    )
+    loop.close()
+
+
+def test_create_credential_encrypts_secret_and_never_echoes_it() -> None:
+    from qarunner.core.credentials import CredentialCipher
+
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/credentials",
+            json={"name": "gh", "type": "https_token", "secret": "ghp_supersecret"},
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "gh"
+    assert body["type"] == "https_token"
+    assert body["created_by"] == "alice"
+    # The plaintext secret is never returned to the caller.
+    assert "secret" not in body
+    assert "ghp_supersecret" not in resp.text
+
+    cred_id = body["id"]
+    enc = container.store._credentials[cred_id][1]  # type: ignore[attr-defined]
+    # At rest it's ciphertext, but it decrypts back to the original.
+    assert "ghp_supersecret" not in enc
+    assert (
+        CredentialCipher(container.settings.secret_key).decrypt(enc)
+        == "ghp_supersecret"
+    )
+
+
+def test_create_credential_rejects_unknown_type() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/credentials",
+            json={"name": "x", "type": "ssh_key", "secret": "s"},
+        )
+    assert resp.status_code == 422
+
+
+def test_list_credentials_is_owner_scoped_and_secretless() -> None:
+    container = _make_container()
+    _seed_credential(container, cred_id="a", owner="alice")
+    _seed_credential(container, cred_id="b", owner="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/credentials")
+    assert resp.status_code == 200
+    items = resp.json()["credentials"]
+    assert {c["id"] for c in items} == {"a"}  # only alice's
+    assert all("secret" not in c for c in items)
+
+
+def test_list_credentials_admin_sees_all() -> None:
+    container = _make_container()
+    _seed_credential(container, cred_id="a", owner="alice")
+    _seed_credential(container, cred_id="b", owner="bob")
+    app = create_app(container)
+    _override_user(app, "admin", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.get("/credentials")
+    assert {c["id"] for c in resp.json()["credentials"]} == {"a", "b"}
+
+
+def test_delete_credential_owner_removes_it() -> None:
+    container = _make_container()
+    _seed_credential(container, cred_id="a", owner="alice")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/credentials/a")
+    assert resp.status_code == 200
+    assert "a" not in container.store._credentials  # type: ignore[attr-defined]
+
+
+def test_delete_credential_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _seed_credential(container, cred_id="a", owner="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/credentials/a")
+    assert resp.status_code == 403
+    assert "a" in container.store._credentials  # type: ignore[attr-defined]
+
+
+def test_delete_credential_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/credentials/ghost")
+    assert resp.status_code == 404
+
+
 # ── SEC-5: login brute-force protection ─────────────────────────────────
 
 
@@ -2725,6 +2869,9 @@ def test_clone_success_records_git_suite(
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
+    _seed_encrypted_credential(
+        container, cred_id="cred-1", owner="test_user", secret="ghp_x"
+    )
     app = create_app(container)
     mock = _patch_git(monkeypatch, _git_proc(0))
 
@@ -2804,6 +2951,165 @@ def test_clone_save_failure_rolls_back_cloned_dir(
     assert not (tests_root / "orphan").exists()
     # And nothing half-registered in the store.
     assert "orphan" not in container.store._suites  # type: ignore[attr-defined]
+
+
+def _seed_encrypted_credential(
+    container: Container, *, cred_id: str, owner: str, secret: str
+) -> None:
+    import asyncio
+
+    from qarunner.core.credentials import CredentialCipher
+
+    cipher = CredentialCipher(container.settings.secret_key)
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(
+        container.store.save_credential(
+            Credential(
+                id=cred_id,
+                name="gh",
+                type="https_token",
+                created_by=owner,
+                created_at=NOW,
+            ),
+            cipher.encrypt(secret),
+        )
+    )
+    loop.close()
+
+
+def test_clone_with_credential_injects_token_off_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-1: the token reaches git via a GIT_ASKPASS env, never via argv/URL."""
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _seed_encrypted_credential(
+        container, cred_id="cred-1", owner="test_user", secret="ghp_secrettoken"
+    )
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0))
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={
+                "url": "https://example.com/org/repo.git",
+                "name": "s",
+                "ref": "v1.0",
+                "credential_ref": "cred-1",
+            },
+        )
+    assert resp.status_code == 200
+    # The token must never appear in the git argv.
+    argv = mock.call_args.args
+    assert all("ghp_secrettoken" not in str(a) for a in argv)
+    # It rides the env for a throwaway askpass helper; interactive prompts off.
+    env = mock.call_args.kwargs.get("env") or {}
+    assert env.get("GIT_TERMINAL_PROMPT") == "0"
+    assert env.get("QARUNNER_GIT_PASS") == "ghp_secrettoken"
+    assert "GIT_ASKPASS" in env
+
+
+def test_clone_unknown_credential_ref_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    app = create_app(container)
+    _forbid_git(monkeypatch)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={
+                "url": "https://example.com/org/repo.git",
+                "name": "s",
+                "credential_ref": "ghost",
+            },
+        )
+    assert resp.status_code == 400
+
+
+def test_clone_with_others_credential_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _seed_encrypted_credential(
+        container, cred_id="cred-bob", owner="bob", secret="ghp_bob"
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    _forbid_git(monkeypatch)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/tests/clone",
+            json={
+                "url": "https://example.com/org/repo.git",
+                "name": "s",
+                "credential_ref": "cred-bob",
+            },
+        )
+    assert resp.status_code == 403
+
+
+def test_pull_injects_stored_credential_off_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    (tests_root / "s").mkdir(parents=True)
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _seed_encrypted_credential(
+        container, cred_id="cred-1", owner="test_user", secret="ghp_pulltoken"
+    )
+    _save_suite_in_store(
+        container.store,
+        name="s",
+        source="git",
+        repo_url="https://example.com/org/repo.git",
+        ref="main",
+        credential_ref="cred-1",
+    )
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0))  # fetch + reset
+    with TestClient(app) as client:
+        resp = client.post("/tests/s/pull")
+    assert resp.status_code == 200
+    fetch_call = mock.call_args_list[0]
+    assert all("ghp_pulltoken" not in str(a) for a in fetch_call.args)
+    env = fetch_call.kwargs.get("env") or {}
+    assert env.get("QARUNNER_GIT_PASS") == "ghp_pulltoken"
+
+
+def test_pull_with_deleted_credential_falls_back_unauthenticated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A suite whose credential was since deleted still pulls — just without auth
+    (covers the lenient ``enc is None`` branch)."""
+    tests_root = tmp_path / "external_tests"
+    (tests_root / "s").mkdir(parents=True)
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(
+        container.store,
+        name="s",
+        source="git",
+        repo_url="https://example.com/org/repo.git",
+        ref="main",
+        credential_ref="gone",
+    )
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0))
+    with TestClient(app) as client:
+        resp = client.post("/tests/s/pull")
+    assert resp.status_code == 200
+    # No resolvable credential → no auth env injected (parent env inherited).
+    assert mock.call_args_list[0].kwargs.get("env") is None
 
 
 def test_clone_records_default_branch(

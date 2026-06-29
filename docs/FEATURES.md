@@ -21,14 +21,16 @@
 把测试代码变成平台可运行的「套件」,四种来源 / 操作:
 
 - **Link 本地目录** — 软链宿主上现有的项目目录为套件。
-- **Clone Git 仓库** — 浅克隆(`--depth 1`)指定分支 / ref。
-- **Pull 更新** — 对 git 套件拉取最新。
+- **Clone Git 仓库** — 浅克隆(`--depth 1`)指定分支 / ref;**私有仓库**可绑定凭证认证。
+- **Pull 更新** — 对 git 套件拉取最新(复用 clone 时绑定的凭证)。
 - **Prepare 依赖** — 对含 `package.json` 的套件跑 `npm ci`(playwright 套件常用)。
 
 辅助:**文件树浏览**(挑选要跑的测试文件)、**pytest marker 解析**(按标记过滤用例)、删除套件。
 
+- **凭证管理(私有仓库认证)** — `POST/GET/DELETE /credentials` 存 HTTPS token:secret **加密落库**(Fernet,密钥由 `SECRET_KEY` 经 HKDF 派生)、**只写不回读**;clone/pull 时 token 经 **`GIT_ASKPASS` env 注入**,绝不进 argv / URL / 日志;owner-scope(非 admin 只能用自己的凭证)。
+
 安全约束:Git URL **白名单**(仅 `https://`、`git@`,挡 `file://` / `http://` / 命令注入,防 SSRF 与读本地文件);套件名**路径穿越防护**(禁 `/`、`\`、前导 `.`)。归属:已注册套件按 owner,磁盘存在但未注册者仅 admin 可删。
-→ `src/qarunner/api/routes.py`(link/clone/pull/prepare)、`core/paths.py`
+→ `src/qarunner/api/routes.py`(link/clone/pull/prepare)、`core/paths.py`、`core/credentials.py`(凭证加密)
 
 ## 2. 测试执行引擎（平台核心）
 
@@ -84,7 +86,7 @@
 ## 7. 两种使用界面
 
 - **Web 控制台**(React 18 + Vite + Semi UI 单页应用):登录;仪表板 4 张统计卡片(总数 / 成功率 / 失败 / 活跃队列);左栏套件 + Profile 管理;右栏运行表格(按状态 / 引擎 / 归属 / 手动·调度多维过滤 + 搜索);详情抽屉(日志 + 报告);触发弹窗(文件树 + marker + env 编辑);调度 / 用户管理弹窗。工程特性:中英 **i18n**、**明暗主题**、**无障碍 a11y**(焦点管理 + 键盘激活)、SSE 实时更新 + 轮询。
-- **REST API**(32 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
+- **REST API**(42 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
 → `frontend/src/components/*`、`frontend/src/hooks/*`
 
 ## 8. 部署与运维
