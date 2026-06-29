@@ -181,6 +181,26 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     [lang, scheduleProfile, schedules, apiFetch, fetchSchedules],
   )
 
+  // ── manual trigger ───────────────────────────────────────────────────────
+
+  const handleTriggerSchedule = useCallback(
+    async (scheduleId: string): Promise<boolean> => {
+      try {
+        const resp = await apiFetch(`/schedules/${scheduleId}/trigger`, {
+          method: 'POST',
+        })
+        if (resp.ok) return true
+        const err = await resp.json()
+        alert(err.detail || 'Failed to trigger schedule.')
+        return false
+      } catch (err) {
+        console.error('Error triggering schedule:', err)
+        return false
+      }
+    },
+    [apiFetch],
+  )
+
   return {
     schedules,
     isScheduleModalOpen,
@@ -200,6 +220,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     handleOpenScheduleModal,
     handleSaveSchedule,
     handleDeleteSchedule,
+    handleTriggerSchedule,
     _reset: () => {
       setSchedules([])
       setIsScheduleModalOpen(false)

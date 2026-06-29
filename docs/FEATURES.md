@@ -67,6 +67,7 @@
 
 - **cron + 时区** — 标准 cron 表达式,每个调度独立 IANA 时区。
 - **下次运行预览** — 创建前预览未来 5 次触发时间。
+- **手动立即触发** — `POST /schedules/{id}/trigger`(owner)按调度的 profile 立刻建一次 run,不等 cron;不走去重、run 归属触发者(非 `system:schedule`),与 cron 自动触发共用同一套 profile→run 映射。
 - **多副本安全** — 数据库级 `claim_schedule_run()` 原子竞选,保证每个触发点只有一个副本真正建 run(防重复触发);启动**崩溃恢复**把上次遗留的 queued/running 标 failed(单实例前提)。
 → `core/cron.py`、`adapters/apscheduler_schedule.py`、`core/schedule_service.py`
 

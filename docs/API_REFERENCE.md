@@ -295,6 +295,11 @@
 ### `DELETE /schedules/{schedule_id}` — owner
 - **成功**：`200` `{"status": "success", "message": "..."}`。 · **错误**：`403` · `404`。
 
+### `POST /schedules/{schedule_id}/trigger` — owner
+立即按该调度的 profile 触发一次 run（不走 cron 去重，run 归属触发者而非 `system:schedule`）。无请求体。
+- **成功**：`202` `RunResponse`。
+- **错误**：`404`（调度不存在）· `403`（他人）· `409`（调度的 profile 已不存在）。
+
 ---
 
 ## 八、数据模型（响应字段）

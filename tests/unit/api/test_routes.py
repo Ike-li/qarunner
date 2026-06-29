@@ -2195,6 +2195,93 @@ def test_preview_schedule_applies_dst_timezone() -> None:
             assert later > earlier
 
 
+# ── POST /schedules/{id}/trigger (P2-6) ──────────────────────────────────
+
+
+def _seed_schedule_with_profile(
+    container: Container,
+    *,
+    schedule_owner: str = "test_user",
+    profile_id: str | None = "profile-x",
+    schedule_id: str = "sched-x",
+) -> None:
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    if profile_id is not None:
+        loop.run_until_complete(
+            container.store.save_profile(
+                TestProfile(
+                    id=profile_id,
+                    name="P",
+                    tests_path="tests/",
+                    created_by=schedule_owner,
+                    created_at=NOW,
+                )
+            )
+        )
+    loop.run_until_complete(
+        container.store.save_schedule(
+            TestSchedule(
+                id=schedule_id,
+                name="S",
+                profile_id=profile_id or "ghost-profile",
+                cron_expression="0 2 * * *",
+                created_by=schedule_owner,
+                created_at=NOW,
+            )
+        )
+    )
+    loop.close()
+
+
+def test_trigger_schedule_owner_creates_run() -> None:
+    container = _make_container()
+    _seed_schedule_with_profile(container)
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    # The run is owned by the user who triggered it, not "system:schedule".
+    assert body["created_by"] == "test_user"
+    assert any(
+        r.created_by == "test_user"
+        for r in container.store._runs.values()  # type: ignore[attr-defined]
+    )
+
+
+def test_trigger_schedule_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _seed_schedule_with_profile(container, schedule_owner="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 403
+
+
+def test_trigger_schedule_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/ghost/trigger")
+    assert resp.status_code == 404
+
+
+def test_trigger_schedule_missing_profile_409() -> None:
+    container = _make_container()
+    _seed_schedule_with_profile(container, profile_id=None)
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 409
+
+
 def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _make_container()
 

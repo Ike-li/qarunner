@@ -77,19 +77,8 @@ class ApschedulerSchedulePort:
             profile.name,
         )
 
-        # Map profile to run request
-        run_req = RunRequest(
-            tests_path=profile.tests_path,
-            runner=profile.runner,
-            args=[],
-            allure=True,
-            timeout=profile.timeout,
-            executor_mode=profile.executor_mode,
-            selected_files=profile.selected_files,
-            selected_markers=profile.selected_markers,
-            extra_args=profile.extra_args,
-            env=profile.env,
-        )
+        # Map profile to run request (shared with the manual trigger, P2-6).
+        run_req = RunRequest.from_profile(profile)
 
         try:
             # Create and run

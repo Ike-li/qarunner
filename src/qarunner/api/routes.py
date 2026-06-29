@@ -1462,3 +1462,38 @@ async def delete_schedule(
     except ScheduleNotFound:
         raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found") from None
     return {"status": "success", "message": f"Schedule {schedule_id} deleted"}
+
+
+@router.post(
+    "/schedules/{schedule_id}/trigger", status_code=202, response_model=RunResponse
+)
+async def trigger_schedule(
+    schedule_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunResponse:
+    """Fire a schedule's profile as a run right now (owner/admin).
+
+    Unlike the cron path this skips ``claim_schedule_run`` (there's no fire-time
+    to deduplicate — a manual press should always run) and attributes the run to
+    the user who pressed it, not ``system:schedule``, so it lands in their own
+    run list.
+    """
+    container = request.app.state.container
+    store = container.store
+    schedule = await store.get_schedule(schedule_id)
+    if schedule is None:
+        raise HTTPException(
+            status_code=404, detail=f"Schedule {schedule_id} not found"
+        )
+    _require_owner_access(schedule.created_by, current_user)
+    profile = await store.get_profile(schedule.profile_id)
+    if profile is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Schedule's profile '{schedule.profile_id}' no longer exists.",
+        )
+    run = await container.orchestrator.create(
+        RunRequest.from_profile(profile), created_by=current_user.username
+    )
+    return run_to_response(run)

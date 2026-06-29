@@ -1,4 +1,4 @@
-import { Calendar, Clock } from 'lucide-react'
+import { Calendar, Clock, Play } from 'lucide-react'
 import { Modal, Banner, Input, Select, Checkbox, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
@@ -97,6 +97,26 @@ export function ScheduleModal() {
               }}
             >
               {d.lang === 'zh' ? '删除调度' : 'Delete'}
+            </Button>
+          )}
+          {s.schedules.find((sc) => sc.profile_id === s.scheduleProfile?.id) && (
+            <Button
+              theme="light"
+              icon={<Play size={14} />}
+              onClick={async () => {
+                const found = s.schedules.find(
+                  (sc) => sc.profile_id === s.scheduleProfile?.id,
+                )
+                if (!found) return
+                const ok = await s.handleTriggerSchedule(found.id)
+                if (ok) {
+                  d.runs.fetchRuns()
+                  s.setIsScheduleModalOpen(false)
+                  alert(d.lang === 'zh' ? '已触发一次运行' : 'Run triggered')
+                }
+              }}
+            >
+              {d.lang === 'zh' ? '立即触发' : 'Run Now'}
             </Button>
           )}
           <Button type="primary" theme="solid" onClick={s.handleSaveSchedule}>

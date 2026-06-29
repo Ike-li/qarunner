@@ -59,6 +59,26 @@ class RunRequest(BaseModel):
     extra_args: str = ""
     env: dict[str, str] = Field(default_factory=dict)
 
+    @classmethod
+    def from_profile(cls, profile: "TestProfile") -> "RunRequest":
+        """Build a run request from a saved profile.
+
+        Single source of truth for the profile→run mapping shared by the cron
+        scheduler and the manual schedule trigger (P2-6), so adding a profile
+        field can't silently diverge between the two paths.
+        """
+        return cls(
+            tests_path=profile.tests_path,
+            runner=profile.runner,
+            args=[],
+            allure=True,
+            timeout=profile.timeout,
+            executor_mode=profile.executor_mode,  # type: ignore[arg-type]
+            selected_files=profile.selected_files,
+            selected_markers=profile.selected_markers,
+            extra_args=profile.extra_args,
+            env=profile.env,
+        )
 
 
 class TestProfile(BaseModel):
