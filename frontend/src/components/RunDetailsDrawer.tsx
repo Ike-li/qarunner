@@ -93,38 +93,59 @@ export function RunDetailsDrawer() {
           )}
           {d.runs.selectedRun &&
             d.runs.selectedRun.status !== 'running' &&
-            d.runs.selectedRun.status !== 'queued' &&
-            !d.runs.selectedRun.locked && (
-            <button
-              type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    d.lang === 'zh'
-                      ? '确定删除此运行及其产物吗？此操作不可撤销。'
-                      : 'Delete this run and its artifacts? This cannot be undone.',
-                  )
-                ) {
-                  d.runs.handleDeleteRun(d.runs.selectedRun!.id)
-                }
-              }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.35rem 0.75rem',
-                marginRight: '2.5rem',
-                cursor: 'pointer',
-                background: 'transparent',
-                color: 'var(--semi-color-danger)',
-                border: '1px solid var(--semi-color-danger)',
-                borderRadius: '4px',
-                fontSize: '0.85rem',
-              }}
-            >
-              <Trash2 size={15} />
-              {d.lang === 'zh' ? '删除运行' : 'Delete Run'}
-            </button>
+            d.runs.selectedRun.status !== 'queued' && (
+            <div style={{ display: 'flex', gap: '0.5rem', marginRight: '2.5rem' }}>
+              <button
+                type="button"
+                onClick={() => d.runs.handleRerunRun(d.runs.selectedRun!.id)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.35rem 0.75rem',
+                  cursor: 'pointer',
+                  background: 'transparent',
+                  color: 'var(--semi-color-primary)',
+                  border: '1px solid var(--semi-color-primary)',
+                  borderRadius: '4px',
+                  fontSize: '0.85rem',
+                }}
+              >
+                <RotateCw size={15} />
+                {d.lang === 'zh' ? '重新运行' : 'Re-run'}
+              </button>
+              {!d.runs.selectedRun.locked && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        d.lang === 'zh'
+                          ? '确定删除此运行及其产物吗？此操作不可撤销。'
+                          : 'Delete this run and its artifacts? This cannot be undone.',
+                      )
+                    ) {
+                      d.runs.handleDeleteRun(d.runs.selectedRun!.id)
+                    }
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.35rem 0.75rem',
+                    cursor: 'pointer',
+                    background: 'transparent',
+                    color: 'var(--semi-color-danger)',
+                    border: '1px solid var(--semi-color-danger)',
+                    borderRadius: '4px',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  <Trash2 size={15} />
+                  {d.lang === 'zh' ? '删除运行' : 'Delete Run'}
+                </button>
+              )}
+            </div>
           )}
         </div>
       }

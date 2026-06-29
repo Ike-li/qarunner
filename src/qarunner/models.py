@@ -80,6 +80,24 @@ class RunRequest(BaseModel):
             env=profile.env,
         )
 
+    @classmethod
+    def from_run(cls, run: "Run") -> "RunRequest":
+        """Rebuild a run request from a finished run, to re-run it (P2-7).
+
+        ``run.args`` already holds the fully-compiled argv (markers / selected
+        files / extra args were folded in at create time), so the selective
+        fields stay empty — recompiling the stored args is idempotent.
+        """
+        return cls(
+            tests_path=run.tests_path,
+            runner=run.runner,
+            args=list(run.args),
+            allure=run.allure_enabled,
+            timeout=run.timeout,
+            executor_mode=run.executor_mode,  # type: ignore[arg-type]
+            env=run.env,
+        )
+
 
 class TestProfile(BaseModel):
     """Execution profile template."""

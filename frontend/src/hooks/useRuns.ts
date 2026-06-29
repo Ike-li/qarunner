@@ -143,6 +143,25 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     [apiFetch],
   )
 
+  // ── re-run with the same parameters ────────────────────────────────────
+
+  const handleRerunRun = useCallback(
+    async (runId: string) => {
+      try {
+        const resp = await apiFetch(`/runs/${runId}/rerun`, { method: 'POST' })
+        if (resp.ok) {
+          await fetchRuns()
+        } else {
+          const err = await resp.json()
+          alert(err.detail || 'Failed to re-run.')
+        }
+      } catch (err) {
+        console.error('Error re-running:', err)
+      }
+    },
+    [apiFetch, fetchRuns],
+  )
+
   // ── SSE streaming ──────────────────────────────────────────────────────
 
   // Snapshot refs so the SSE effect doesn't depend on frequently-changing state.
@@ -340,6 +359,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     handleToggleLock,
     handleCancelRun,
     handleDeleteRun,
+    handleRerunRun,
     // derived
     totalRuns,
     completedRuns,

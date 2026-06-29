@@ -50,6 +50,7 @@
 
 - **Profile（执行配置档）** — 把一组运行配置(套件 / runner / 选中文件 / marker / 参数 / env / executor / 超时)存下来复用,增删改全支持。
 - **触发运行** — 即席填表触发,或在 Profile 上**一键触发**。
+- **重跑** — `POST /runs/{id}/rerun`(owner)用原 run 的参数建一个新 run(原 run 不动),省去重填表单。
 - **异步执行** — `POST /runs` 立即受理(`202`),后台运行;状态机 `queued → running → completed / failed / timeout / cancelled`;**运行中的 run 可主动取消**(`POST /runs/{id}/cancel` 终止子进程 / 容器、释放并发槽);调用方轮询或订阅日志流取结果。
 → `core/orchestrator.py`、`core/profile_service.py`
 

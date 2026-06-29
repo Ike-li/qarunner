@@ -253,6 +253,11 @@
 - **成功**：`200` `{"status":"success","message":...}`。
 - **错误**：`404`（不存在）· `403`（他人）· `409`（run 被锁定，或仍在 queued/running——需先解锁 / 取消）。
 
+### `POST /runs/{run_id}/rerun` — owner
+用原 run 的参数（runner / tests_path / 已编译 args / executor / timeout / env）建一个**新** run，原 run 不动；新 run 归属触发者。无请求体。
+- **成功**：`202` `RunResponse`（新 run）。
+- **错误**：`404`（原 run 不存在）· `403`（他人）。
+
 ### `POST /runs/cleanup` — admin
 - 查询参数：`retention_days`（默认 `30`，约束 `>=1`，否则 422）。
 - 删除超期且未锁定 run 的物理产物（元数据保留）。

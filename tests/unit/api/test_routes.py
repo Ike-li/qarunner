@@ -844,6 +844,83 @@ def test_delete_run_active_returns_409() -> None:
     assert resp.status_code == 409
 
 
+# ── POST /runs/{run_id}/rerun (P2-7) ─────────────────────────────────────
+
+
+def test_rerun_request_from_run_preserves_parameters() -> None:
+    """from_run carries every executable parameter so a re-run is faithful;
+    selective fields stay empty because args already holds the compiled argv."""
+    run = Run(
+        id="x",
+        status=RunStatus.COMPLETED,
+        runner="playwright",
+        created_by="alice",
+        tests_path="suite/",
+        args=["--workers", "2"],
+        allure_enabled=False,
+        timeout=600,
+        executor_mode="docker",
+        env={"BASE_URL": "https://x"},
+        created_at=NOW,
+    )
+    req = RunRequest.from_run(run)
+    assert req.tests_path == "suite/"
+    assert req.runner == "playwright"
+    assert req.args == ["--workers", "2"]
+    assert req.allure is False
+    assert req.timeout == 600
+    assert req.executor_mode == "docker"
+    assert req.env == {"BASE_URL": "https://x"}
+    assert req.selected_files == [] and req.selected_markers == []
+
+
+def test_rerun_creates_new_run_owned_by_caller() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store,
+        id="orig",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        tests_path="suite/",
+        args=["-m", "smoke"],
+        executor_mode="docker",
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/orig/rerun")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["id"] != "orig"
+    assert body["created_by"] == "alice"
+    new_run = container.store._runs[body["id"]]  # type: ignore[attr-defined]
+    assert new_run.args == ["-m", "smoke"]
+    assert new_run.tests_path == "suite/"
+    assert new_run.executor_mode == "docker"
+
+
+def test_rerun_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="orig", created_by="bob", status=RunStatus.COMPLETED
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/orig/rerun")
+    assert resp.status_code == 403
+
+
+def test_rerun_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/ghost/rerun")
+    assert resp.status_code == 404
+
+
 def test_get_run_forbidden_for_non_owner() -> None:
     container = _make_container()
     _make_run_in_store(container.store, id="r1", created_by="bob")

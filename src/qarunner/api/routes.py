@@ -1317,6 +1317,30 @@ async def delete_run(
     return {"status": "success", "message": f"Run {run_id} deleted"}
 
 
+@router.post("/runs/{run_id}/rerun", status_code=202, response_model=RunResponse)
+async def rerun_run(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunResponse:
+    """Re-run a run with the same parameters as a brand-new run (owner/admin).
+
+    The original is left untouched; the new run is attributed to the caller, so a
+    re-run of a scheduled run lands in the caller's own list rather than under
+    ``system:schedule``.
+    """
+    container = request.app.state.container
+    try:
+        original = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(original, current_user)
+    new_run = await container.orchestrator.create(
+        RunRequest.from_run(original), created_by=current_user.username
+    )
+    return run_to_response(new_run)
+
+
 @router.post("/runs/cleanup")
 async def cleanup_runs(
     request: Request,
