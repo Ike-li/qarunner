@@ -7,7 +7,7 @@ export const translations = {
   en: {
     platformTitle: "qarunner",
     platformSubtitle: "QA TEST ORCHESTRATION",
-    platformSubtitleFull: "QA TEST ORCHESTRATION PLATFORM",
+    platformSubtitleFull: "SANDBOXED TEST RUNNER · SCHEDULER · REPORTS",
 
     // Auth & Login
     username: "Username",
@@ -167,7 +167,7 @@ export const translations = {
   zh: {
     platformTitle: "qarunner",
     platformSubtitle: "QA 测试编排系统",
-    platformSubtitleFull: "QA 自动化测试编排平台",
+    platformSubtitleFull: "沙箱化测试执行 · 调度 · 报告",
 
     // Auth & Login
     username: "用户名",
