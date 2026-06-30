@@ -238,6 +238,17 @@ class RegressionDiff(BaseModel):
     removed_cases: list[TestCaseResult] = Field(default_factory=list)
 
 
+class TrendPoint(BaseModel):
+    """One point in a suite's cross-run pass-rate trend (stage 1)."""
+
+    run_id: str
+    created_at: datetime
+    pass_rate: float
+    total: int
+    passed: int
+    failed: int
+
+
 class ReportRef(BaseModel):
     """Reference to allure report artifacts."""
 

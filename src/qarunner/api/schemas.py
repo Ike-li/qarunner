@@ -16,6 +16,7 @@ from qarunner.models import (
     TestProfile,
     TestSchedule,
     TestSummary,
+    TrendPoint,
     UserRole,
 )
 
@@ -115,6 +116,13 @@ class RunDiffResponse(BaseModel):
 
     baseline: RunDiffBaselineInfo | None = None
     diff: RegressionDiff = Field(default_factory=RegressionDiff)
+
+
+class RunTrendResponse(BaseModel):
+    """A suite's cross-run pass-rate trend (stage 1), oldest-first."""
+
+    tests_path: str
+    points: list[TrendPoint] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):

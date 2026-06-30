@@ -30,6 +30,7 @@ from qarunner.api.schemas import (
     RunDiffResponse,
     RunListResponse,
     RunResponse,
+    RunTrendResponse,
     SuiteInfoResponse,
     TestProfileCreateRequest,
     TestProfileResponse,
@@ -47,7 +48,7 @@ from qarunner.api.schemas import (
     run_to_response,
     schedule_to_response,
 )
-from qarunner.core import regression
+from qarunner.core import regression, trend
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.core.credentials import CredentialCipher
 from qarunner.errors import (
@@ -1219,6 +1220,27 @@ async def list_runs(
     if current_user.role != UserRole.ADMIN:
         runs = [r for r in runs if r.created_by == current_user.username]
     return RunListResponse(runs=[run_to_response(r) for r in runs])
+
+
+@router.get("/runs/trend", response_model=RunTrendResponse)
+async def get_runs_trend(
+    request: Request,
+    tests_path: str,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+) -> RunTrendResponse:
+    """Pass-rate trend for a suite across its runs (cross-run stage 1).
+
+    Declared before ``/runs/{run_id}`` so the literal ``trend`` segment isn't
+    captured as a run id. Owner-scoped like GET /runs (non-admins see only their
+    own runs); points are COMPLETED runs carrying a summary, oldest-first.
+    """
+    container = request.app.state.container
+    runs = await container.store.list()
+    if current_user.role != UserRole.ADMIN:
+        runs = [r for r in runs if r.created_by == current_user.username]
+    points = trend.trend_points(runs, tests_path, limit)
+    return RunTrendResponse(tests_path=tests_path, points=points)
 
 
 _RUN_LOG_MAX_BYTES = 256 * 1024

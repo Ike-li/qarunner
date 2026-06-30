@@ -29,6 +29,7 @@ from qarunner.models import (
     TestProfile,
     TestSchedule,
     TestSuite,
+    TestSummary,
     User,
     UserRole,
 )
@@ -788,6 +789,86 @@ def test_run_diff_nonexistent_404() -> None:
     with TestClient(app) as client:
         resp = client.get("/runs/ghost/diff")
     assert resp.status_code == 404
+
+
+# ── GET /runs/trend (cross-run stage 1) ─────────────────────────────────
+
+
+def test_runs_trend_ascending_points_filtered_by_suite() -> None:
+    container = _make_container()
+    summ = TestSummary(total=10, passed=7, failed=3, skipped=0, error=0, duration_ms=1)
+    _make_run_in_store(
+        container.store, id="r2", created_by="alice", tests_path="suite_a",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5), summary=summ,
+    )
+    _make_run_in_store(
+        container.store, id="r1", created_by="alice", tests_path="suite_a",
+        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+    )
+    # excluded: other suite, and a non-COMPLETED run of suite_a
+    _make_run_in_store(
+        container.store, id="other", created_by="alice", tests_path="suite_b",
+        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+    )
+    _make_run_in_store(
+        container.store, id="failed", created_by="alice", tests_path="suite_a",
+        status=RunStatus.FAILED, created_at=NOW + timedelta(minutes=9),
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=suite_a")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tests_path"] == "suite_a"
+    assert [p["run_id"] for p in body["points"]] == ["r1", "r2"]  # oldest-first
+    assert body["points"][0]["pass_rate"] == 0.7
+
+
+def test_runs_trend_owner_scoped_for_non_admin() -> None:
+    container = _make_container()
+    summ = TestSummary(total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=1)
+    _make_run_in_store(
+        container.store, id="mine", created_by="alice", tests_path="s",
+        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+    )
+    _make_run_in_store(
+        container.store, id="theirs", created_by="bob", tests_path="s",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1), summary=summ,
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=s")
+    assert [p["run_id"] for p in resp.json()["points"]] == ["mine"]  # bob's excluded
+
+
+def test_runs_trend_admin_sees_all_owners() -> None:
+    container = _make_container()
+    summ = TestSummary(total=1, passed=1, failed=0, skipped=0, error=0, duration_ms=1)
+    _make_run_in_store(
+        container.store, id="a", created_by="alice", tests_path="s",
+        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+    )
+    _make_run_in_store(
+        container.store, id="b", created_by="bob", tests_path="s",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1), summary=summ,
+    )
+    app = create_app(container)
+    _override_user(app, "admin", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=s")
+    assert [p["run_id"] for p in resp.json()["points"]] == ["a", "b"]  # both owners
+
+
+def test_runs_trend_empty_for_unknown_suite() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=nope")
+    assert resp.status_code == 200
+    assert resp.json()["points"] == []
 
 
 def test_run_diff_forbidden_for_non_owner() -> None:
