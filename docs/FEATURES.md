@@ -68,7 +68,19 @@
 - **产物清理** — 按保留天数删除过期且未锁定 run 的物理产物(元数据保留,admin)。
 → `core/allure.py`、`core/junit.py`、`api/routes.py`
 
-## 5. 定时调度
+## 5. 跨次对比（回归视图）
+
+把孤立的单次结果连成时间线——回归工具的灵魂,也是 qarunner 区别于「跑一次看一次」runner 的核心。四个能力共享一份**持久化的 per-case 结果**(每个用例的 `suite/name/status/duration/message` 逐条落库,而非只存汇总):
+
+- **基线 diff** — `GET /runs/{id}/diff`:把本次 run 与**同执行范围**(同套件 + runner + 参数)的最近一次 `COMPLETED` run 比对,分五桶——**新增失败 / 已修复 / 持续失败 / 新增用例 / 消失用例**。范围不可比则不强行 diff(返回空基线),不把没跑的用例误判成「消失」。
+- **通过率趋势** — `GET /runs/trend`:某套件历次 `COMPLETED` run 的通过率随时间曲线(升序);前端在仪表板手绘 SVG 折线(零图表依赖)。
+- **Flaky 检测** — 单用例最近 N 次结果在 `pass ↔ fail/error` 间反复翻转(**≥2 次**)即标记**不稳定**,区别于单次回归 / 单次修复(单调变化不算 flaky)。阈值为保守占位,待真实数据校准。
+- **用例级历史** — `GET /cases/history`:点开 diff 里任一用例,懒加载它的跨 run 结果序列(状态格条 + flaky 徽章)。
+
+owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run**(diff 的基线候选亦然,不泄露他人 run),admin 跨全部。纯判定逻辑(diff 分桶 / 基线选择 / flaky 翻转)均为 `core/` 下**零 DB 依赖的纯函数**,可独立单测。
+→ `core/regression.py`(diff + 基线)、`core/trend.py`、`core/flaky.py`、`adapters/sqlite_store.py`(`run_test_cases` 表 + `get_case_history`)、`frontend/src/components/{RunDetailsDrawer,SuiteTrend}.tsx`
+
+## 6. 定时调度
 
 - **cron + 时区** — 标准 cron 表达式,每个调度独立 IANA 时区。
 - **下次运行预览** — 创建前预览未来 5 次触发时间。
@@ -76,7 +88,7 @@
 - **多副本安全** — 数据库级 `claim_schedule_run()` 原子竞选,保证每个触发点只有一个副本真正建 run(防重复触发);启动**崩溃恢复**把上次遗留的 queued/running 标 failed(单实例前提)。
 → `core/cron.py`、`adapters/apscheduler_schedule.py`、`core/schedule_service.py`
 
-## 6. 账户与权限
+## 7. 账户与权限
 
 - **认证** — JWT(HS256)+ bcrypt;令牌走 `Authorization: Bearer` 或 HttpOnly Cookie。
 - **角色** — `admin` / `user` 两级。
@@ -85,13 +97,13 @@
 - **登录限流** — 同 `用户名|IP` 连错 5 次指数退避锁定(60→900s),防爆破。
 → `core/auth.py`、`core/login_throttle.py`、`api/routes.py`
 
-## 7. 两种使用界面
+## 8. 两种使用界面
 
 - **Web 控制台**(React 18 + Vite + Semi UI 单页应用):登录;仪表板 4 张统计卡片(总数 / 成功率 / 失败 / 活跃队列);左栏套件 + Profile 管理;右栏运行表格(按状态 / 引擎 / 归属 / 手动·调度多维过滤 + 搜索);详情抽屉(日志 + 报告);触发弹窗(文件树 + marker + env 编辑);调度 / 用户管理弹窗。工程特性:中英 **i18n**、**明暗主题**、**无障碍 a11y**(焦点管理 + 键盘激活)、SSE 实时更新 + 轮询。
-- **REST API**(42 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
+- **REST API**(45 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
 → `frontend/src/components/*`、`frontend/src/hooks/*`
 
-## 8. 部署与运维
+## 9. 部署与运维
 
 - **Docker Compose 两套** — 生产单镜像同源(API + SPA 同端口 8000)、开发双容器热重载。
 - **就绪探针** — `GET /health`(DB 可达才 200)。
@@ -99,7 +111,7 @@
 - **全环境变量配置** — `QARUNNER_` 前缀;`SECRET_KEY` / `ADMIN_PASSWORD` 必填且拒弱值。
 → `../README.md` 配置表、`config.py`
 
-## 9. 产品边界（刻意不做的）
+## 10. 产品边界（刻意不做的）
 
 经源码逐项查证**确实不存在**,便于理解平台范围:
 
@@ -116,5 +128,5 @@
 
 ## 附：可信度与交叉引用
 
-- 全文功能均经源码核对(`routes.py` / `orchestrator.py` / `docker_runner.py` / `subprocess_runner.py` / `apscheduler_schedule.py` / `auth.py` / `config.py` 及 `frontend/src/*`)`[KNOWN] HIGH`;第 9 节否定结论为逐项查证「不存在」,非「未找到」。
+- 全文功能均经源码核对(`routes.py` / `orchestrator.py` / `docker_runner.py` / `subprocess_runner.py` / `apscheduler_schedule.py` / `auth.py` / `config.py` 及 `frontend/src/*`)`[KNOWN] HIGH`;第 10 节否定结论为逐项查证「不存在」,非「未找到」。
 - 接口细节(字段 / 状态码 / 权限)→ [`API_REFERENCE.md`](API_REFERENCE.md);架构分层 → [`../ARCHITECTURE.md`](../ARCHITECTURE.md);部署配置 → [`../README.md`](../README.md)。

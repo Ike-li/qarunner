@@ -276,6 +276,33 @@
 - **成功**：`200` `{"status": "success", "cleaned_runs": <int>}`。
 - **错误**：`403` · `422`。
 
+### 跨次对比（Cross-run Comparison）
+
+三个只读端点,把单次 run 视图升级成跨次回归视图。均依赖已持久化的 per-case 结果（`run_test_cases` 表）。owner-scope 与列表接口一致:**非 admin 只见自己的 run,admin 跨全部**。
+
+#### `GET /runs/trend` — 认证（非 admin 静默过滤）
+某套件的跨 run 通过率趋势。
+- 查询参数：`tests_path`（必填）· `limit`（默认 `50`）。
+- 仅纳入**同 `tests_path`、`COMPLETED`、且带 summary** 的 run；点按 `created_at` **升序**（oldest-first），取最近 `limit` 个。
+- **成功**：`200` `RunTrendResponse`（`{tests_path, points: [TrendPoint]}`，见 §八）。空历史 → `points: []`。
+- 非 admin 只统计自己的 run。
+
+#### `GET /runs/{run_id}/diff` — owner
+把该 run 的 per-case 结果与其**基线**比对,分五桶。
+- **基线定义**：**同执行范围**（同 `tests_path` + `runner` + 编译后 `args`）、`created_at` 更早、状态 `COMPLETED` 的**最近一个** run。范围不等则用例集不可比,故严格匹配；非 `COMPLETED`（可能无/部分 cases）一律排除。
+- **基线候选同样 owner-scope**：非 admin 只在**自己的** run 里选基线，admin 跨全部——避免基线泄露他人 run 的 id 与用例数据。
+- 无可比基线 → `baseline: null` + 空 diff（**不**把全部用例塞进 `new_cases`）。
+- **成功**：`200` `RunDiffResponse`（`{baseline, diff}`，见 §八）。
+- **错误**：`404`（run 不存在）· `403`（他人）。
+
+#### `GET /cases/history` — 认证（非 admin 静默过滤）
+单个测试用例的跨 run 历史 + flaky 判定。
+- 查询参数：`tests_path` · `suite` · `name`（三者**必填**,联合定位一个用例）· `limit`（默认 `20`）。
+- 返回最近 `limit` 次 `(created_at, status)`，按 `created_at` **升序**；`flaky` 由相邻 `pass ↔ fail/error` 翻转次数判定（**≥2 次**为 flaky，单次回归/修复不算），`flip_count` 为翻转次数。
+- **成功**：`200` `CaseHistoryResponse`（`{points, flaky, flip_count}`，见 §八）。
+- 非 admin 经 run 的 `created_by` 过滤,只看自己 run 里的该用例历史。
+- ⚠️ `flaky` 阈值为保守占位（`[GUESS]`，待真实数据校准）,判定逻辑与端点契约稳定,**阈值本身可能调整**。
+
 ---
 
 ## 七、调度（Schedule）
@@ -345,6 +372,32 @@
 ### ReportRef
 `allure_results_dir` · `allure_report_file?` · `html_generated: bool`
 
+### TestCaseResult（diff 桶 / 用例项的元素）
+`suite: str` · `name: str` · `status: str`（`passed`/`failed`/`skipped`/`error`）· `duration_ms: int` · `message?: str|null`
+
+### RunTrendResponse
+`tests_path: str` · `points: [TrendPoint]`（升序）
+
+### TrendPoint
+`run_id: str` · `created_at` · `pass_rate: float` · `total: int` · `passed: int` · `failed: int`
+
+### RunDiffResponse
+`baseline: RunDiffBaselineInfo | null` · `diff: RegressionDiff`
+
+### RunDiffBaselineInfo
+`id: str` · `created_at` · `status`（RunStatus）
+
+### RegressionDiff
+`new_failures[]` · `fixed[]` · `still_failing[]` · `new_cases[]` · `removed_cases[]`，每项为 `TestCaseResult`。
+- 身份键 = `(suite, name)`；失败判据 `status ∈ {failed, error}`（`skipped` 不算失败）。
+- `new_failures`/`fixed`/`still_failing`/`new_cases` 携带 **head**（当前 run）侧用例；`removed_cases` 携带 **base**（基线）侧用例。非失败 → 非失败的用例不进任何桶。
+
+### CaseHistoryResponse
+`points: [CaseHistoryPoint]`（升序）· `flaky: bool` · `flip_count: int`
+
+### CaseHistoryPoint
+`created_at` · `status: str`
+
 ### TestScheduleResponse
 `id` · `name` · `profile_id` · `cron_expression` · `enabled` · `timezone` ·
 `last_run_at?` · `next_run_at?` · `created_by` · `created_at`
@@ -370,6 +423,8 @@
 5. **登录限流会污染测试**：同一 `用户名|IP` 连续 5 次失败即锁定，测「密码错=401」时需换用户名或控制失败次数。
 6. **资源依赖顺序**：建 schedule 前需先有 profile；触发 run 前需 `tests_path` 指向 `tests_root` 下存在的套件。
 7. **管理员账号**：用户名 = `QARUNNER_ADMIN_USER`（默认 `admin`），密码 = `QARUNNER_ADMIN_PASSWORD`（启动时种入；建议测试首步实测此登录）。
+8. **跨次对比（trend/diff/cases-history）的 owner-scope**：三者均按**请求者**过滤,不是按目标 run 的归属——非 admin 的趋势点 / diff 基线 / 用例历史**只取自己的 run**，admin 跨全部。测越权时:用 A 造一批同套件 run、再用 B 调这三个端点,断言 B 看不到 A 的数据（diff 的基线应为 `null`）。
+9. **diff 可比性**：基线必须**同执行范围**（`tests_path`+`runner`+`args` 全等）。同一套件「这次跑全量 vs 上次跑子集」不会互为基线;若刻意构造范围不等的两个 run,`baseline` 会是 `null` 而非错误分桶。
 
 ---
 
