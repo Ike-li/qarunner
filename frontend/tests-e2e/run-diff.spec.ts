@@ -46,6 +46,17 @@ const DIFF_NO_BASELINE = {
   diff: { new_failures: [], still_failing: [], fixed: [], new_cases: [], removed_cases: [] },
 };
 
+// pass→fail→pass: two flips → server reports flaky (stage 3).
+const FLAKY_HISTORY = {
+  points: [
+    { created_at: '2026-06-01T10:00:00Z', status: 'passed' },
+    { created_at: '2026-06-02T10:00:00Z', status: 'failed' },
+    { created_at: '2026-06-03T10:00:00Z', status: 'passed' },
+  ],
+  flaky: true,
+  flip_count: 2,
+};
+
 async function login(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.getByTestId('login-username').fill('admin');
@@ -105,5 +116,24 @@ test.describe('Run details — Diff tab (cross-run stage 2)', () => {
 
     await expect(page.getByTestId('diff-empty-baseline')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('diff-bucket-new_failures')).toHaveCount(0);
+  });
+
+  test('expands a case to reveal its cross-run history and flaky badge', async ({ page }) => {
+    await page.route(`**/runs/${RUN_ID}/diff`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(DIFF_WITH_BASELINE) }),
+    );
+    await page.route('**/cases/history*', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FLAKY_HISTORY) }),
+    );
+
+    await openRunAndDiffTab(page);
+    await expect(page.getByTestId('diff-bucket-new_failures')).toBeVisible({ timeout: 5000 });
+
+    // History is lazy — collapsed until the case row is clicked.
+    await expect(page.getByTestId('case-history')).toHaveCount(0);
+    await page.getByTestId('diff-case-toggle').first().click();
+
+    await expect(page.getByTestId('case-history').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('flaky-badge').first()).toBeVisible();
   });
 });

@@ -77,6 +77,17 @@ export interface RunTrend {
   points: TrendPoint[]
 }
 
+export interface CaseHistoryPoint {
+  created_at: string
+  status: 'passed' | 'failed' | 'skipped' | 'error'
+}
+
+export interface CaseHistory {
+  points: CaseHistoryPoint[]
+  flaky: boolean
+  flip_count: number
+}
+
 export interface UserProfile {
   username: string
   role: 'admin' | 'user'
