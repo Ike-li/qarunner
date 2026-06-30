@@ -249,6 +249,13 @@ class TrendPoint(BaseModel):
     failed: int
 
 
+class CaseHistoryPoint(BaseModel):
+    """One run's outcome for a single test case, for its cross-run history (stage 3)."""
+
+    created_at: datetime
+    status: str
+
+
 class ReportRef(BaseModel):
     """Reference to allure report artifacts."""
 

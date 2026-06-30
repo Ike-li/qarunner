@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from qarunner.models import (
     MAX_TIMEOUT_SECONDS,
+    CaseHistoryPoint,
     RegressionDiff,
     ReportRef,
     Run,
@@ -123,6 +124,14 @@ class RunTrendResponse(BaseModel):
 
     tests_path: str
     points: list[TrendPoint] = Field(default_factory=list)
+
+
+class CaseHistoryResponse(BaseModel):
+    """A single test case's cross-run history + flaky verdict (stage 3)."""
+
+    points: list[CaseHistoryPoint] = Field(default_factory=list)
+    flaky: bool = False
+    flip_count: int = 0
 
 
 class LoginRequest(BaseModel):

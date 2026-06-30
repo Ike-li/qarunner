@@ -1062,6 +1062,37 @@ async def test_save_cases_empty_list(store: SqliteStore) -> None:
     assert await store.get_cases_for_run("run-empty") == []
 
 
+async def test_get_case_history_oldest_first(store: SqliteStore) -> None:
+    for i, st in enumerate(["passed", "failed", "passed"]):
+        run = _make_run(
+            id=f"h{i}", tests_path="suite_a", status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, i + 1, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"h{i}", "suite_a", run.created_at,
+            [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
+        )
+    hist = await store.get_case_history("suite_a", "s", "t")
+    assert [p.status for p in hist] == ["passed", "failed", "passed"]  # oldest-first
+
+
+async def test_get_case_history_owner_scoped(store: SqliteStore) -> None:
+    for rid, owner in [("ha", "alice"), ("hb", "bob")]:
+        run = _make_run(
+            id=rid, tests_path="suite_a", created_by=owner,
+            status=RunStatus.COMPLETED, created_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            rid, "suite_a", run.created_at,
+            [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
+        )
+    # admin (created_by=None) spans both owners; alice sees only her own run.
+    assert len(await store.get_case_history("suite_a", "s", "t")) == 2
+    assert len(await store.get_case_history("suite_a", "s", "t", created_by="alice")) == 1
+
+
 async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:
     run = _make_run(id="run-cascade")
     await store.save(run)

@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import Container, get_current_admin, get_current_user
 from qarunner.api.schemas import (
+    CaseHistoryResponse,
     CloneTestSuiteRequest,
     CredentialCreateRequest,
     CredentialListResponse,
@@ -48,7 +49,7 @@ from qarunner.api.schemas import (
     run_to_response,
     schedule_to_response,
 )
-from qarunner.core import regression, trend
+from qarunner.core import flaky, regression, trend
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.core.credentials import CredentialCipher
 from qarunner.errors import (
@@ -1341,6 +1342,27 @@ async def get_run_diff(
         ),
         diff=regression.diff(base_cases, head_cases),
     )
+
+
+@router.get("/cases/history", response_model=CaseHistoryResponse)
+async def get_case_history(
+    request: Request,
+    tests_path: str,
+    suite: str,
+    name: str,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+) -> CaseHistoryResponse:
+    """A single test case's recent outcomes + flaky verdict (cross-run stage 3).
+
+    Owner-scoped: a non-admin sees only their own runs' history; an admin spans
+    all owners. Points are oldest-first; ``flaky`` counts pass<->fail flips.
+    """
+    container = request.app.state.container
+    created_by = None if current_user.role == UserRole.ADMIN else current_user.username
+    points = await container.store.get_case_history(tests_path, suite, name, limit, created_by)
+    is_flaky, flips = flaky.flakiness([p.status for p in points])
+    return CaseHistoryResponse(points=points, flaky=is_flaky, flip_count=flips)
 
 
 @router.get("/runs/{run_id}/report")

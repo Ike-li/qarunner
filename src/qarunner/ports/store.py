@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from qarunner.models import (
+    CaseHistoryPoint,
     Credential,
     Run,
     TestCaseResult,
@@ -161,5 +162,20 @@ class Store(
 
     async def get_cases_for_run(self, run_id: str) -> list[TestCaseResult]:
         """Return a run's persisted per-case results (empty if none)."""
+        ...
+
+    async def get_case_history(
+        self,
+        tests_path: str,
+        suite: str,
+        name: str,
+        limit: int = 20,
+        created_by: str | None = None,
+    ) -> list[CaseHistoryPoint]:
+        """Return one case's recent outcomes, oldest-first.
+
+        ``created_by`` (a non-admin caller) scopes to that user's own runs;
+        ``None`` (admin) spans all owners.
+        """
         ...
 

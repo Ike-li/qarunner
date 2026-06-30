@@ -20,6 +20,7 @@ from qarunner.core.profile_service import ProfileService
 from qarunner.core.schedule_service import ScheduleService
 from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
 from qarunner.models import (
+    CaseHistoryPoint,
     Credential,
     ReportRef,
     Run,
@@ -156,6 +157,25 @@ class FakeStore:
 
     async def get_cases_for_run(self, run_id: str) -> list:
         return list(self._cases.get(run_id, []))
+
+    async def get_case_history(
+        self, tests_path, suite, name, limit=20, created_by=None,
+    ) -> list:
+        rows = []
+        for run_id, cases in self._cases.items():
+            run = self._runs.get(run_id)
+            if run is None or run.tests_path != tests_path:
+                continue
+            if created_by is not None and run.created_by != created_by:
+                continue
+            for c in cases:
+                if c.suite == suite and c.name == name:
+                    rows.append((run.created_at, c.status))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        return [
+            CaseHistoryPoint(created_at=ca, status=st)
+            for ca, st in reversed(rows[:limit])
+        ]
 
     async def lock_run(self, run_id: str, locked: bool) -> None:
         if run_id in self._runs:
@@ -869,6 +889,82 @@ def test_runs_trend_empty_for_unknown_suite() -> None:
         resp = client.get("/runs/trend?tests_path=nope")
     assert resp.status_code == 200
     assert resp.json()["points"] == []
+
+
+# ── GET /cases/history (cross-run stage 3) ──────────────────────────────
+
+
+def test_case_history_oldest_first_with_flaky_verdict() -> None:
+    container = _make_container()
+    for i, st in enumerate(["passed", "failed", "passed", "failed"]):
+        _make_run_in_store(
+            container.store, id=f"h{i}", created_by="alice", tests_path="suite_a",
+            status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=i),
+        )
+        _seed_cases(container.store, f"h{i}", [
+            TestCaseResult(suite="s", name="t", status=st, duration_ms=0),
+        ])
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=suite_a&suite=s&name=t")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [p["status"] for p in body["points"]] == ["passed", "failed", "passed", "failed"]
+    assert body["flaky"] is True
+    assert body["flip_count"] == 3
+
+
+def test_case_history_owner_scoped_for_non_admin() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="mine", created_by="alice", tests_path="s2",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    _seed_cases(container.store, "mine", [
+        TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)])
+    _make_run_in_store(
+        container.store, id="theirs", created_by="bob", tests_path="s2",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1),
+    )
+    _seed_cases(container.store, "theirs", [
+        TestCaseResult(suite="x", name="t", status="failed", duration_ms=0)])
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=s2&suite=x&name=t")
+    assert [p["status"] for p in resp.json()["points"]] == ["passed"]  # bob's excluded
+
+
+def test_case_history_admin_sees_all_owners() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="ca", created_by="alice", tests_path="s3",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    _seed_cases(container.store, "ca", [
+        TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)])
+    _make_run_in_store(
+        container.store, id="cb", created_by="bob", tests_path="s3",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1),
+    )
+    _seed_cases(container.store, "cb", [
+        TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)])
+    app = create_app(container)
+    _override_user(app, "admin", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=s3&suite=x&name=t")
+    assert len(resp.json()["points"]) == 2
+
+
+def test_case_history_empty_for_unknown_case() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=nope&suite=x&name=y")
+    assert resp.status_code == 200
+    assert resp.json() == {"points": [], "flaky": False, "flip_count": 0}
 
 
 def test_run_diff_forbidden_for_non_owner() -> None:

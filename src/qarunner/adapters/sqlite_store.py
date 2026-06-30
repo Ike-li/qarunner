@@ -14,6 +14,7 @@ import aiosqlite
 
 from qarunner.errors import RunNotFound
 from qarunner.models import (
+    CaseHistoryPoint,
     Credential,
     ReportRef,
     Run,
@@ -549,6 +550,43 @@ class SqliteStore:
                 message=r[4],
             )
             for r in rows
+        ]
+
+    async def get_case_history(
+        self,
+        tests_path: str,
+        suite: str,
+        name: str,
+        limit: int = 20,
+        created_by: str | None = None,
+    ) -> list[CaseHistoryPoint]:
+        """One case's recent outcomes, oldest-first. ``created_by`` (non-admin)
+        joins ``runs`` to scope to the caller's own runs; ``None`` (admin) spans
+        all owners. Indexed by ``idx_cases_case (tests_path, suite, name, …)``.
+        """
+        async with self._connect() as db:
+            if created_by is None:
+                cursor = await db.execute(
+                    "SELECT created_at, status FROM run_test_cases "
+                    "WHERE tests_path = ? AND suite = ? AND name = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (tests_path, suite, name, limit),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT c.created_at, c.status FROM run_test_cases c "
+                    "JOIN runs r ON c.run_id = r.id "
+                    "WHERE c.tests_path = ? AND c.suite = ? AND c.name = ? "
+                    "AND r.created_by = ? "
+                    "ORDER BY c.created_at DESC LIMIT ?",
+                    (tests_path, suite, name, created_by, limit),
+                )
+            rows = await cursor.fetchall()
+        # DESC + LIMIT keeps the most recent window; reverse to oldest-first for
+        # the timeline and the flaky flip-count.
+        return [
+            CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1])
+            for r in reversed(rows)
         ]
 
     async def save_profile(self, profile: TestProfile) -> None:
