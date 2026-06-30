@@ -63,6 +63,20 @@ export interface RunDiff {
   }
 }
 
+export interface TrendPoint {
+  run_id: string
+  created_at: string
+  pass_rate: number
+  total: number
+  passed: number
+  failed: number
+}
+
+export interface RunTrend {
+  tests_path: string
+  points: TrendPoint[]
+}
+
 export interface UserProfile {
   username: string
   role: 'admin' | 'user'

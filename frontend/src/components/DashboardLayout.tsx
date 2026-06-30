@@ -1,6 +1,7 @@
 import styles from '../App.module.css'
 import { Header } from './Header'
 import { StatsCards } from './StatsCards'
+import { SuiteTrend } from './SuiteTrend'
 import { ProjectSidebar } from './ProjectSidebar'
 import { RunsTable } from './RunsTable'
 import { RunDetailsDrawer } from './RunDetailsDrawer'
@@ -23,6 +24,7 @@ export function DashboardLayout() {
 
       <Header />
       <StatsCards />
+      <SuiteTrend />
 
       <main className={styles.mainContent}>
         <ProjectSidebar />
