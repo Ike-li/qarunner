@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from qarunner.models import (
     MAX_TIMEOUT_SECONDS,
+    RegressionDiff,
     ReportRef,
     Run,
     RunStatus,
@@ -95,6 +96,25 @@ class RunListResponse(BaseModel):
     """Collection wrapper for listing runs."""
 
     runs: list[RunResponse]
+
+
+class RunDiffBaselineInfo(BaseModel):
+    """Identity of the baseline run a diff was computed against."""
+
+    id: str
+    created_at: datetime
+    status: RunStatus
+
+
+class RunDiffResponse(BaseModel):
+    """Cross-run baseline diff for a run (stage 2).
+
+    ``baseline`` is ``None`` when no comparable prior run exists, in which case
+    ``diff`` stays empty (rather than reporting every case as new).
+    """
+
+    baseline: RunDiffBaselineInfo | None = None
+    diff: RegressionDiff = Field(default_factory=RegressionDiff)
 
 
 class LoginRequest(BaseModel):

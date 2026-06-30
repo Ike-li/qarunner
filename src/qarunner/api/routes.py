@@ -26,6 +26,8 @@ from qarunner.api.schemas import (
     LinkTestSuiteResponse,
     LockRunRequest,
     LoginRequest,
+    RunDiffBaselineInfo,
+    RunDiffResponse,
     RunListResponse,
     RunResponse,
     SuiteInfoResponse,
@@ -45,6 +47,7 @@ from qarunner.api.schemas import (
     run_to_response,
     schedule_to_response,
 )
+from qarunner.core import regression
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.core.credentials import CredentialCipher
 from qarunner.errors import (
@@ -1279,6 +1282,43 @@ async def get_run(
     res.stderr = stderr_content
     return res
 
+
+
+@router.get("/runs/{run_id}/diff", response_model=RunDiffResponse)
+async def get_run_diff(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunDiffResponse:
+    """Diff a run's per-case results against its baseline (cross-run stage 2).
+
+    The baseline is the most recent COMPLETED run of the same execution scope
+    preceding this one (see ``regression.select_baseline``). When none exists
+    the response carries ``baseline: null`` and an empty diff rather than
+    flooding every case into ``new_cases``.
+    """
+    container = request.app.state.container
+    try:
+        head = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(head, current_user)
+
+    all_runs = await container.store.list()
+    baseline = regression.select_baseline(head, all_runs)
+    if baseline is None:
+        return RunDiffResponse(baseline=None)
+
+    base_cases = await container.store.get_cases_for_run(baseline.id)
+    head_cases = await container.store.get_cases_for_run(head.id)
+    return RunDiffResponse(
+        baseline=RunDiffBaselineInfo(
+            id=baseline.id,
+            created_at=baseline.created_at,
+            status=baseline.status,
+        ),
+        diff=regression.diff(base_cases, head_cases),
+    )
 
 
 @router.get("/runs/{run_id}/report")

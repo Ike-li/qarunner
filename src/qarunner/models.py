@@ -222,6 +222,22 @@ class CollectResult(BaseModel):
     cases: list[TestCaseResult]
 
 
+class RegressionDiff(BaseModel):
+    """Cross-run baseline diff (stage 2): a head run versus its baseline.
+
+    Buckets are keyed by case identity ``(suite, name)``. ``new_failures`` /
+    ``fixed`` / ``still_failing`` / ``new_cases`` carry the *head* case (current
+    state + message); ``removed_cases`` carries the *base* case (absent from
+    head). A non-fail → non-fail transition lands in no bucket.
+    """
+
+    new_failures: list[TestCaseResult] = Field(default_factory=list)
+    fixed: list[TestCaseResult] = Field(default_factory=list)
+    still_failing: list[TestCaseResult] = Field(default_factory=list)
+    new_cases: list[TestCaseResult] = Field(default_factory=list)
+    removed_cases: list[TestCaseResult] = Field(default_factory=list)
+
+
 class ReportRef(BaseModel):
     """Reference to allure report artifacts."""
 

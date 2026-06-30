@@ -25,6 +25,7 @@ from qarunner.models import (
     Run,
     RunRequest,
     RunStatus,
+    TestCaseResult,
     TestProfile,
     TestSchedule,
     TestSuite,
@@ -723,6 +724,83 @@ def _override_user(app: FastAPI, username: str, role: UserRole) -> None:
         return User(username=username, role=role, created_at=NOW)
 
     app.dependency_overrides[get_current_user] = _u
+
+
+# ── GET /runs/{run_id}/diff (cross-run stage 2) ─────────────────────────
+
+
+def _seed_cases(store: FakeStore, run_id: str, cases: list[TestCaseResult]) -> None:
+    store._cases[run_id] = list(cases)
+
+
+def test_run_diff_with_baseline_classifies_cases() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="base", created_by="alice",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    _make_run_in_store(
+        container.store, id="head", created_by="alice",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5),
+    )
+    _seed_cases(container.store, "base", [
+        TestCaseResult(suite="s", name="keeps", status="passed", duration_ms=0),
+        TestCaseResult(suite="s", name="regressed", status="passed", duration_ms=0),
+    ])
+    _seed_cases(container.store, "head", [
+        TestCaseResult(suite="s", name="keeps", status="passed", duration_ms=0),
+        TestCaseResult(suite="s", name="regressed", status="failed", duration_ms=0),
+    ])
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/head/diff")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["baseline"]["id"] == "base"
+    assert [c["name"] for c in body["diff"]["new_failures"]] == ["regressed"]
+
+
+def test_run_diff_no_baseline_returns_null_and_empty() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="solo", created_by="alice",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    _seed_cases(container.store, "solo", [
+        TestCaseResult(suite="s", name="t", status="failed", duration_ms=0),
+    ])
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/solo/diff")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["baseline"] is None
+    assert body["diff"]["new_failures"] == []
+    assert body["diff"]["new_cases"] == []
+
+
+def test_run_diff_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/ghost/diff")
+    assert resp.status_code == 404
+
+
+def test_run_diff_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r", created_by="bob",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/r/diff")
+    assert resp.status_code == 403
 
 
 # ── POST /runs/{run_id}/cancel ──────────────────────────────────────────
