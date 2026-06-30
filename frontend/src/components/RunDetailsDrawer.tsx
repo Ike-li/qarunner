@@ -1,12 +1,38 @@
 import {
   Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, Clock, Copy, Cpu, Download,
-  ExternalLink, Maximize2, RotateCw, Terminal, Trash2, XCircle,
+  ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Terminal, Trash2, XCircle,
 } from 'lucide-react'
-import type { CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { formatDuration } from '../logUtils'
+import { diffBuckets, diffIsEmpty, type DiffTone } from '../runDiff'
 import { useDashboard } from '../hooks/DashboardContext'
+import type { RunDiff } from '../types'
+
+const DIFF_TONE_COLOR: Record<DiffTone, string> = {
+  danger: '#ef4444',
+  warning: '#f59e0b',
+  success: '#10b981',
+  info: '#3b82f6',
+  muted: '#64748b',
+}
+
+const DIFF_TONE_ICON: Record<DiffTone, ReactNode> = {
+  danger: <XCircle size={14} />,
+  warning: <AlertTriangle size={14} />,
+  success: <CheckCircle2 size={14} />,
+  info: <Plus size={14} />,
+  muted: <Minus size={14} />,
+}
+
+const DIFF_BUCKET_LABEL = {
+  new_failures: 'diffNewFailures',
+  still_failing: 'diffStillFailing',
+  fixed: 'diffFixed',
+  new_cases: 'diffNewCases',
+  removed_cases: 'diffRemovedCases',
+} as const
 
 /** Shared outline style for the drawer's header action buttons (cancel / re-run
  *  / delete) — they differ only by colour. */
@@ -30,6 +56,26 @@ const actionBtnStyle = (color: string): CSSProperties => ({
  *  All state lives in App (terminal prefs via useTerminalView); this displays. */
 export function RunDetailsDrawer() {
   const d = useDashboard()
+  const [runDiff, setRunDiff] = useState<RunDiff | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+
+  // Fetch the baseline diff lazily — only when the Diff tab is active (and
+  // re-fetch when the selected run changes while it stays active). The cancel
+  // flag drops a stale response if the user switches run/tab mid-flight.
+  const selectedRunId = d.runs.selectedRun?.id
+  useEffect(() => {
+    if (d.terminal.drawerTab !== 'diff' || !selectedRunId) return
+    let cancelled = false
+    setDiffLoading(true)
+    setRunDiff(null)
+    d.apiFetch(`/runs/${selectedRunId}/diff`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (!cancelled) setRunDiff(data) })
+      .catch(() => { if (!cancelled) setRunDiff(null) })
+      .finally(() => { if (!cancelled) setDiffLoading(false) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.terminal.drawerTab, selectedRunId])
 
   // ── Derived filtered logs ──────────────────────────────────────────────
   const filteredStdout = d.runs.selectedRun?.stdout
@@ -215,6 +261,15 @@ export function RunDetailsDrawer() {
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     <BarChart3 size={14} />
                     <span>{d.t('testReport')}</span>
+                  </span>
+                }
+              />
+              <Tabs.TabPane
+                itemKey="diff"
+                tab={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }} data-testid="drawer-tab-diff">
+                    <GitCompare size={14} />
+                    <span>{d.t('diffTab')}</span>
                   </span>
                 }
               />
@@ -472,6 +527,55 @@ export function RunDetailsDrawer() {
                   </div>
                 )}
               </>
+            )}
+
+            {d.terminal.drawerTab === 'diff' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {diffLoading ? (
+                  <span className={styles.terminalPlaceholder}>{d.t('diffLoading')}</span>
+                ) : !runDiff || runDiff.baseline === null ? (
+                  <div className={styles.summaryPlaceholder} data-testid="diff-empty-baseline">
+                    <GitCompare size={24} style={{ color: '#64748b', marginBottom: '0.75rem' }} />
+                    <p>{d.t('diffNoBaseline')}</p>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>
+                      {d.t('diffBaseline')}: <code>{runDiff.baseline.id.slice(0, 8)}</code>
+                      {' · '}{formatDate(runDiff.baseline.created_at)}
+                    </div>
+                    {diffIsEmpty(runDiff.diff) ? (
+                      <span className={styles.terminalPlaceholder}>{d.t('diffNoChanges')}</span>
+                    ) : (
+                      diffBuckets(runDiff.diff)
+                        .filter((b) => b.cases.length > 0)
+                        .map((b) => (
+                          <div
+                            key={b.key}
+                            data-testid={`diff-bucket-${b.key}`}
+                            style={{ border: `1px solid ${DIFF_TONE_COLOR[b.tone]}`, borderRadius: 4, padding: '0.5rem 0.75rem' }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: DIFF_TONE_COLOR[b.tone], fontWeight: 600, marginBottom: '0.4rem' }}>
+                              {DIFF_TONE_ICON[b.tone]}
+                              <span>{d.t(DIFF_BUCKET_LABEL[b.key])}</span>
+                              <span style={{ opacity: 0.7 }}>({b.cases.length})</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              {b.cases.map((c, i) => (
+                                <div key={i} style={{ fontSize: '0.8rem' }}>
+                                  <code>{c.suite ? `${c.suite}::${c.name}` : c.name}</code>
+                                  {c.message && (
+                                    <div style={{ opacity: 0.6, fontSize: '0.75rem', whiteSpace: 'pre-wrap' }}>{c.message}</div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </>
+                )}
+              </div>
             )}
           </div>
         )}

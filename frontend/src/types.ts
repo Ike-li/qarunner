@@ -38,6 +38,31 @@ export interface Run {
   locked?: boolean
 }
 
+export interface TestCaseResult {
+  suite: string
+  name: string
+  status: 'passed' | 'failed' | 'skipped' | 'error'
+  duration_ms: number
+  message: string | null
+}
+
+export interface RunDiffBaselineInfo {
+  id: string
+  created_at: string
+  status: Run['status']
+}
+
+export interface RunDiff {
+  baseline: RunDiffBaselineInfo | null
+  diff: {
+    new_failures: TestCaseResult[]
+    fixed: TestCaseResult[]
+    still_failing: TestCaseResult[]
+    new_cases: TestCaseResult[]
+    removed_cases: TestCaseResult[]
+  }
+}
+
 export interface UserProfile {
   username: string
   role: 'admin' | 'user'

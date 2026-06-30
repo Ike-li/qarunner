@@ -15,7 +15,7 @@ describe('buildProfilePayload', () => {
         customArgs: '--headed',
         executorMode: 'docker',
         timeoutSeconds: 120,
-        env: { APP_REPO_PATH: '~/code/my-app' },
+        env: { APP_REPO_PATH: '/path/to/local/repo' },
       }),
     ).toEqual({
       name: 'Daily Playwright',
@@ -27,7 +27,7 @@ describe('buildProfilePayload', () => {
       extra_args: '--headed',
       executor_mode: 'docker',
       timeout: 120,
-      env: { APP_REPO_PATH: '~/code/my-app' },
+      env: { APP_REPO_PATH: '/path/to/local/repo' },
     })
   })
 })

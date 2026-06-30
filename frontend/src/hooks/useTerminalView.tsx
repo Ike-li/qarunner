@@ -12,7 +12,7 @@ import { classifyLogLine, matchesLogLevel } from '../logUtils'
  * values for effect deps and forwards them down as props.
  */
 export function useTerminalView() {
-  const [drawerTab, setDrawerTab] = useState<'logs' | 'report'>('logs')
+  const [drawerTab, setDrawerTab] = useState<'logs' | 'report' | 'diff'>('logs')
   const [copySuccess, setCopySuccess] = useState(false)
   const [logLevelFilter, setLogLevelFilter] = useState<'ALL' | 'ERROR' | 'WARNING' | 'SUCCESS'>('ALL')
 
