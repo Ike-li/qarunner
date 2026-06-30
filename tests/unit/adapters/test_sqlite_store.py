@@ -13,6 +13,7 @@ from qarunner.models import (
     ReportRef,
     Run,
     RunStatus,
+    TestCaseResult,
     TestProfile,
     TestSchedule,
     TestSuite,
@@ -1011,6 +1012,70 @@ def test_row_to_profile_legacy() -> None:
     assert profile.selected_files == ["f1.py"]
     assert profile.selected_markers == ["m1"]
     assert profile.env == {"ENV_VAR": "val"}
+
+
+async def test_save_cases_round_trip(store: SqliteStore) -> None:
+    run = _make_run(id="run-cases")
+    await store.save(run)
+    cases = [
+        TestCaseResult(suite="s", name="t1", status="passed", duration_ms=5),
+        TestCaseResult(suite="s", name="t2", status="failed", duration_ms=9, message="err"),
+    ]
+    await store.save_cases("run-cases", "tests/", run.created_at, cases)
+
+    got = await store.get_cases_for_run("run-cases")
+    assert [c.name for c in got] == ["t1", "t2"]
+    assert got[1].status == "failed"
+    assert got[1].message == "err"
+    assert got[0].message is None  # passed case carries no message
+
+
+async def test_save_cases_is_idempotent(store: SqliteStore) -> None:
+    run = _make_run(id="run-idem")
+    await store.save(run)
+    cases = [TestCaseResult(suite="s", name="t1", status="passed", duration_ms=1)]
+    await store.save_cases("run-idem", "tests/", run.created_at, cases)
+    await store.save_cases("run-idem", "tests/", run.created_at, cases)  # re-persist
+
+    got = await store.get_cases_for_run("run-idem")
+    assert len(got) == 1  # cleared before reinsert — no duplicate rows
+
+
+async def test_save_cases_truncates_long_message(store: SqliteStore) -> None:
+    from qarunner.adapters.sqlite_store import _MAX_CASE_MESSAGE_CHARS
+
+    run = _make_run(id="run-trunc")
+    await store.save(run)
+    huge = "x" * (_MAX_CASE_MESSAGE_CHARS + 5000)
+    cases = [TestCaseResult(suite="s", name="t", status="failed", duration_ms=1, message=huge)]
+    await store.save_cases("run-trunc", "tests/", run.created_at, cases)
+
+    got = await store.get_cases_for_run("run-trunc")
+    assert got[0].message is not None
+    assert len(got[0].message) == _MAX_CASE_MESSAGE_CHARS
+
+
+async def test_save_cases_empty_list(store: SqliteStore) -> None:
+    run = _make_run(id="run-empty")
+    await store.save(run)
+    await store.save_cases("run-empty", "tests/", run.created_at, [])
+    assert await store.get_cases_for_run("run-empty") == []
+
+
+async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:
+    run = _make_run(id="run-cascade")
+    await store.save(run)
+    await store.save_cases(
+        "run-cascade",
+        "tests/",
+        run.created_at,
+        [TestCaseResult(suite="s", name="t", status="passed", duration_ms=1)],
+    )
+    assert len(await store.get_cases_for_run("run-cascade")) == 1
+
+    # FK ON DELETE CASCADE: deleting the run drops its cases automatically.
+    await store.delete_run("run-cascade")
+    assert await store.get_cases_for_run("run-cascade") == []
 
 
 

@@ -65,6 +65,7 @@ class FakeStore:
     _schedules: dict[str, TestSchedule] = field(default_factory=dict)
     _users: dict[str, dict] = field(default_factory=dict)
     _credentials: dict[str, tuple] = field(default_factory=dict)
+    _cases: dict[str, list] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._profiles = {}
@@ -147,6 +148,12 @@ class FakeStore:
 
     async def list(self) -> list[Run]:
         return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+
+    async def save_cases(self, run_id, tests_path, created_at, cases) -> None:
+        self._cases[run_id] = list(cases)
+
+    async def get_cases_for_run(self, run_id: str) -> list:
+        return list(self._cases.get(run_id, []))
 
     async def lock_run(self, run_id: str, locked: bool) -> None:
         if run_id in self._runs:

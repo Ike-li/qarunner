@@ -19,6 +19,7 @@ from qarunner.models import (
     Run,
     RunRequest,
     RunStatus,
+    TestCaseResult,
     TestSummary,
 )
 from tests.fakes.fake_clock import FakeClock
@@ -435,6 +436,31 @@ class TestExecute:
         assert stored.summary.passed == 2
         assert stored.report is not None
         assert stored.finished_at is not None
+
+    @pytest.mark.asyncio
+    async def test_execute_persists_per_case_results(self):
+        # Stage 0: the per-case results the collector parses must now be persisted
+        # (previously only the summary was kept), so cross-run diff/flaky/history
+        # have a source. Keyed by run id; queryable via get_cases_for_run.
+        cases = [
+            TestCaseResult(suite="s", name="test_a", status="passed", duration_ms=10),
+            TestCaseResult(
+                suite="s", name="test_b", status="failed", duration_ms=20, message="boom"
+            ),
+        ]
+        summary = TestSummary(
+            total=2, passed=1, failed=1, skipped=0, error=0, duration_ms=30
+        )
+        orch = _make_orchestrator(
+            collector_preset=CollectResult(summary=summary, cases=cases),
+        )
+        run = await orch.create(RunRequest(tests_path="sample"))
+        await orch.execute(run.id)
+
+        stored_cases = await orch._store.get_cases_for_run(run.id)
+        assert [c.name for c in stored_cases] == ["test_a", "test_b"]
+        assert stored_cases[1].status == "failed"
+        assert stored_cases[1].message == "boom"
 
     @pytest.mark.asyncio
     async def test_failed_run_no_collector_result(self):

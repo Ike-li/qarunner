@@ -11,7 +11,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from qarunner.models import Credential, Run, TestProfile, TestSchedule, TestSuite
+from qarunner.models import (
+    Credential,
+    Run,
+    TestCaseResult,
+    TestProfile,
+    TestSchedule,
+    TestSuite,
+)
 
 
 @runtime_checkable
@@ -25,6 +32,16 @@ class RunStore(Protocol):
         ...
 
     async def list(self) -> list[Run]: ...
+
+    async def save_cases(
+        self,
+        run_id: str,
+        tests_path: str,
+        created_at: datetime,
+        cases: list[TestCaseResult],
+    ) -> None:
+        """Persist a finished run's per-case results (cross-run analysis source)."""
+        ...
 
 
 @runtime_checkable
@@ -141,4 +158,8 @@ class Store(
     async def get_old_unlocked_runs(self, retention_days: int) -> list[Run]: ...
 
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int: ...
+
+    async def get_cases_for_run(self, run_id: str) -> list[TestCaseResult]:
+        """Return a run's persisted per-case results (empty if none)."""
+        ...
 

@@ -349,6 +349,16 @@ class RunOrchestrator:
                 self._collector.collect, results_dir
             )
 
+            # 4b. Persist per-case results for cross-run analysis (baseline diff /
+            # flaky / case history). The collector already parses them; until now
+            # only the summary was kept and `cases` was dropped. Keyed by
+            # run.created_at (stable sort key) and tests_path (so case history is
+            # queryable without joining runs).
+            if collected is not None:
+                await self._store.save_cases(
+                    run.id, run.tests_path, run.created_at, collected.cases
+                )
+
             # 5. Generate report (never let failures propagate)
             report: ReportRef = await self._reporter.generate(
                 results_dir, enabled=run.allure_enabled

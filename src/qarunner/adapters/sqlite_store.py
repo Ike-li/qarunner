@@ -18,6 +18,7 @@ from qarunner.models import (
     ReportRef,
     Run,
     RunStatus,
+    TestCaseResult,
     TestProfile,
     TestSchedule,
     TestSuite,
@@ -88,6 +89,10 @@ CREATE TABLE IF NOT EXISTS test_schedules (
 # The full baseline schema above (``_SCHEMA``) is recorded as user_version 1.
 _BASELINE_VERSION = 1
 
+# Cap each persisted case message so a failure-flood run can't bloat the DB
+# (mirrors the trailing-byte caps the runners apply to stdout/stderr).
+_MAX_CASE_MESSAGE_CHARS = 8192
+
 # Forward migrations beyond the baseline (ARCH-8). Each ``(version, statements)``
 # entry is applied exactly once, in ascending order, advancing
 # ``PRAGMA user_version`` so a migration never re-runs. A database at
@@ -122,6 +127,29 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             "created_by TEXT NOT NULL, "
             "created_at TEXT NOT NULL"
             ");",
+        ),
+    ),
+    # v6: per-case results, the source for cross-run analysis (diff/flaky/history).
+    # tests_path and created_at are denormalised from the parent run so case-history
+    # queries need no join; created_at (not finished_at) is the stable sort key.
+    (
+        6,
+        (
+            "CREATE TABLE IF NOT EXISTS run_test_cases ("
+            "id INTEGER PRIMARY KEY, "
+            "run_id TEXT NOT NULL, "
+            "tests_path TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, "
+            "suite TEXT NOT NULL, "
+            "name TEXT NOT NULL, "
+            "status TEXT NOT NULL, "
+            "duration_ms INTEGER NOT NULL DEFAULT 0, "
+            "message TEXT, "
+            "FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE"
+            ");",
+            "CREATE INDEX IF NOT EXISTS idx_cases_run ON run_test_cases(run_id);",
+            "CREATE INDEX IF NOT EXISTS idx_cases_case "
+            "ON run_test_cases(tests_path, suite, name, created_at);",
         ),
     ),
 )
@@ -463,6 +491,65 @@ class SqliteStore:
             rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
 
+    async def save_cases(
+        self,
+        run_id: str,
+        tests_path: str,
+        created_at: datetime,
+        cases: list[TestCaseResult],
+    ) -> None:
+        """Persist a run's per-case results (cross-run analysis source).
+
+        Idempotent: clears any prior cases for this run before reinserting, so a
+        re-persist (e.g. a crash-recovery replay of execute) cannot duplicate
+        rows. Each message is capped (``_MAX_CASE_MESSAGE_CHARS``) so a
+        failure-flood run can't bloat the DB; passed cases carry no message
+        (junit yields None). Cleanup is automatic via the FK ``ON DELETE
+        CASCADE`` when the parent run row is deleted.
+        """
+        created_iso = _dt_to_iso(created_at)
+        rows = [
+            (
+                run_id,
+                tests_path,
+                created_iso,
+                c.suite,
+                c.name,
+                c.status,
+                c.duration_ms,
+                c.message[:_MAX_CASE_MESSAGE_CHARS] if c.message else None,
+            )
+            for c in cases
+        ]
+        async with self._connect() as db:
+            await db.execute("DELETE FROM run_test_cases WHERE run_id = ?", (run_id,))
+            if rows:
+                await db.executemany(
+                    "INSERT INTO run_test_cases "
+                    "(run_id, tests_path, created_at, suite, name, status, "
+                    "duration_ms, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+            await db.commit()
+
+    async def get_cases_for_run(self, run_id: str) -> list[TestCaseResult]:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT suite, name, status, duration_ms, message "
+                "FROM run_test_cases WHERE run_id = ? ORDER BY id",
+                (run_id,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            TestCaseResult(
+                suite=r[0],
+                name=r[1],
+                status=r[2],
+                duration_ms=r[3],
+                message=r[4],
+            )
+            for r in rows
+        ]
 
     async def save_profile(self, profile: TestProfile) -> None:
         # Row-preserving upsert (create + update). A plain INSERT OR REPLACE

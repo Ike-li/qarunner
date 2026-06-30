@@ -186,6 +186,8 @@ class ProcessResult(BaseModel):
 class TestCaseResult(BaseModel):
     """Outcome of a single test case."""
 
+    __test__ = False  # prevent pytest collection warning
+
     suite: str
     name: str
     status: str  # "passed" | "failed" | "skipped" | "error"

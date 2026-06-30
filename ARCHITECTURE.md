@@ -202,6 +202,9 @@ RunOrchestrator.create_run()
   ResultCollector.collect(junit_xml_path) → TestSummary + TestCaseResult[]
         │
         ▼
+  Store.save_cases(run_id, …, cases) → persist per-case results (cross-run analysis)
+        │
+        ▼
   AllureReporter.generate(allure_results_dir, output_dir)
     └── Allure CLI produces HTML report
         │
