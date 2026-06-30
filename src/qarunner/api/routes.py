@@ -1328,6 +1328,12 @@ async def get_run_diff(
     _require_run_access(head, current_user)
 
     all_runs = await container.store.list()
+    # Owner-scope the baseline candidates exactly like GET /runs and
+    # /runs/trend: a non-admin must not get another user's run picked as the
+    # baseline, which would leak that run's id + per-case results through the
+    # diff. Admins span all owners.
+    if current_user.role != UserRole.ADMIN:
+        all_runs = [r for r in all_runs if r.created_by == current_user.username]
     baseline = regression.select_baseline(head, all_runs)
     if baseline is None:
         return RunDiffResponse(baseline=None)

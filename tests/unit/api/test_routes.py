@@ -811,6 +811,65 @@ def test_run_diff_nonexistent_404() -> None:
     assert resp.status_code == 404
 
 
+def test_run_diff_baseline_excludes_other_owners_run() -> None:
+    """Owner-scope: a non-admin's diff must not pick another user's run as the
+    baseline — otherwise the response leaks that run's id and case-level results
+    (names/statuses/messages). Mirrors how GET /runs and /runs/trend filter."""
+    container = _make_container()
+    # bob's earlier, same-scope COMPLETED run — must stay invisible to alice.
+    _make_run_in_store(
+        container.store, id="bob-base", created_by="bob",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    _make_run_in_store(
+        container.store, id="head", created_by="alice",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5),
+    )
+    _seed_cases(container.store, "bob-base", [
+        TestCaseResult(suite="s", name="secret", status="failed", duration_ms=0),
+    ])
+    _seed_cases(container.store, "head", [
+        TestCaseResult(suite="s", name="secret", status="passed", duration_ms=0),
+    ])
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/head/diff")
+    assert resp.status_code == 200
+    body = resp.json()
+    # No baseline alice may see → null + empty diff, not bob's run leaked as a
+    # "fixed" case.
+    assert body["baseline"] is None
+    assert body["diff"]["fixed"] == []
+
+
+def test_run_diff_baseline_spans_owners_for_admin() -> None:
+    """Admin spans owners (like GET /runs/trend): the baseline may be another
+    user's earlier same-scope run. Locks the fix to filter by the *requester*,
+    not by the head run's owner."""
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="bob-base", created_by="bob",
+        status=RunStatus.COMPLETED, created_at=NOW,
+    )
+    _make_run_in_store(
+        container.store, id="head", created_by="alice",
+        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5),
+    )
+    _seed_cases(container.store, "bob-base", [
+        TestCaseResult(suite="s", name="t", status="passed", duration_ms=0),
+    ])
+    _seed_cases(container.store, "head", [
+        TestCaseResult(suite="s", name="t", status="passed", duration_ms=0),
+    ])
+    app = create_app(container)
+    _override_user(app, "carol", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.get("/runs/head/diff")
+    assert resp.status_code == 200
+    assert resp.json()["baseline"]["id"] == "bob-base"
+
+
 # ── GET /runs/trend (cross-run stage 1) ─────────────────────────────────
 
 
