@@ -1,16 +1,16 @@
 services:
-  platform:
+  app:
     build:
       context: .
-      dockerfile: Dockerfile.platform
-    image: qarunner-platform:latest
-    container_name: qarunner-platform
-    # Run as the image's non-root `app` user (uid 1000, set in Dockerfile.platform);
+      dockerfile: Dockerfile.server
+    image: qarunner:latest
+    container_name: qarunner
+    # Run as the image's non-root `app` user (uid 1000, set in Dockerfile.server);
     # do NOT override with `user: root` (P0-2). To reach the Docker daemon socket
     # the container user must join the host's docker group — set QARUNNER_DOCKER_GID
     # to its gid (`getent group docker | cut -d: -f3`, or `stat -c %g /var/run/docker.sock`).
     # NOTE: docker-group access ≈ host root; the real isolation is that untrusted
-    # test code runs in the docker executor, not the platform process (P0-2 a/b).
+    # test code runs in the docker executor, not the server process (P0-2 a/b).
     # Ensure ./artifacts is writable by uid 1000 on the host.
     group_add:
       - "${QARUNNER_DOCKER_GID:?set QARUNNER_DOCKER_GID — see .env.example}"
@@ -27,11 +27,11 @@ services:
       - QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS=${QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS:-}
     volumes:
       - ./artifacts:${PWD}/artifacts
-      # Writable suites root: the single-instance platform clones/pulls/prepares
+      # Writable suites root: the single-instance server clones/pulls/prepares
       # /deletes git suites here (stage 2/3). source==target keeps the path
       # host-resolvable for the jail-fallback DooD bind. A named volume is NOT
       # used: the executor mounts the per-run jail (under artifacts), not this
-      # root, so persistence only needs a writable host path the platform owns.
+      # root, so persistence only needs a writable host path the server owns.
       # On a server, point ${PWD}/external_tests at a persistent dir (e.g. a
       # bind to /srv/qarunner/suites).
       - ${PWD}/external_tests:${PWD}/external_tests

@@ -1159,24 +1159,15 @@ async def delete_profile(
 
 
 async def _create_run_guarded(
-    container: Container, req: RunRequest, current_user: User
+    container: Container, req: RunRequest, current_user: User,
+    profile_id: str | None = None,
 ) -> Run:
-    """Shared run-creation chokepoint: subprocess-mode gate + per-user in-flight
-    cap (P2-7) + orchestrator error mapping.
+    """Shared run-creation chokepoint: per-user in-flight cap (P2-7) +
+    orchestrator error mapping.
 
     POST /runs, POST /runs/{id}/rerun and POST /schedules/{id}/trigger all funnel
-    through here so a new run-creating caller can't silently bypass the guards —
-    they used to live only in the create_run route body.
+    through here so a new run-creating caller can't silently bypass the guards.
     """
-    if (
-        req.executor_mode == "subprocess"
-        and current_user.role != UserRole.ADMIN
-        and not container.settings.allow_subprocess_for_non_admins
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Subprocess execution mode is restricted to administrators.",
-        )
     # Per-user in-flight cap (P2-7): bound unbounded run accumulation by one
     # authenticated user. Admins are exempt; a limit of 0 disables the check.
     limit = container.settings.max_inflight_runs_per_user
@@ -1189,7 +1180,7 @@ async def _create_run_guarded(
             )
     try:
         return await container.orchestrator.create(
-            req, created_by=current_user.username
+            req, created_by=current_user.username, profile_id=profile_id,
         )
     except UnknownRunner as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1624,7 +1615,8 @@ async def rerun_run(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(original, current_user)
     new_run = await _create_run_guarded(
-        container, RunRequest.from_run(original), current_user
+        container, RunRequest.from_run(original), current_user,
+        profile_id=original.profile_id,
     )
     return run_to_response(new_run)
 
@@ -1806,6 +1798,7 @@ async def trigger_schedule(
             detail=f"Schedule's profile '{schedule.profile_id}' no longer exists.",
         )
     run = await _create_run_guarded(
-        container, RunRequest.from_profile(profile), current_user
+        container, RunRequest.from_profile(profile), current_user,
+        profile_id=profile.id,
     )
     return run_to_response(run)

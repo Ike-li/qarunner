@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    image: qarunner-platform:dev
+    image: qarunner:dev
     container_name: qarunner-backend-dev
     user: root
     ports:
@@ -16,8 +16,8 @@ services:
       # workspace/results as ``cwd:cwd``, and that source string is resolved by
       # the HOST daemon — a container-only path like /app/artifacts dangles, so
       # the executor would mount an empty dir and the run would fail.
-      - QARUNNER_ARTIFACTS_ROOT=~/code/qa_platform_v2/artifacts
-      - QARUNNER_DB_PATH=~/code/qa_platform_v2/artifacts/qarunner.db
+      - QARUNNER_ARTIFACTS_ROOT=${PWD}/artifacts
+      - QARUNNER_DB_PATH=${PWD}/artifacts/qarunner.db
       - QARUNNER_SECRET_KEY=${QARUNNER_SECRET_KEY:-dev_secret_key_placeholder_for_local_container_development_needs_to_be_64_chars}
       - QARUNNER_ADMIN_PASSWORD=${QARUNNER_ADMIN_PASSWORD:-admin123}
       - QARUNNER_COOKIE_SECURE=false  # Disable cookie Secure flag for local http dev (SEC-6)
@@ -33,16 +33,16 @@ services:
       - ./src:/app/src
       # artifacts at an IDENTICAL host==container path so the docker executor's
       # cwd:cwd jail/results mounts resolve on the host daemon (see env above).
-      - ~/code/qa_platform_v2/artifacts:~/code/qa_platform_v2/artifacts
+      # ${PWD} is the host repo root when you run compose from here, so source
+      # (./artifacts) and the container path (${PWD}/artifacts) stay identical —
+      # and it works on any machine, unlike the old hard-coded absolute host path.
+      - ./artifacts:${PWD}/artifacts
       - ./external_tests:/app/external_tests
-      # dev "link local suite": bind-mount the real external project straight
-      # into tests_root as a REAL directory (replacing the old symlink, which
-      # safe_subpath rejected because resolve() escaped tests_root → 400). The
-      # platform reads it in-container to build the run jail, so a container
-      # path is fine here. Override the host source via CCM_E2E_PATH.
-      - ${CCM_E2E_PATH:-~/code/my-e2e-suite}:/app/external_tests/my-e2e-suite:ro
-      # mount the host projects root at the SAME path (source==target) so other
-      # symlinked suites / env-referenced project paths still resolve in-container.
+      # mount the host projects root at the SAME path (source==target) so
+      # symlinked local suites / env-referenced project paths resolve in-container.
+      # No suite is hard-coded here: link a local project via the UI
+      # (Add suite → local path) — it symlinks under external_tests and resolves
+      # through this mount. Narrow ${QARUNNER_PROJECTS_ROOT} in .env to tighten it.
       - ${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

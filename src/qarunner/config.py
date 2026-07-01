@@ -79,10 +79,10 @@ class Settings(BaseSettings):
     # next start by crash_recovery_on_startup), so the process can exit promptly.
     shutdown_drain_timeout_seconds: float = 30.0
     worker_node_id: str = Field(default_factory=socket.gethostname)
-    # SEC: untrusted test code runs in-process under the subprocess executor, so
-    # non-admins are confined to the isolated docker executor by default. Set true
-    # only for a trusted/dev deployment (see docker-compose.dev.yml).
-    allow_subprocess_for_non_admins: bool = False
+    # Public-facing base URL of this instance (e.g. https://qa.example.com). Used
+    # to build absolute links in Feishu notification cards. Leave empty to skip
+    # notifications entirely (dev / no-webhook deployments).
+    public_url: str = ""
 
 
 

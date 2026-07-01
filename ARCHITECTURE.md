@@ -1,7 +1,7 @@
 # qarunner Architecture
 
-> QA test runner — execute external pytest/Playwright code in isolation, collect
-> results, generate Allure reports.
+> **qarunner** — for the product direction, see [docs/DIRECTION.md](docs/DIRECTION.md) (the single
+> source of truth). This document covers the **architecture** only.
 
 ## Table of Contents
 
@@ -39,7 +39,7 @@
 ├──────────────────────────────────────────────────────────────────┤
 │  src/qarunner/ports/       端口接口 (抽象 Protocol)                │
 │  Store | Clock | IdGenerator | ProcessRunner                     │
-│  ResultCollector | AllureReporter | TaskScheduler                │
+│  ResultCollector | AllureReporter | TaskScheduler | SchedulePort │
 ├──────────────────────────────────────────────────────────────────┤
 │  src/qarunner/adapters/    适配器 (具体实现)                       │
 │  SqliteStore | SystemClock | UuidIds                             │
@@ -68,7 +68,7 @@ logic (`core/`) depends only on abstract **ports** (`ports/`), never on concrete
 
 | Port | Protocol | Responsibility |
 |------|----------|----------------|
-| `Store` | `RunStore + UserStore + ProfileStore + ScheduleStore + SuiteStore` | Full persistence surface |
+| `Store` | `RunStore + UserStore + ProfileStore + ScheduleStore + SuiteStore + CredentialStore` | Full persistence surface |
 | `Clock` | `Clock` | Returns current UTC time |
 | `IdGenerator` | `IdGenerator` | Generates unique IDs |
 | `ProcessRunner` | `ProcessRunner` | Executes external subprocesses |
@@ -227,7 +227,7 @@ Security is woven into every layer of the application.
 
 | Mechanism | Location | Description |
 |-----------|----------|-------------|
-| **Isolated execution** | `DockerRunner` | **Default** executor mode. Container runs `--network none --read-only --cap-drop ALL` as non-root. Untrusted test code never touches the platform process |
+| **Isolated execution** | `DockerRunner` | **Default** executor mode. Container runs `--network none --read-only --cap-drop ALL` as non-root. Untrusted test code never touches the server process |
 | **Subprocess admin gate** | `Settings.allow_subprocess_for_non_admins` | Subprocess executor requires explicit opt-in; non-admins are blocked by default |
 | **Arg injection protection** | `orchestrator._compile_args()` | Rejects dangerous pytest flags (`-p`, `--config`, `--alluredir`, `--junitxml`) and Playwright flags (`--config`, `--global-setup`) |
 | **Env variable sanitization** | `orchestrator._sanitize_env()` | Rejects `LD_*`, `DYLD_*`, `PYTHON*`, `PATH`, `BASH_ENV`, `NODE_OPTIONS` |
@@ -237,7 +237,7 @@ Security is woven into every layer of the application.
 | **Object-level authorization** | `routes._require_owner_access()` | Non-admin users can only access their own runs, profiles, and schedules (IDOR prevention) |
 | **Secure cookie** | `deps.get_current_user()` | JWT delivered via HttpOnly `SameSite=Strict` cookie, never in URL query parameters |
 | **Secure XML parsing** | `JunitCollector` | Uses `defusedxml` to block XXE and billion-laughs attacks |
-| **Non-root runtime** | `Dockerfile`, `Dockerfile.platform` | All containers run as a non-root user (uid 1000) |
+| **Non-root runtime** | `Dockerfile`, `Dockerfile.server` | All containers run as a non-root user (uid 1000) |
 | **Output size limits** | `routes.get_run_stream()` | Log tail capped to prevent OOM from unbounded test output |
 
 ---
@@ -341,7 +341,7 @@ tests/
 ```
 docker-compose.yml
 ┌──────────────────────────────────────────────────────┐
-│  qarunner-platform:latest (Dockerfile.platform)       │
+│  qarunner:latest (Dockerfile.server)                  │
 │                                                        │
 │  Single image serving both API + built React SPA       │
 │  on port 8000. Non-root `app` user.                   │

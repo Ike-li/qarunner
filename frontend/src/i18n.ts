@@ -6,8 +6,8 @@
 export const translations = {
   en: {
     platformTitle: "qarunner",
-    platformSubtitle: "QA TEST ORCHESTRATION",
-    platformSubtitleFull: "SANDBOXED TEST RUNNER · SCHEDULER · REPORTS",
+    platformSubtitle: "qarunner",
+    platformSubtitleFull: "qarunner",
 
     // Auth & Login
     username: "Username",
@@ -22,7 +22,7 @@ export const translations = {
     users: "Users",
     triggerRun: "Trigger Run",
     signOut: "Sign Out",
-    managePlatformUsers: "Manage Platform Users",
+    managePlatformUsers: "Manage Users",
 
     // Stats Summary Cards
     totalExecutions: "Total Executions",
@@ -138,7 +138,7 @@ export const translations = {
 
     // User Management Modal
     userManagementTitle: "User Management Panel",
-    platformDirectory: "Platform Directory",
+    platformDirectory: "User Directory",
     registerNewUser: "Register New User",
     systemAccessRole: "System Access Role",
     userStandardAccess: "User (Standard Access)",
@@ -183,8 +183,8 @@ export const translations = {
   },
   zh: {
     platformTitle: "qarunner",
-    platformSubtitle: "QA 测试编排系统",
-    platformSubtitleFull: "沙箱化测试执行 · 调度 · 报告",
+    platformSubtitle: "qarunner",
+    platformSubtitleFull: "qarunner",
 
     // Auth & Login
     username: "用户名",
@@ -199,7 +199,7 @@ export const translations = {
     users: "用户管理",
     triggerRun: "启动测试",
     signOut: "退出登录",
-    managePlatformUsers: "平台用户管理",
+    managePlatformUsers: "用户管理",
 
     // Stats Summary Cards
     totalExecutions: "总执行次数",
@@ -315,7 +315,7 @@ export const translations = {
 
     // User Management Modal
     userManagementTitle: "用户管理面板",
-    platformDirectory: "平台用户名录",
+    platformDirectory: "用户名录",
     registerNewUser: "注册新用户",
     systemAccessRole: "系统访问权限",
     userStandardAccess: "标准用户 (只读/触发权限)",

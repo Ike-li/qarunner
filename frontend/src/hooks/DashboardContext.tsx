@@ -55,8 +55,6 @@ interface DashboardCtx {
   setSearchRunId: (v: string) => void
   filterStatus: string
   setFilterStatus: (v: string) => void
-  filterEngine: string
-  setFilterEngine: (v: string) => void
   filterOwner: string
   setFilterOwner: (v: string) => void
   // Refs
@@ -99,7 +97,6 @@ export function DashboardProvider({
   const [logFilterTab, setLogFilterTab] = useState<'All' | 'Manual' | 'Scheduled'>('All')
   const [searchRunId, setSearchRunId] = useState('')
   const [filterStatus, setFilterStatus] = useState('ALL')
-  const [filterEngine, setFilterEngine] = useState('ALL')
   const [filterOwner, setFilterOwner] = useState('ALL')
   const { selectedFiles, setSelectedFiles, expandedFolders, setExpandedFolders } =
     useFileTreeSelection()
@@ -120,7 +117,6 @@ export function DashboardProvider({
     setLogFilterTab('All')
     setSearchRunId('')
     setFilterStatus('ALL')
-    setFilterEngine('ALL')
     setFilterOwner('ALL')
     setSelectedFiles([])
     setSelectedMarkers([])
@@ -222,7 +218,6 @@ export function DashboardProvider({
         logFilterTab, setLogFilterTab,
         searchRunId, setSearchRunId,
         filterStatus, setFilterStatus,
-        filterEngine, setFilterEngine,
         filterOwner, setFilterOwner,
         terminalRef, fullscreenTerminalRef,
         clearSession,

@@ -9,8 +9,6 @@ import {
   IconActivity,
   IconUser,
   IconClock,
-  IconBox,
-  IconServer,
   IconBolt,
   IconPlay,
   IconSearch
@@ -38,7 +36,6 @@ export function RunsTable() {
         if (d.logFilterTab === 'Scheduled' && r.created_by !== 'system:schedule') return false
         if (d.searchRunId && !r.id.toLowerCase().includes(d.searchRunId.toLowerCase())) return false
         if (d.filterStatus !== 'ALL' && r.status !== d.filterStatus) return false
-        if (d.filterEngine !== 'ALL' && r.executor_mode !== d.filterEngine) return false
         if (d.filterOwner !== 'ALL' && r.created_by !== d.filterOwner) return false
         return true
       }),
@@ -48,7 +45,6 @@ export function RunsTable() {
       d.logFilterTab,
       d.searchRunId,
       d.filterStatus,
-      d.filterEngine,
       d.filterOwner,
     ],
   )
@@ -123,17 +119,6 @@ export function RunsTable() {
           </Tag>
         )
       }
-    },
-    {
-      title: d.t('engine'),
-      dataIndex: 'executor_mode',
-      key: 'executor_mode',
-      render: (mode: Run['executor_mode']) => (
-        <Tag color="grey" size="large">
-          {mode === 'docker' ? <IconBox style={{ marginRight: '4px' }} /> : <IconServer style={{ marginRight: '4px' }} />}
-          {d.t(`engine_${mode}`)}
-        </Tag>
-      )
     },
     {
       title: d.t('owner'),
@@ -218,11 +203,10 @@ export function RunsTable() {
   const resetFilters = () => {
     d.setSearchRunId('')
     d.setFilterStatus('ALL')
-    d.setFilterEngine('ALL')
     d.setFilterOwner('ALL')
   }
 
-  const isFilterActive = !!(d.searchRunId || d.filterStatus !== 'ALL' || d.filterEngine !== 'ALL' || d.filterOwner !== 'ALL')
+  const isFilterActive = !!(d.searchRunId || d.filterStatus !== 'ALL' || d.filterOwner !== 'ALL')
 
   return (
     <div className={styles.tableCard}>
@@ -293,18 +277,6 @@ export function RunsTable() {
           <Select.Option value="completed">{d.t('status_completed')}</Select.Option>
           <Select.Option value="failed">{d.t('status_failed')}</Select.Option>
           <Select.Option value="timeout">{d.t('status_timeout')}</Select.Option>
-        </Select>
-
-        {/* 引擎筛选下拉框 */}
-        <Select
-          value={d.filterEngine}
-          onChange={value => d.setFilterEngine(value as string)}
-          style={{ width: '150px' }}
-          placeholder={d.t('filterEnginePlaceholder')}
-        >
-          <Select.Option value="ALL">{d.t('filterEnginePlaceholder')}</Select.Option>
-          <Select.Option value="subprocess">{d.t('engine_subprocess')}</Select.Option>
-          <Select.Option value="docker">{d.t('engine_docker')}</Select.Option>
         </Select>
 
         {/* 执行人筛选下拉框 */}

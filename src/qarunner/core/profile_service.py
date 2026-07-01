@@ -34,11 +34,12 @@ class ProfileService:
             selected_files=req.selected_files,
             selected_markers=req.selected_markers,
             extra_args=req.extra_args,
-            executor_mode=req.executor_mode,
+            executor_mode="docker",
             timeout=req.timeout,
             created_by=created_by,
             created_at=datetime.now(UTC),
             env=req.env,
+            webhook_url=req.webhook_url,
         )
         await self._store.save_profile(profile)
         return profile
@@ -56,11 +57,12 @@ class ProfileService:
             selected_files=req.selected_files,
             selected_markers=req.selected_markers,
             extra_args=req.extra_args,
-            executor_mode=req.executor_mode,
+            executor_mode="docker",
             timeout=req.timeout,
             created_by=existing.created_by,
             created_at=existing.created_at,
             env=req.env,
+            webhook_url=req.webhook_url,
         )
         await self._store.save_profile(updated)
         return updated

@@ -13,7 +13,6 @@ describe('buildProfilePayload', () => {
         selectedFiles: ['tests/specs/smoke.spec.ts'],
         selectedMarkers: [],
         customArgs: '--headed',
-        executorMode: 'docker',
         timeoutSeconds: 120,
         env: { APP_REPO_PATH: '/path/to/local/repo' },
       }),
@@ -25,7 +24,6 @@ describe('buildProfilePayload', () => {
       selected_files: ['tests/specs/smoke.spec.ts'],
       selected_markers: [],
       extra_args: '--headed',
-      executor_mode: 'docker',
       timeout: 120,
       env: { APP_REPO_PATH: '/path/to/local/repo' },
     })

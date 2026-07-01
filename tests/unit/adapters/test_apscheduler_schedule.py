@@ -347,3 +347,60 @@ async def test_shutdown_stops_engine() -> None:
 async def test_shutdown_no_scheduler() -> None:
     port, _, _ = _make_port()
     await port.shutdown()  # No engine; handled gracefully.
+
+
+# ── BUG regression: _trigger must pass profile_id to orchestrator.create ───────
+
+
+@pytest.mark.asyncio
+async def test_trigger_passes_profile_id_to_orchestrator() -> None:
+    """BUG: _trigger() calls orchestrator.create() without profile_id=.
+
+    The notification feature (v7+v8 migrations, notification.py) expects runs to
+    carry a profile_id so _notify() can look up the profile's webhook_url.  The
+    manual trigger (POST /schedules/{id}/trigger) correctly passes profile_id via
+    _create_run_guarded, but the cron path (_trigger) calls create() without it,
+    so cron-triggered runs never have profile_id set and notifications silently
+    skip them.
+
+    Fix: _trigger() should pass ``profile_id=schedule.profile_id`` to create().
+    """
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(return_value=_schedule(profile_id="prof-xyz"))
+    store.get_profile = AsyncMock(return_value=_profile(id="prof-xyz"))
+    store.save_schedule = AsyncMock()
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    orch.create.assert_called_once()
+    _, kwargs = orch.create.call_args
+    assert kwargs.get("profile_id") == "prof-xyz", (
+        f"BUG: _trigger() called create() with profile_id={kwargs.get('profile_id')!r}, "
+        f"expected 'prof-xyz'. Notifications for cron-triggered runs are silently broken "
+        f"because _notify() returns early when run.profile_id is None."
+    )
+
+
+# ── Regression guard: cron trigger always uses Docker ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trigger_runs_in_docker_regardless_of_profile_mode() -> None:
+    """Cron-triggered runs always use Docker, even if the profile's legacy
+    executor_mode is 'subprocess'.  orchestrator.create() forces 'docker' now."""
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(return_value=_schedule(profile_id="prof-x"))
+    store.get_profile = AsyncMock(return_value=_profile(
+        id="prof-x", executor_mode="subprocess",
+    ))
+    store.save_schedule = AsyncMock()
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    orch.create.assert_called_once()
+    # The orchestrator forces docker regardless of the profile's executor_mode.
+    # The trigger does not need a gate — the orchestrator is the chokepoint now.

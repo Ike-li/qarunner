@@ -1,6 +1,6 @@
 import {
   Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, ChevronDown, ChevronRight,
-  Clock, Copy, Cpu, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Shuffle,
+  Clock, Copy, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Shuffle,
   Terminal, Trash2, XCircle,
 } from 'lucide-react'
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
@@ -324,11 +324,10 @@ export function RunDetailsDrawer() {
               </div>
               <div className={styles.infoItem}>
                 <span className={styles.infoLabel}>{d.t('environment')}</span>
-                <span className={`${styles.engineBadge} ${
-                  d.runs.selectedRun.executor_mode === 'docker' ? styles.engineBadge_docker : styles.engineBadge_subprocess
-                }`} style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
-                  {d.runs.selectedRun.executor_mode === 'docker' ? <Box size={12} className={styles.inlineIcon} /> : <Cpu size={12} className={styles.inlineIcon} />}
-                  <span>{d.t(`engine_${d.runs.selectedRun.executor_mode}`)}</span>
+                <span className={`${styles.engineBadge} ${styles.engineBadge_docker}`}
+                  style={{ marginTop: '0.15rem', alignSelf: 'flex-start' }}>
+                  <Box size={12} className={styles.inlineIcon} />
+                  <span>{d.t('engine_docker')}</span>
                 </span>
               </div>
               <div className={styles.infoItem}>

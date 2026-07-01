@@ -24,7 +24,7 @@ export interface Run {
   created_by: string
   tests_path: string
   args: string[]
-  executor_mode: 'subprocess' | 'docker'
+  executor_mode: string
   summary: TestSummary | null
   report: ReportRef | null
   exit_code: number | null
@@ -111,7 +111,7 @@ export interface Profile {
   selected_files: string[]
   selected_markers: string[]
   extra_args: string
-  executor_mode: 'subprocess' | 'docker'
+  executor_mode: string
   timeout: number | null
   created_by: string
   created_at: string

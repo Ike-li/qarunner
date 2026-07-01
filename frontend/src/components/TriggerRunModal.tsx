@@ -1,4 +1,4 @@
-import { Box, Check, Cpu, Play, Plus, RotateCw, SlidersHorizontal, X } from 'lucide-react'
+import { Check, Play, Plus, RotateCw, SlidersHorizontal, X } from 'lucide-react'
 import { Modal, Banner, Select, Input, Row, Col, Button, Tag, Checkbox } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { TestFileTree } from './TestFileTree'
@@ -124,7 +124,6 @@ export function TriggerRunModal() {
                       d.setSelectedMarkers(prof.selected_markers || [])
                       d.form.setSelectedRunner(prof.runner || 'pytest')
                       d.form.setCustomArgs(prof.extra_args || '')
-                      d.form.setExecutorMode(prof.executor_mode || 'subprocess')
                       d.form.setTimeoutSeconds(prof.timeout || '')
                       const env_data = prof.env || {}
                       const mappedVars = Object.entries(env_data).map(([key, value]) => ({ key, value: String(value) }))
@@ -136,7 +135,6 @@ export function TriggerRunModal() {
                     d.setSelectedMarkers([])
                     d.form.setSelectedRunner('pytest')
                     d.form.setCustomArgs('')
-                    d.form.setExecutorMode('subprocess')
                     d.form.setTimeoutSeconds('')
                     d.form.setEnvVars([])
                   }
@@ -150,7 +148,6 @@ export function TriggerRunModal() {
                   d.setSelectedMarkers([])
                   d.form.setSelectedRunner('pytest')
                   d.form.setCustomArgs('')
-                  d.form.setExecutorMode('subprocess')
                   d.form.setTimeoutSeconds('')
                   d.form.setEnvVars([])
                 }}
@@ -224,43 +221,6 @@ export function TriggerRunModal() {
             </div>
           </div>
         )}
-
-        {/* Execution Environment */}
-        <div className={styles.formField}>
-          <label className={styles.label} id="trigger-env-label">
-            <span>{d.t('executionEnvironment')}</span>
-            <span className={styles.requiredIndicator}>*</span>
-          </label>
-          <div className={styles.segmentedControl} style={{ display: 'flex', gap: '12px' }}>
-            <button
-              type="button"
-              className={`${styles.segmentButton} ${d.form.executorMode === 'subprocess' ? styles.segmentButtonActive : ''}`}
-              onClick={() => d.form.setExecutorMode('subprocess')}
-              style={{ flex: 1, padding: '12px', display: 'flex', alignItems: 'center', gap: '12px', textAlign: 'left', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              <Cpu size={20} style={{ color: d.form.executorMode === 'subprocess' ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)' }} />
-              <div className={styles.segmentTextGroup}>
-                <span className={styles.segmentTitle} style={{ fontWeight: 600, display: 'block' }}>{d.t('localSubprocessTitle')}</span>
-                <span className={styles.segmentDesc} style={{ fontSize: '11px', color: 'var(--semi-color-text-2)' }}>{d.t('localSubprocessDesc')}</span>
-              </div>
-            </button>
-            <button
-              type="button"
-              className={`${styles.segmentButton} ${d.form.executorMode === 'docker' ? styles.segmentButtonActive : ''}`}
-              onClick={() => d.form.setExecutorMode('docker')}
-              style={{ flex: 1, padding: '12px', display: 'flex', alignItems: 'center', gap: '12px', textAlign: 'left', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              <Box size={20} style={{ color: d.form.executorMode === 'docker' ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)' }} />
-              <div className={styles.segmentTextGroup}>
-                <span className={styles.segmentTitle} style={{ fontWeight: 600, display: 'block' }}>{d.t('dockerContainerTitle')}</span>
-                <span className={styles.segmentDesc} style={{ fontSize: '11px', color: 'var(--semi-color-text-2)' }}>{d.t('dockerContainerDesc')}</span>
-              </div>
-            </button>
-          </div>
-          <span className={styles.fieldHelp}>
-            {d.t('envHelp')}
-          </span>
-        </div>
 
         {/* Pytest Arguments */}
         <div className={styles.formField}>

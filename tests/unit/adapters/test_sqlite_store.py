@@ -1109,7 +1109,50 @@ async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:
     assert await store.get_cases_for_run("run-cascade") == []
 
 
+# ── BUG regression: list() and get_old_unlocked_runs() missing profile_id ────
 
 
+async def test_list_preserves_profile_id(store: SqliteStore) -> None:
+    """Regression guard: list() must include profile_id in its SELECT.
 
+    An earlier version of this query missed the column; the fix (v8 migration)
+    added ``profile_id`` to the SELECT.  This test ensures it doesn't regress.
+    """
+    run = _make_run(id="run-with-profile", profile_id="prof-abc")
+    await store.save(run)
+
+    # get() has profile_id — this already works.
+    direct = await store.get("run-with-profile")
+    assert direct.profile_id == "prof-abc", (
+        f"get() should return profile_id='prof-abc', got {direct.profile_id!r}"
+    )
+
+    # list() must also preserve profile_id (was missing before v8 migration fix).
+    listed = await store.list()
+    listed_run = next(r for r in listed if r.id == "run-with-profile")
+    assert listed_run.profile_id == "prof-abc", (
+        f"list() returned profile_id={listed_run.profile_id!r}, expected 'prof-abc'"
+    )
+
+
+async def test_get_old_unlocked_runs_preserves_profile_id(store: SqliteStore) -> None:
+    """BUG: get_old_unlocked_runs() SELECT also misses the profile_id column."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    run = _make_run(
+        id="run-old-prof",
+        profile_id="prof-xyz",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(days=30),
+    )
+    run = run.model_copy(update={"finished_at": now - timedelta(days=30)})
+    await store.save(run)
+
+    old_runs = await store.get_old_unlocked_runs(7)
+    old_run = next(r for r in old_runs if r.id == "run-old-prof")
+    assert old_run.profile_id == "prof-xyz", (
+        f"BUG: get_old_unlocked_runs() returned profile_id={old_run.profile_id!r}, "
+        f"expected 'prof-xyz'. SELECT is missing the profile_id column."
+    )
 

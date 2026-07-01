@@ -52,7 +52,7 @@ class RunRequest(BaseModel):
     # Default to the isolated docker executor (SEC): untrusted test code must not
     # run in the platform process by default. subprocess stays opt-in (admins, or
     # allow_subprocess_for_non_admins). Literal rejects unknown modes (P2-6).
-    executor_mode: Literal["subprocess", "docker"] = "docker"
+    executor_mode: str = "docker"
     # Selective run parameters
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
@@ -112,11 +112,13 @@ class TestProfile(BaseModel):
     selected_files: list[str] = Field(default_factory=list)
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
-    executor_mode: str = "subprocess"
+    executor_mode: str = "docker"
     timeout: int | None = None
     created_by: str
     created_at: datetime
     env: dict[str, str] = Field(default_factory=dict)
+    # Feishu bot webhook URL for run-completion notifications.
+    webhook_url: str | None = None
 
 
 
@@ -277,7 +279,7 @@ class Run(BaseModel):
     args: list[str] = Field(default_factory=list)
     allure_enabled: bool = True
     timeout: int | None = None
-    executor_mode: str = "subprocess"
+    executor_mode: str = "docker"
     summary: TestSummary | None = None
     report: ReportRef | None = None
     exit_code: int | None = None
@@ -288,5 +290,7 @@ class Run(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     locked: bool = False
     worker_node_id: str | None = None
+    # The profile that triggered this run (None for manual triggers).
+    profile_id: str | None = None
 
 

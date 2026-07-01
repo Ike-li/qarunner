@@ -20,7 +20,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
   const [customArgs, setCustomArgs] = useState('')
   const [allureEnabled, setAllureEnabled] = useState(true)
   const [timeoutSeconds, setTimeoutSeconds] = useState<number | ''>('')
-  const [executorMode, setExecutorMode] = useState<'subprocess' | 'docker'>('subprocess')
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([])
 
   // ── profile-editing state ────────────────────────────────────────────
@@ -55,7 +54,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
     setCustomArgs('')
     setAllureEnabled(true)
     setTimeoutSeconds('')
-    setExecutorMode('subprocess')
     setEnvVars([])
     setEditingProfileId(null)
     setSelectedProfileId('')
@@ -74,7 +72,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
     setCustomArgs(profile.extra_args || '')
     setAllureEnabled(true)
     setTimeoutSeconds(profile.timeout === null ? '' : profile.timeout)
-    setExecutorMode(profile.executor_mode || 'subprocess')
     setProfileName(profile.name || '')
     setProfileDesc(profile.description || '')
     setEnvVars(
@@ -111,7 +108,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
             args: [],
             allure: allureEnabled,
             timeout: timeoutSeconds === '' ? null : Number(timeoutSeconds),
-            executor_mode: executorMode,
             selected_files: [],
             selected_markers: [],
             extra_args: customArgs,
@@ -132,7 +128,7 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         setIsSubmitting(false)
       }
     },
-    [apiFetch, testsPath, selectedRunner, allureEnabled, timeoutSeconds, executorMode, customArgs, makeEnvPayload, resetForm],
+    [apiFetch, testsPath, selectedRunner, allureEnabled, timeoutSeconds, customArgs, makeEnvPayload, resetForm],
   )
 
   const handleSaveProfile = useCallback(
@@ -159,7 +155,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
             selectedFiles,
             selectedMarkers,
             customArgs,
-            executorMode,
             timeoutSeconds,
             env: makeEnvPayload(),
           })),
@@ -177,7 +172,7 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         setFormError('Network error. Failed to save execution profile.')
       }
     },
-    [apiFetch, profileName, profileDesc, testsPath, selectedRunner, customArgs, executorMode, timeoutSeconds, makeEnvPayload],
+    [apiFetch, profileName, profileDesc, testsPath, selectedRunner, customArgs, timeoutSeconds, makeEnvPayload],
   )
 
   const handleUpdateProfile = useCallback(
@@ -206,7 +201,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
             selectedFiles,
             selectedMarkers,
             customArgs,
-            executorMode,
             timeoutSeconds,
             env: makeEnvPayload(),
           })),
@@ -224,7 +218,7 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         setIsSubmitting(false)
       }
     },
-    [apiFetch, editingProfileId, profileName, profileDesc, testsPath, selectedRunner, customArgs, executorMode, timeoutSeconds, makeEnvPayload, resetForm],
+    [apiFetch, editingProfileId, profileName, profileDesc, testsPath, selectedRunner, customArgs, timeoutSeconds, makeEnvPayload, resetForm],
   )
 
   return {
@@ -234,7 +228,6 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
     customArgs, setCustomArgs,
     allureEnabled, setAllureEnabled,
     timeoutSeconds, setTimeoutSeconds,
-    executorMode, setExecutorMode,
     envVars, setEnvVars,
     editingProfileId, setEditingProfileId,
     selectedProfileId, setSelectedProfileId,
