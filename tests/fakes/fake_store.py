@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from qarunner.errors import RunNotFound
-from qarunner.models import CaseHistoryPoint, Run, TestCaseResult
+from qarunner.models import CaseHistoryPoint, Run, RunStatus, TestCaseResult
 
 
 @dataclass
@@ -59,3 +59,19 @@ class InMemoryRunStore:
             CaseHistoryPoint(created_at=ca, status=st)
             for ca, st in reversed(rows[:limit])
         ]
+
+    async def dequeue_next_queued(self) -> str | None:
+        """Find the oldest QUEUED run and advance it to RUNNING."""
+        queued = sorted(
+            [r for r in self._runs.values() if r.status == RunStatus.QUEUED],
+            key=lambda r: r.created_at,
+        )
+        if not queued:
+            return None
+        run = queued[0]
+        run = run.model_copy(update={
+            "status": RunStatus.RUNNING,
+            "started_at": datetime.now(UTC),
+        })
+        self._runs[run.id] = run
+        return run.id

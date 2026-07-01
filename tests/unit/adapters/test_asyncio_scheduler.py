@@ -1,145 +1,192 @@
-"""Tests for AsyncioScheduler adapter."""
+"""Tests for AsyncioScheduler — persistent poller with SQLite-backed queue."""
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
+
+import pytest
 
 from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
 
 
-async def test_schedule_runs_coroutine() -> None:
-    results: list[int] = []
+# ── minimal fake store for poller tests ──────────────────────────────────────
 
-    async def task() -> None:
-        results.append(42)
 
-    scheduler = AsyncioScheduler()
-    scheduler.schedule(task())
+@dataclass
+class _FakeStore:
+    """Store with a controllable dequeue_next_queued() for scheduler tests."""
+
+    _queued: list[str] = field(default_factory=list)
+    dequeued: list[str] = field(default_factory=list)
+
+    async def dequeue_next_queued(self) -> str | None:
+        if not self._queued:
+            return None
+        run_id = self._queued.pop(0)
+        self.dequeued.append(run_id)
+        return run_id
+
+
+# ── lifecycle ────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_and_shutdown() -> None:
+    store = _FakeStore()
+    executed: list[str] = []
+
+    async def run_fn(run_id: str) -> None:
+        executed.append(run_id)
+
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    assert not scheduler._running
+
+    await scheduler.start()
+    assert scheduler._running
+
+    await scheduler.shutdown()
+    assert not scheduler._running
+
+
+@pytest.mark.asyncio
+async def test_start_is_idempotent() -> None:
+    store = _FakeStore()
+    scheduler = AsyncioScheduler(
+        store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1
+    )
+    await scheduler.start()
+    await scheduler.start()  # second call is a no-op
+    assert scheduler._running
+    await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_start_raises_when_run_fn_not_set() -> None:
+    scheduler = AsyncioScheduler(store=_FakeStore(), max_concurrency=1)
+    # _run_fn is None because we used the no-store constructor path
+    # — we need to simulate the case where set_run_fn was never called.
+    # Construct without run_fn and verify start() raises.
+    s = AsyncioScheduler.__new__(AsyncioScheduler)
+    s._store = _FakeStore()
+    s._semaphore = asyncio.Semaphore(1)
+    s._tasks = set()
+    s._keyed = {}
+    s._poller_task = None
+    s._running = False
+    s._wake_event = asyncio.Event()
+    s._run_fn = None
+
+    with pytest.raises(RuntimeError, match="run_fn not set"):
+        await s.start()
+
+
+# ── enqueue & poller ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_poller_dequeues_and_executes() -> None:
+    store = _FakeStore(_queued=["run-1", "run-2"])
+    executed: list[str] = []
+    done_events: list[asyncio.Event] = []
+
+    async def run_fn(run_id: str) -> None:
+        executed.append(run_id)
+        ev = asyncio.Event()
+        done_events.append(ev)
+        await ev.wait()
+
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=4)
+    await scheduler.start()
+
+    # Wake poller — it should dequeue and start executing
+    scheduler.enqueue("run-1")
     await asyncio.sleep(0.05)
-    assert results == [42]
+    # With 2 queued runs and 4 slots, both should be picked up
+    scheduler.enqueue("run-2")
+    await asyncio.sleep(0.05)
+
+    assert store.dequeued == ["run-1", "run-2"]
+    assert sorted(executed) == ["run-1", "run-2"]
+
+    # Release the tasks
+    for ev in done_events:
+        ev.set()
+    await scheduler.drain()
+    await scheduler.shutdown()
 
 
-async def test_schedule_multiple_tasks() -> None:
-    results: list[int] = []
-
-    async def task(val: int) -> None:
-        results.append(val)
-
-    scheduler = AsyncioScheduler()
-    scheduler.schedule(task(1))
-    scheduler.schedule(task(2))
-    scheduler.schedule(task(3))
-    await asyncio.sleep(0.1)
-    assert sorted(results) == [1, 2, 3]
-
-
+@pytest.mark.asyncio
 async def test_semaphore_limits_concurrency() -> None:
-    max_seen = 0
+    """Only max_concurrency tasks execute at a time."""
+    store = _FakeStore(_queued=[f"run-{i}" for i in range(6)])
     current = 0
+    max_seen = 0
+    release_events: list[asyncio.Event] = []
 
-    async def task() -> None:
-        nonlocal max_seen, current
+    async def run_fn(run_id: str) -> None:
+        nonlocal current, max_seen
         current += 1
         if current > max_seen:
             max_seen = current
-        await asyncio.sleep(0.05)
+        ev = asyncio.Event()
+        release_events.append(ev)
+        await ev.wait()
         current -= 1
 
-    scheduler = AsyncioScheduler(max_concurrency=2)
-    for _ in range(6):
-        scheduler.schedule(task())
-    await asyncio.sleep(0.5)
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    await scheduler.start()
+    # Enqueue to wake poller
+    scheduler.enqueue("run-0")
+    await asyncio.sleep(0.1)
+
     assert max_seen <= 2
+    assert max_seen >= 2  # at least 2 should have been concurrent
 
-
-async def test_completed_task_is_dereferenced() -> None:
-    scheduler = AsyncioScheduler()
-
-    async def task() -> None:
-        return None
-
-    scheduler.schedule(task())
-    await asyncio.sleep(0.05)
-    # Strong reference is dropped once the task finishes cleanly.
-    assert scheduler._tasks == set()
-
-
-async def test_failing_task_is_logged_not_raised() -> None:
-    scheduler = AsyncioScheduler()
-
-    async def boom() -> None:
-        raise RuntimeError("kaboom")
-
-    # Must not propagate out of the scheduler / crash the loop.
-    scheduler.schedule(boom())
-    await asyncio.sleep(0.05)
-    assert scheduler._tasks == set()
-
-
-async def test_cancelled_task_is_handled() -> None:
-    scheduler = AsyncioScheduler()
-    started = asyncio.Event()
-
-    async def long_task() -> None:
-        started.set()
-        await asyncio.sleep(10)
-
-    scheduler.schedule(long_task())
-    await started.wait()
-    task = next(iter(scheduler._tasks))
-    task.cancel()
-    await asyncio.sleep(0.05)
-    # Cancellation is handled without calling .exception() (which would raise).
-    assert scheduler._tasks == set()
-
-
-async def test_drain_waits_for_inflight_task() -> None:
-    scheduler = AsyncioScheduler()
-    done: list[int] = []
-
-    async def task() -> None:
-        await asyncio.sleep(0.05)
-        done.append(1)
-
-    scheduler.schedule(task())
+    # Release all
+    for ev in release_events:
+        ev.set()
     await scheduler.drain()
-    # drain returns only after the in-flight task has run to completion.
-    assert done == [1]
-    assert scheduler._tasks == set()
+    await scheduler.shutdown()
 
 
-async def test_drain_with_no_tasks_is_noop() -> None:
-    scheduler = AsyncioScheduler()
-    # Nothing scheduled — drain returns immediately without error.
-    await scheduler.drain(timeout=0.01)
-    assert scheduler._tasks == set()
+@pytest.mark.asyncio
+async def test_poller_sleeps_when_queue_empty() -> None:
+    """Poller releases semaphore and waits when no queued runs."""
+    store = _FakeStore()  # empty
+    executed: list[str] = []
+
+    async def run_fn(run_id: str) -> None:
+        executed.append(run_id)
+
+    scheduler = AsyncioScheduler(
+        store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05
+    )
+    await scheduler.start()
+    # No enqueued runs — poller should sleep, not crash
+    await asyncio.sleep(0.1)
+    assert executed == []
+
+    # Now enqueue one — it should be picked up on next wake or poll cycle
+    store._queued.append("run-late")
+    scheduler.enqueue("run-late")
+    await asyncio.sleep(0.15)  # > poll_interval
+    assert "run-late" in executed
+
+    await scheduler.shutdown()
 
 
-async def test_drain_cancels_task_exceeding_timeout() -> None:
-    scheduler = AsyncioScheduler()
-    started = asyncio.Event()
-    completed: list[int] = []
-
-    async def hung_task() -> None:
-        started.set()
-        await asyncio.sleep(10)
-        completed.append(1)  # never reached — cancelled by drain first
-
-    scheduler.schedule(hung_task())
-    await started.wait()
-    await scheduler.drain(timeout=0.05)
-    await asyncio.sleep(0)  # let the done-callback discard the cancelled task
-    # The hung task is cancelled before finishing; its side effect never runs.
-    assert completed == []
-    assert scheduler._tasks == set()
+# ── cancel ────────────────────────────────────────────────────────────────────
 
 
-async def test_cancel_by_key_cancels_running_task() -> None:
-    scheduler = AsyncioScheduler()
+@pytest.mark.asyncio
+async def test_cancel_running_task() -> None:
+    """cancel(key) cancels an in-flight asyncio Task."""
+    store = _FakeStore(_queued=["run-1"])
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
-    async def long_task() -> None:
+    async def run_fn(run_id: str) -> None:
         started.set()
         try:
             await asyncio.sleep(10)
@@ -147,66 +194,147 @@ async def test_cancel_by_key_cancels_running_task() -> None:
             cancelled.set()
             raise
 
-    scheduler.schedule(long_task(), key="run-1")
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    await scheduler.start()
+    scheduler.enqueue("run-1")
     await started.wait()
+
     assert scheduler.cancel("run-1") is True
     await asyncio.sleep(0.05)
     assert cancelled.is_set()
-    # Both references are dropped once the cancelled task settles.
-    assert scheduler._tasks == set()
-    assert scheduler._keyed == {}
+
+    await scheduler.shutdown()
 
 
+@pytest.mark.asyncio
 async def test_cancel_unknown_key_returns_false() -> None:
-    scheduler = AsyncioScheduler()
+    store = _FakeStore()
+    scheduler = AsyncioScheduler(store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1)
     assert scheduler.cancel("nope") is False
 
 
-async def test_cancel_completed_key_returns_false() -> None:
-    scheduler = AsyncioScheduler()
+@pytest.mark.asyncio
+async def test_cancel_queued_not_running_returns_false() -> None:
+    """cancel() is for in-flight tasks only; QUEUED runs are cancelled via DB."""
+    store = _FakeStore(_queued=["run-1"])
+    scheduler = AsyncioScheduler(
+        store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1
+    )
+    # Before the poller picks up run-1, cancel() should return False
+    # (no live task to cancel — orchestrator handles DB update)
+    assert scheduler.cancel("run-1") is False
 
-    async def quick() -> None:
-        return None
 
-    scheduler.schedule(quick(), key="run-2")
-    await asyncio.sleep(0.05)
-    # The task finished and was dereferenced; nothing live to cancel.
-    assert scheduler.cancel("run-2") is False
+# ── drain ─────────────────────────────────────────────────────────────────────
 
 
-async def test_unkeyed_schedule_is_not_cancellable() -> None:
-    scheduler = AsyncioScheduler()
+@pytest.mark.asyncio
+async def test_drain_waits_for_inflight_task() -> None:
+    store = _FakeStore(_queued=["run-1"])
+    done: list[str] = []
+
+    async def run_fn(run_id: str) -> None:
+        await asyncio.sleep(0.05)
+        done.append(run_id)
+
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    await scheduler.start()
+    scheduler.enqueue("run-1")
+    await asyncio.sleep(0.01)  # let poller pick it up
+    await scheduler.drain()
+    assert done == ["run-1"]
+
+
+@pytest.mark.asyncio
+async def test_drain_with_no_tasks_is_noop() -> None:
+    store = _FakeStore()
+    scheduler = AsyncioScheduler(store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1)
+    await scheduler.drain(timeout=0.01)
+
+
+@pytest.mark.asyncio
+async def test_drain_cancels_task_exceeding_timeout() -> None:
+    store = _FakeStore(_queued=["run-1"])
     started = asyncio.Event()
+    completed: list[str] = []
 
-    async def long_task() -> None:
+    async def run_fn(run_id: str) -> None:
         started.set()
         await asyncio.sleep(10)
+        completed.append(run_id)
 
-    scheduler.schedule(long_task())  # no key
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    await scheduler.start()
+    scheduler.enqueue("run-1")
     await started.wait()
-    assert scheduler.cancel("anything") is False
-    # Clean up the still-running task so the test doesn't leak it.
-    next(iter(scheduler._tasks)).cancel()
-    await asyncio.sleep(0.01)
+    await scheduler.drain(timeout=0.05)
+    await asyncio.sleep(0)
+    assert completed == []
+
+    await scheduler.shutdown()
 
 
-async def test_keyed_cleanup_scans_past_non_matching_tasks() -> None:
-    scheduler = AsyncioScheduler()
-    release = asyncio.Event()
+# ── done-callback cleanup ─────────────────────────────────────────────────────
 
-    async def keep_running() -> None:
-        await release.wait()
 
-    async def quick() -> None:
+@pytest.mark.asyncio
+async def test_completed_task_is_dereferenced() -> None:
+    store = _FakeStore(_queued=["run-1"])
+
+    async def run_fn(run_id: str) -> None:
         return None
 
-    # "slow" is inserted first, "fast" second; when "fast" finishes its done
-    # callback scans past the non-matching "slow" entry to reach its own.
-    scheduler.schedule(keep_running(), key="slow")
-    scheduler.schedule(quick(), key="fast")
-    await asyncio.sleep(0.05)
-    assert "fast" not in scheduler._keyed
-    assert "slow" in scheduler._keyed  # still running, reference retained
-    release.set()
-    await asyncio.sleep(0.05)
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    await scheduler.start()
+    scheduler.enqueue("run-1")
+    await scheduler.drain()
+    assert scheduler._tasks == set()
     assert scheduler._keyed == {}
+    await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_failing_task_is_dereferenced() -> None:
+    store = _FakeStore(_queued=["run-1"])
+
+    async def run_fn(run_id: str) -> None:
+        raise RuntimeError("boom")
+
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
+    await scheduler.start()
+    scheduler.enqueue("run-1")
+    await scheduler.drain()
+    assert scheduler._tasks == set()
+    await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_poller_handles_dequeue_exception() -> None:
+    """Poller catches exceptions from dequeue and keeps running."""
+    store = _FakeStore()
+
+    call_count = 0
+
+    async def faulty_dequeue() -> str | None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("db explode")
+        return "run-after-error"
+
+    store.dequeue_next_queued = faulty_dequeue  # type: ignore[method-assign]
+    executed: list[str] = []
+
+    async def run_fn(run_id: str) -> None:
+        executed.append(run_id)
+
+    scheduler = AsyncioScheduler(
+        store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05
+    )
+    await scheduler.start()
+    scheduler.enqueue("any")
+    await asyncio.sleep(0.2)  # poller recovers and picks up run-after-error
+
+    await scheduler.shutdown()
+    # The poller survived the exception and dequeued a run on the next cycle.
+    assert "run-after-error" in executed

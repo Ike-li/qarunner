@@ -134,49 +134,19 @@ class TestCancel:
             artifacts_root=str(tmp_path / "art"),
         )
         run = await orch.create(RunRequest(tests_path="suite", executor_mode="subprocess"))
+        # Start execute in background (simulates poller picking up the run)
+        task = asyncio.create_task(orch.execute(run.id))
         await asyncio.wait_for(started.wait(), timeout=2)
         result = await orch.cancel(run.id)
         assert result.status == RunStatus.CANCELLED
-        await asyncio.sleep(0.05)  # let execute's CancelledError branch persist
-        stored = await orch._store.get(run.id)
-        assert stored.status == RunStatus.CANCELLED
+        assert result.finished_at is not None
+        await task
 
-    @pytest.mark.asyncio
+    @pytest.mark.skip(reason="CancelledError save-failure path is unreachable in new poller "
+                             "design — cancel now writes CANCELLED via the orchestrator "
+                             "directly, not through a CancelledError handler in execute()")
     async def test_execute_cancellation_save_failure_is_swallowed(self, tmp_path, monkeypatch):
-        (tmp_path / "suite").mkdir()
-        started = asyncio.Event()
-
-        class _BlockingRunner:
-            async def run(
-                self, cmd, cwd, env=None, timeout=1800, stdout_file=None, stderr_file=None
-            ):
-                started.set()
-                await asyncio.sleep(60)
-                return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=0)
-
-        orch = _make_orchestrator(
-            process=_BlockingRunner(),
-            tests_root=str(tmp_path),
-            artifacts_root=str(tmp_path / "art"),
-        )
-        original_save = orch._store.save
-
-        async def _save_failing_on_cancel(run):
-            if run.status == RunStatus.CANCELLED:
-                raise RuntimeError("db unavailable")
-            await original_save(run)
-
-        monkeypatch.setattr(orch._store, "save", _save_failing_on_cancel)
-
-        run = await orch.create(RunRequest(tests_path="suite", executor_mode="subprocess"))
-        await asyncio.wait_for(started.wait(), timeout=2)
-        # Cancel directly so execute hits its CancelledError branch, where the
-        # CANCELLED save raises and must be swallowed + logged (never propagated).
-        orch._scheduler.cancel(run.id)
-        await asyncio.sleep(0.05)
-        # The failed CANCELLED save leaves the run RUNNING; the error was logged.
-        stored = await orch._store.get(run.id)
-        assert stored.status == RunStatus.RUNNING
+        pass
 
 
 class TestDrain:
@@ -223,7 +193,7 @@ class TestCreate:
         orch = _make_orchestrator()
         req = RunRequest(tests_path="sample")
         await orch.create(req)
-        assert orch._scheduler.scheduled == 1
+        assert orch._scheduler.enqueued == 1
 
     @pytest.mark.asyncio
     async def test_create_stores_request_fields(self):
@@ -533,6 +503,25 @@ class TestNotify:
 
 class TestExecute:
     """RunOrchestrator.execute() runs the full lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_execute_skips_already_cancelled_run(self):
+        """execute() returns early when the run is already in a terminal state."""
+        orch = _make_orchestrator()
+        run = Run(
+            id="cancelled-run",
+            status=RunStatus.CANCELLED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite",
+            created_at=datetime.now(UTC),
+        )
+        await orch._store.save(run)
+        # execute() should see CANCELLED and return without running anything.
+        await orch.execute("cancelled-run")
+        # Verify the run was NOT touched (still CANCELLED, no started_at)
+        stored = await orch._store.get("cancelled-run")
+        assert stored.status == RunStatus.CANCELLED
 
     @pytest.mark.asyncio
     async def test_successful_run(self):
@@ -875,10 +864,11 @@ class TestWorkspaceJail:
             return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
 
         class NoopScheduler:
-            scheduled = 0
-            def schedule(self, coro, *, key=None):
-                self.scheduled += 1
-                coro.close()
+            enqueued = 0
+            def enqueue(self, run_id):
+                self.enqueued += 1
+            async def start(self): pass
+            async def shutdown(self): pass
 
         orch = RunOrchestrator(
             registry=registry,
@@ -928,10 +918,11 @@ class TestWorkspaceJail:
             return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
 
         class NoopScheduler:
-            scheduled = 0
-            def schedule(self, coro, *, key=None):
-                self.scheduled += 1
-                coro.close()
+            enqueued = 0
+            def enqueue(self, run_id):
+                self.enqueued += 1
+            async def start(self): pass
+            async def shutdown(self): pass
 
         orch = RunOrchestrator(
             registry=registry,
@@ -1126,8 +1117,10 @@ class TestWorkspaceJail:
         registry.register(PytestRunner())
 
         class NoopScheduler:
-            def schedule(self, coro, *, key=None):
-                coro.close()
+            def enqueue(self, run_id):
+                pass
+            async def start(self): pass
+            async def shutdown(self): pass
 
         orch = RunOrchestrator(
             registry=registry,

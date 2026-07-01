@@ -23,20 +23,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = container.settings
     # Initialize SQLite store
     await container.store.initialize()
-    # Crash recovery: fail any run left QUEUED/RUNNING by a previous process.
-    # This assumes a single instance owns the DB (CONC-2) — it fails *all* such
-    # runs, so it must be disabled on all but one replica to avoid a late-starting
-    # worker killing runs still executing in its siblings.
+    # Crash recovery: fail RUNNING runs left by a previous process.  QUEUED
+    # runs survive restart — they are persistent and will be picked up by the
+    # new poller (CONC-2: single-instance assumption).
     recover = getattr(container.store, "mark_interrupted_runs", None)
     if settings.crash_recovery_on_startup and recover is not None:
         interrupted = await recover(worker_node_id=settings.worker_node_id)
 
         if interrupted:
             logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
+    # Start the persistent task scheduler (poller) before cron, so the poller
+    # is ready to pick up any QUEUED runs that survived the restart.
+    await container.task_scheduler.start()
     await container.scheduler.start()
     yield
-    # Cleanup — stop new triggers, let in-flight runs settle, then close the DB.
+    # Cleanup — stop cron triggers first, then stop the task poller,
+    # drain in-flight runs, then close the DB.
     await container.scheduler.shutdown()
+    await container.task_scheduler.shutdown()
     await container.orchestrator.drain(timeout=settings.shutdown_drain_timeout_seconds)
     await container.store.close()
 

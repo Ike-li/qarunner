@@ -773,12 +773,10 @@ async def test_mark_interrupted_runs(store: SqliteStore) -> None:
     await store.save(_make_run(id="f1", status=RunStatus.FAILED))
 
     count = await store.mark_interrupted_runs()
-    assert count == 2
+    assert count == 1  # only RUNNING (QUEUED survives restart)
 
     q1 = await store.get("q1")
-    assert q1.status == RunStatus.FAILED
-    assert q1.error == "interrupted by server restart"
-    assert q1.finished_at is not None
+    assert q1.status == RunStatus.QUEUED  # QUEUED survives restart (persistent queue)
     assert (await store.get("r1")).status == RunStatus.FAILED
     # Terminal runs are untouched.
     assert (await store.get("c1")).status == RunStatus.COMPLETED
@@ -798,10 +796,10 @@ async def test_mark_interrupted_runs_with_worker_node_id(store: SqliteStore) -> 
 
     # Fail runs on node-a only
     count = await store.mark_interrupted_runs(worker_node_id="node-a")
-    assert count == 2
+    assert count == 1  # only RUNNING r1 (QUEUED q1 survives)
 
-    # Verify node-a runs became FAILED
-    assert (await store.get("q1")).status == RunStatus.FAILED
+    # Verify node-a RUNNING became FAILED; QUEUED survives
+    assert (await store.get("q1")).status == RunStatus.QUEUED  # survives restart
     assert (await store.get("r1")).status == RunStatus.FAILED
 
     # Verify node-b runs are unaffected
@@ -1155,4 +1153,94 @@ async def test_get_old_unlocked_runs_preserves_profile_id(store: SqliteStore) ->
         f"BUG: get_old_unlocked_runs() returned profile_id={old_run.profile_id!r}, "
         f"expected 'prof-xyz'. SELECT is missing the profile_id column."
     )
+
+
+# ── dequeue_next_queued ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dequeue_next_queued_returns_oldest_fifo(store: SqliteStore) -> None:
+    """Dequeue picks the oldest QUEUED run by created_at (FIFO)."""
+    now = datetime.now(UTC)
+    run_a = _make_run(id="a", status=RunStatus.QUEUED, created_at=now)
+    run_b = _make_run(id="b", status=RunStatus.QUEUED,
+                      created_at=now.replace(second=now.second + 1))
+    await store.save(run_a)
+    await store.save(run_b)
+
+    first = await store.dequeue_next_queued()
+    assert first == "a", f"expected oldest run 'a', got {first!r}"
+    second = await store.dequeue_next_queued()
+    assert second == "b", f"expected second run 'b', got {second!r}"
+
+
+@pytest.mark.asyncio
+async def test_dequeue_next_queued_marks_running(store: SqliteStore) -> None:
+    """Dequeued run has status RUNNING and a started_at timestamp."""
+    run = _make_run(id="r1", status=RunStatus.QUEUED)
+    await store.save(run)
+
+    run_id = await store.dequeue_next_queued()
+    assert run_id == "r1"
+
+    fetched = await store.get(run_id)
+    assert fetched.status == RunStatus.RUNNING
+    assert fetched.started_at is not None
+
+
+@pytest.mark.asyncio
+async def test_dequeue_next_queued_returns_none_when_empty(store: SqliteStore) -> None:
+    """Empty queue → None."""
+    assert await store.dequeue_next_queued() is None
+
+
+@pytest.mark.asyncio
+async def test_dequeue_skips_cancelled(store: SqliteStore) -> None:
+    """CANCELLED runs are not picked up by dequeue."""
+    run_cancelled = _make_run(id="c1", status=RunStatus.CANCELLED)
+    run_queued = _make_run(id="q1", status=RunStatus.QUEUED)
+    await store.save(run_cancelled)
+    await store.save(run_queued)
+
+    run_id = await store.dequeue_next_queued()
+    assert run_id == "q1", f"should skip cancelled, got {run_id!r}"
+
+
+@pytest.mark.asyncio
+async def test_dequeue_skips_completed(store: SqliteStore) -> None:
+    """COMPLETED runs are not picked up by dequeue."""
+    run_done = _make_run(id="d1", status=RunStatus.COMPLETED)
+    run_queued = _make_run(id="q2", status=RunStatus.QUEUED)
+    await store.save(run_done)
+    await store.save(run_queued)
+
+    run_id = await store.dequeue_next_queued()
+    assert run_id == "q2"
+
+
+# ── crash recovery: QUEUED survives, RUNNING marked FAILED ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_mark_interrupted_runs_only_touches_running(store: SqliteStore) -> None:
+    """Crash recovery marks RUNNING → FAILED, leaves QUEUED untouched."""
+    run_queued = _make_run(id="q", status=RunStatus.QUEUED)
+    run_running = _make_run(id="r", status=RunStatus.RUNNING)
+    run_completed = _make_run(id="c", status=RunStatus.COMPLETED)
+    await store.save(run_queued)
+    await store.save(run_running)
+    await store.save(run_completed)
+
+    count = await store.mark_interrupted_runs()
+    assert count >= 1  # at least the RUNNING one
+
+    queued = await store.get("q")
+    assert queued.status == RunStatus.QUEUED, "QUEUED must survive restart"
+
+    running = await store.get("r")
+    assert running.status == RunStatus.FAILED
+    assert "interrupted" in (running.error or "")
+
+    completed = await store.get("c")
+    assert completed.status == RunStatus.COMPLETED, "COMPLETED must survive restart"
 

@@ -835,22 +835,23 @@ class SqliteStore:
         return [_row_to_run(row) for row in rows]
 
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
-        """Fail runs left QUEUED/RUNNING by a previous process (crash recovery).
+        """Fail runs left RUNNING by a previous process (crash recovery).
 
-        Their in-process task died with the old process and can never resume,
-        so they are moved to a terminal FAILED state. Returns the count updated.
+        QUEUED runs are NOT touched — they persist in the DB and will be
+        picked up by the new process's poller on restart.  Only RUNNING runs
+        (whose asyncio Task died with the old process) are moved to FAILED.
+        Returns the count updated.
         """
         now_iso = datetime.now(UTC).isoformat()
         async with self._connect() as db:
             if worker_node_id is not None:
                 cursor = await db.execute(
                     "UPDATE runs SET status = ?, error = ?, finished_at = ? "
-                    "WHERE status IN (?, ?) AND worker_node_id = ?",
+                    "WHERE status = ? AND worker_node_id = ?",
                     (
                         RunStatus.FAILED.value,
                         "interrupted by server restart",
                         now_iso,
-                        RunStatus.QUEUED.value,
                         RunStatus.RUNNING.value,
                         worker_node_id,
                     ),
@@ -858,18 +859,41 @@ class SqliteStore:
             else:
                 cursor = await db.execute(
                     "UPDATE runs SET status = ?, error = ?, finished_at = ? "
-                    "WHERE status IN (?, ?)",
+                    "WHERE status = ?",
                     (
                         RunStatus.FAILED.value,
                         "interrupted by server restart",
                         now_iso,
-                        RunStatus.QUEUED.value,
                         RunStatus.RUNNING.value,
                     ),
                 )
             await db.commit()
             return cursor.rowcount
 
+
+    async def dequeue_next_queued(self) -> str | None:
+        """Atomically claim and return the oldest QUEUED run id, marking it RUNNING.
+
+        Uses UPDATE … RETURNING for an atomic SELECT+UPDATE in a single
+        round-trip (SQLite ≥ 3.35).  Returns None when no QUEUED run exists.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE runs SET status = ?, started_at = ? "
+                "WHERE id = ("
+                "SELECT id FROM runs WHERE status = ? "
+                "ORDER BY created_at ASC LIMIT 1"
+                ") RETURNING id",
+                (
+                    RunStatus.RUNNING.value,
+                    now_iso,
+                    RunStatus.QUEUED.value,
+                ),
+            )
+            row = await cursor.fetchone()
+            await db.commit()
+            return str(row[0]) if row else None
 
     async def delete_profile(self, profile_id: str) -> bool:
         async with self._connect() as db:

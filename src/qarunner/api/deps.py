@@ -35,11 +35,16 @@ from qarunner.ports.store import Store
 
 @dataclass
 class Container:
-    """Holds all port implementations.  Tests inject fakes."""
+    """Holds all port implementations.  Tests inject fakes.
+
+    ``task_scheduler`` controls run-execution concurrency (the poller);
+    ``scheduler`` is the cron scheduler (APScheduler).
+    """
 
     orchestrator: RunOrchestrator
     store: Store
-    scheduler: SchedulePort
+    task_scheduler: object  # TaskScheduler (not typed to avoid churn during rewrite)
+    scheduler: SchedulePort  # cron scheduler
     schedule_service: ScheduleService
     profile_service: ProfileService
     login_throttle: LoginThrottle
@@ -66,7 +71,7 @@ def create_container(settings: Settings | None = None) -> Container:
     )
     collector = JunitCollector()
     reporter = AllureCliReporter(process=process, allure_bin=cfg.allure_bin)
-    scheduler = AsyncioScheduler(max_concurrency=cfg.max_concurrency)
+    task_scheduler = AsyncioScheduler(store=store, max_concurrency=cfg.max_concurrency)
 
     registry = RunnerRegistry()
     registry.register(PytestRunner())
@@ -75,7 +80,7 @@ def create_container(settings: Settings | None = None) -> Container:
     orchestrator = RunOrchestrator(
         registry=registry,
         store=store,
-        scheduler=scheduler,
+        scheduler=task_scheduler,
         process=docker_process,
         collector=collector,
         reporter=reporter,
@@ -89,6 +94,9 @@ def create_container(settings: Settings | None = None) -> Container:
         public_url=cfg.public_url,
     )
 
+    # Wire the execution callback after orchestrator is constructed (circ ref).
+    task_scheduler.set_run_fn(orchestrator.execute)
+
     schedule_port = ApschedulerSchedulePort(store=store, orchestrator=orchestrator)
     schedule_service = ScheduleService(store=store, scheduler=schedule_port)
     profile_service = ProfileService(store=store)
@@ -97,6 +105,7 @@ def create_container(settings: Settings | None = None) -> Container:
     return Container(
         orchestrator=orchestrator,
         store=store,
+        task_scheduler=task_scheduler,
         scheduler=schedule_port,
         schedule_service=schedule_service,
         profile_service=profile_service,

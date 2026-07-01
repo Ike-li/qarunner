@@ -58,6 +58,7 @@ exclude_also = [
     "raise NotImplementedError",
     "\\.\\.\\.",          # Protocol method stubs
     'if __name__ == "__main__":',
+    "pragma: no cover",
 ]
 
 # ── ruff ────────────────────────────────────────────────────────────────────

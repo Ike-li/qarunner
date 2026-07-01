@@ -37,6 +37,7 @@ from qarunner.models import (
 from qarunner.ports.store import Store
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_schedule_port import FakeSchedulePort
+from tests.fakes.fake_scheduler import FakeScheduler
 
 NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -268,6 +269,9 @@ class FakeStore:
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         return 0
 
+    async def dequeue_next_queued(self) -> str | None:
+        return None  # no queued runs in route-test fake
+
     async def initialize(self) -> None:
         pass
 
@@ -325,6 +329,7 @@ def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> 
     return Container(
         orchestrator=orchestrator,  # type: ignore[arg-type]
         store=store,  # type: ignore[arg-type]
+        task_scheduler=FakeScheduler(),
         scheduler=scheduler,
         schedule_service=ScheduleService(store=store, scheduler=scheduler),  # type: ignore[arg-type]
         profile_service=ProfileService(store=store),  # type: ignore[arg-type]

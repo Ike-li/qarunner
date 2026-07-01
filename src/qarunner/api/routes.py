@@ -183,8 +183,17 @@ async def _git_auth_env(secret: str | None) -> AsyncIterator[dict[str, str] | No
         with os.fdopen(fd, "w") as f:
             f.write(_GIT_ASKPASS_SCRIPT)
         os.chmod(path, stat.S_IRWXU)  # 0o700 — owner-only
+        # Whitelist: only pass env vars git actually needs (PATH, HOME, USER
+        # for ssh/config resolution, locale vars).  Do NOT pass the full host
+        # environment — that leaks SSH_AUTH_SOCK, BASH_ENV, LD_*, etc. into
+        # the git child process.  Pattern matches subprocess_runner._ENV_ALLOWLIST.
+        _GIT_ENV_WHITELIST = frozenset({
+            "PATH", "HOME", "USER", "LOGNAME",
+            "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
+            "TMPDIR", "TEMP", "TMP", "TZ",
+        })
         yield {
-            **os.environ,
+            **{k: v for k, v in os.environ.items() if k in _GIT_ENV_WHITELIST},
             "GIT_ASKPASS": path,
             "GIT_TERMINAL_PROMPT": "0",
             "QARUNNER_GIT_USER": "x-access-token",

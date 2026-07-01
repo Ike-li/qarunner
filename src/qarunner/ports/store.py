@@ -44,6 +44,15 @@ class RunStore(Protocol):
         """Persist a finished run's per-case results (cross-run analysis source)."""
         ...
 
+    async def dequeue_next_queued(self) -> str | None:
+        """Atomically claim and return the oldest QUEUED run id, marking it RUNNING.
+
+        Returns None if no QUEUED run is available.  This is the single-
+        consumer entry-point for the scheduler poller — never call it from
+        business logic.
+        """
+        ...
+
 
 @runtime_checkable
 class UserStore(Protocol):
@@ -176,6 +185,13 @@ class Store(
 
         ``created_by`` (a non-admin caller) scopes to that user's own runs;
         ``None`` (admin) spans all owners.
+        """
+        ...
+
+    async def dequeue_next_queued(self) -> str | None:
+        """Atomically claim and return the oldest QUEUED run id, marking it RUNNING.
+
+        Returns None if no QUEUED run is available.
         """
         ...
 

@@ -31,6 +31,7 @@ services:
       - WATCHFILES_FORCE_POLLING=true  # 兜底:bind mount 上 inotify 不传播时,强制 uvicorn --reload 走轮询
     volumes:
       - ./src:/app/src
+      - ./tests:/app/tests
       # artifacts at an IDENTICAL host==container path so the docker executor's
       # cwd:cwd jail/results mounts resolve on the host daemon (see env above).
       # ${PWD} is the host repo root when you run compose from here, so source

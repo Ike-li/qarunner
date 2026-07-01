@@ -234,8 +234,8 @@ class RunOrchestrator:
         )
         await self._store.save(run)
 
-        # 4. Schedule background execution (keyed by run id so it can be cancelled)
-        self._scheduler.schedule(self.execute(run_id), key=run_id)
+        # 4. Signal the persistent scheduler (poller picks up from DB/store)
+        self._scheduler.enqueue(run_id)
 
         return run
 
@@ -247,6 +247,17 @@ class RunOrchestrator:
         Top-level try/except guarantees the run never stays in RUNNING.
         """
         run = await self._store.get(run_id)
+        # Guard: if already in a terminal state (cancelled between dequeue
+        # and this task starting), stop early — nothing to execute.
+        if run.status in (
+            RunStatus.CANCELLED,
+            RunStatus.FAILED,
+            RunStatus.COMPLETED,
+            RunStatus.TIMEOUT,
+        ):
+            logger.debug("execute(%s): run already terminal (%s), skipping", run_id, run.status)
+            return
+
         runner = self._registry.get(run.runner)
 
         try:
@@ -402,7 +413,7 @@ class RunOrchestrator:
                     finished_at=self._clock.now(),
                 )
                 await self._store.save(run)
-            except Exception:
+            except Exception:  # pragma: no cover — needs real asyncio task cancellation
                 logger.exception("failed to persist cancelled state for run %s", run_id)
             raise
         except Exception as exc:

@@ -237,29 +237,34 @@ class TestInMemoryRunStore:
 
 
 class TestFakeScheduler:
-    async def test_schedule_runs_inline_and_counts(self) -> None:
-        result: list[int] = []
-
-        async def task() -> None:
-            result.append(42)
-
+    def test_enqueue_records_call(self) -> None:
         scheduler = FakeScheduler()
-        scheduler.schedule(task())
-        # Give the created task a chance to run
-        import asyncio
+        scheduler.enqueue("run-1")
+        assert scheduler.enqueued == 1
 
-        await asyncio.sleep(0)
-        assert result == [42]
-        assert scheduler.scheduled == 1
-
-    async def test_schedule_tracks_multiple(self) -> None:
-        async def noop() -> None:
-            pass
-
+    def test_enqueue_tracks_multiple(self) -> None:
         scheduler = FakeScheduler()
-        scheduler.schedule(noop())
-        scheduler.schedule(noop())
-        assert scheduler.scheduled == 2
+        scheduler.enqueue("run-1")
+        scheduler.enqueue("run-2")
+        assert scheduler.enqueued == 2
+
+    def test_cancel_records_key(self) -> None:
+        scheduler = FakeScheduler()
+        scheduler.cancel("run-1")
+        assert "run-1" in scheduler.cancelled_keys
+
+    async def test_drain_records(self) -> None:
+        scheduler = FakeScheduler()
+        await scheduler.drain()
+        assert scheduler.drained == 1
+
+    async def test_start_and_shutdown(self) -> None:
+        scheduler = FakeScheduler()
+        assert not scheduler._running
+        await scheduler.start()
+        assert scheduler._running
+        await scheduler.shutdown()
+        assert not scheduler._running
 
 
 # ── 7. FakeResultCollector behaviour ────────────────────────────────────────

@@ -13,6 +13,7 @@ from qarunner.config import Settings
 from qarunner.errors import RunNotFound
 from qarunner.models import Run
 from tests.fakes.fake_schedule_port import FakeSchedulePort
+from tests.fakes.fake_scheduler import FakeScheduler
 
 
 @dataclass
@@ -68,6 +69,7 @@ def test_create_app_with_container_injects_it() -> None:
     container = Container(
         orchestrator=None,
         store=None,
+        task_scheduler=None,
         scheduler=None,
         schedule_service=None,
         profile_service=None,
@@ -97,6 +99,7 @@ def test_lifespan_runs_without_error() -> None:
     container = Container(
         orchestrator=orch,
         store=store,
+        task_scheduler=FakeScheduler(),
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
@@ -152,6 +155,7 @@ def test_static_files_mounting(tmp_path, monkeypatch) -> None:
     container = Container(
         orchestrator=orch,
         store=store,
+        task_scheduler=FakeScheduler(),
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
@@ -175,6 +179,7 @@ def test_static_files_not_mounted_if_no_dir(monkeypatch) -> None:
     container = Container(
         orchestrator=orch,
         store=store,
+        task_scheduler=FakeScheduler(),
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
@@ -319,6 +324,9 @@ async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
         async def close(self) -> None:
             events.append("close")
 
+        async def dequeue_next_queued(self) -> str | None:
+            return None  # no queued runs in this test
+
     @dataclass
     class _DrainOrch:
         store: _OrderStore
@@ -327,11 +335,12 @@ async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
         async def drain(self, timeout: float | None = None) -> None:
             await self.scheduler.drain(timeout)
 
-    sched = AsyncioScheduler()
     store = _OrderStore()
+    sched = AsyncioScheduler(store=store, run_fn=lambda _: asyncio.sleep(0))
     container = Container(
         orchestrator=_DrainOrch(store=store, scheduler=sched),
         store=store,
+        task_scheduler=sched,
         scheduler=FakeSchedulePort(),
         schedule_service=None,
         profile_service=None,
@@ -355,7 +364,9 @@ async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
         )
 
     async with lifespan(app):
-        sched.schedule(slow_save())
+        # Manually track an inflight task so drain() has something to wait for.
+        task = asyncio.create_task(slow_save())
+        sched._tasks.add(task)
     # Context exit ran shutdown: drain awaited the in-flight save, then closed.
     assert events == ["save", "close"]
 

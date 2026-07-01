@@ -2,43 +2,41 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
 class FakeScheduler:
-    """Scheduler that runs coroutines inline and tracks the count."""
+    """Scheduler fake for testing — records calls without real persistence.
 
-    scheduled: int = 0
+    ``enqueue(run_id)`` only records the call. Tests that need actual
+    execution should call ``await orchestrator.execute(run_id)`` directly.
+    """
+
+    enqueued: int = 0
     drained: int = 0
     cancelled_keys: list[str] = field(default_factory=list)
-    _keyed: dict[str, Any] = field(default_factory=dict)
 
-    def schedule(self, coro: Any, *, key: str | None = None) -> None:
-        self.scheduled += 1
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+    _running: bool = False
 
-        if loop and loop.is_running():
-            # We're inside an async test — create a task so it runs in the loop.
-            task = loop.create_task(coro)
-            if key is not None:
-                self._keyed[key] = task
-        else:
-            asyncio.run(coro)
+    async def start(self) -> None:
+        self._running = True
+
+    async def shutdown(self) -> None:
+        self._running = False
+
+    def enqueue(self, run_id: str) -> None:
+        """Record the enqueue call (no real execution)."""
+        self.enqueued += 1
 
     def cancel(self, key: str) -> bool:
+        """Record the cancel request.  In the fake, cancelling a QUEUED run
+        (not yet executing) is handled by the orchestrator writing CANCELLED
+        to the store, so this only needs to track the key for test assertions.
+        """
         self.cancelled_keys.append(key)
-        task = self._keyed.get(key)
-        if task is None or task.done():
-            return False
-        task.cancel()
         return True
 
     async def drain(self, timeout: float | None = None) -> None:
-        """Record a drain request; inline execution leaves nothing in flight."""
+        """Record a drain request (nothing to await in fake)."""
         self.drained += 1
