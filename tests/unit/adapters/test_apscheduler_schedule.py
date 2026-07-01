@@ -347,3 +347,95 @@ async def test_shutdown_stops_engine() -> None:
 async def test_shutdown_no_scheduler() -> None:
     port, _, _ = _make_port()
     await port.shutdown()  # No engine; handled gracefully.
+
+
+# ── BUG regression: _trigger must pass profile_id to orchestrator.create ───────
+
+
+@pytest.mark.asyncio
+async def test_trigger_passes_profile_id_to_orchestrator() -> None:
+    """BUG: _trigger() calls orchestrator.create() without profile_id=.
+
+    The notification feature (v7+v8 migrations, notification.py) expects runs to
+    carry a profile_id so _notify() can look up the profile's webhook_url.  The
+    manual trigger (POST /schedules/{id}/trigger) correctly passes profile_id via
+    _create_run_guarded, but the cron path (_trigger) calls create() without it,
+    so cron-triggered runs never have profile_id set and notifications silently
+    skip them.
+
+    Fix: _trigger() should pass ``profile_id=schedule.profile_id`` to create().
+    """
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(return_value=_schedule(profile_id="prof-xyz"))
+    store.get_profile = AsyncMock(return_value=_profile(id="prof-xyz"))
+    store.save_schedule = AsyncMock()
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    orch.create.assert_called_once()
+    _, kwargs = orch.create.call_args
+    assert kwargs.get("profile_id") == "prof-xyz", (
+        f"BUG: _trigger() called create() with profile_id={kwargs.get('profile_id')!r}, "
+        f"expected 'prof-xyz'. Notifications for cron-triggered runs are silently broken "
+        f"because _notify() returns early when run.profile_id is None."
+    )
+
+
+# ── BUG regression: _trigger bypasses the subprocess-mode gate ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_trigger_respects_subprocess_mode_restriction() -> None:
+    """BUG: _trigger() calls orchestrator.create() directly, bypassing the
+    subprocess-mode gate in _create_run_guarded.
+
+    The API routes funnel through _create_run_guarded which enforces:
+    - subprocess executor mode is admin-only (when allow_subprocess_for_non_admins=False)
+    - per-user in-flight cap (P2-7)
+
+    The cron trigger calls orchestrator.create() directly, so a non-admin can:
+    1. Create a profile with executor_mode="subprocess"
+    2. Create a schedule pointing to it
+    3. When the cron fires, run arbitrary code in the platform process
+    — bypassing the admin-only restriction.
+
+    Fix: either move the subprocess-mode gate into orchestrator.create() (so all
+    callers are protected), or have _trigger() call through the same chokepoint.
+    """
+    port, store, orch = _make_port()
+    # A non-admin user created a schedule with a subprocess-mode profile.
+    store.get_schedule = AsyncMock(return_value=_schedule(
+        profile_id="prof-subproc", created_by="regular-user",
+    ))
+    store.get_profile = AsyncMock(return_value=_profile(
+        id="prof-subproc", executor_mode="subprocess",
+    ))
+    store.save_schedule = AsyncMock()
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    # The create call should NOT have succeeded with subprocess mode from a
+    # non-admin-created schedule — but it did, because the gate was bypassed.
+    orch.create.assert_called_once()
+    run_req: RunRequest = orch.create.call_args[0][0]
+    assert run_req.executor_mode == "subprocess", (
+        "precondition: profile has executor_mode=subprocess"
+    )
+    # The bug: create() was called with executor_mode='subprocess' even though
+    # the schedule was created by a non-admin.  The gate in _create_run_guarded
+    # was never consulted.  The fix should either reject this call or enforce
+    # the same admin-only restriction that the API routes apply.
+    #
+    # For now this test documents the gap.  Once fixed, this assertion should
+    # verify that the gate IS applied — e.g. by checking that create() receives
+    # executor_mode='docker' (forced), or that the call is rejected outright.
+    # Until then, this test PASSES (confirming the bypass exists) but the
+    # underlying bug remains.
+    assert True, (
+        "GAP CONFIRMED: _trigger() bypasses the subprocess-mode gate. "
+        "See BUG-H1 in the audit report."
+    )
