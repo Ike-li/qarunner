@@ -417,34 +417,6 @@ def test_create_run_unsafe_path_400() -> None:
     assert resp.status_code == 400
 
 
-def test_create_run_subprocess_non_admin_restricted_by_default() -> None:
-    # Default-deny (P0-2): non-admins are confined to the isolated docker
-    # executor; subprocess is opt-in via allow_subprocess_for_non_admins.
-    container = _make_container()
-    app = create_app(container)
-    _override_user(app, "normal_user", UserRole.USER)
-    with TestClient(app) as client:
-        resp = client.post(
-            "/runs",
-            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
-        )
-    assert resp.status_code == 400
-    assert "restricted" in resp.json()["detail"].lower()
-
-
-def test_create_run_subprocess_non_admin_allowed_when_enabled() -> None:
-    container = _make_container()
-    container.settings.allow_subprocess_for_non_admins = True
-    app = create_app(container)
-    _override_user(app, "normal_user", UserRole.USER)
-    with TestClient(app) as client:
-        resp = client.post(
-            "/runs",
-            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
-        )
-    assert resp.status_code == 202
-
-
 def test_create_run_default_mode_docker_allows_non_admin() -> None:
     # The docker default lets a non-admin create a run without tripping the
     # subprocess restriction (no executor_mode supplied → defaults to docker).
@@ -456,47 +428,19 @@ def test_create_run_default_mode_docker_allows_non_admin() -> None:
     assert resp.status_code == 202
 
 
-def test_create_run_subprocess_non_admin_restricted() -> None:
-    container = _make_container()
-    container.settings.allow_subprocess_for_non_admins = False
-    app = create_app(container)
-    _override_user(app, "normal_user", UserRole.USER)
-    with TestClient(app) as client:
-        resp = client.post(
-            "/runs",
-            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
-        )
-    assert resp.status_code == 400
-    assert "restricted" in resp.json()["detail"].lower()
-
-
 def test_create_run_playwright_docker_allowed() -> None:
-    # The docker executor now has a Playwright-capable image path. The route must
-    # accept the combination and leave execution details to the orchestrator.
+    # All runs are docker now — executor_mode removed from API input.
     container = _make_container()
     app = create_app(container)
     _override_user(app, "admin_user", UserRole.ADMIN)
     with TestClient(app) as client:
         resp = client.post(
             "/runs",
-            json={"tests_path": "tests/", "runner": "playwright", "executor_mode": "docker"},
+            json={"tests_path": "tests/", "runner": "playwright"},
         )
     assert resp.status_code == 202
     assert resp.json()["runner"] == "playwright"
     assert resp.json()["executor_mode"] == "docker"
-
-
-def test_create_run_subprocess_admin_always_allowed() -> None:
-    container = _make_container()
-    container.settings.allow_subprocess_for_non_admins = False
-    app = create_app(container)
-    _override_user(app, "admin_user", UserRole.ADMIN)
-    with TestClient(app) as client:
-        resp = client.post(
-            "/runs",
-            json={"tests_path": "tests/", "runner": "pytest", "executor_mode": "subprocess"},
-        )
-    assert resp.status_code == 202
 
 
 def test_create_run_rate_limited_at_inflight_cap() -> None:
@@ -2234,19 +2178,6 @@ def test_get_tree_includes_playwright_specs(
     assert {c["name"] for c in specs_node["children"]} == {"messaging.spec.ts"}
 
 
-def test_create_profile_rejects_unknown_executor_mode() -> None:
-    # P2-6: executor_mode is a closed set; an unknown value is a 422, not a
-    # silent fallback to subprocess.
-    container = _make_container()
-    app = create_app(container)
-    with TestClient(app) as client:
-        resp = client.post(
-            "/profiles",
-            json={"name": "P", "tests_path": "tests/", "executor_mode": "hacker"},
-        )
-    assert resp.status_code == 422
-
-
 def test_create_profile_rejects_nonpositive_timeout() -> None:
     # P2-5: a non-positive timeout would expire immediately; reject at the edge.
     container = _make_container()
@@ -2850,28 +2781,9 @@ def test_rerun_respects_inflight_cap() -> None:
     assert resp.status_code == 429
 
 
-def test_rerun_respects_subprocess_gate() -> None:
-    container = _make_container()
-    container.settings.allow_subprocess_for_non_admins = False
-    _make_run_in_store(
-        container.store,
-        id="orig",
-        status=RunStatus.COMPLETED,
-        created_by="normal_user",
-        executor_mode="subprocess",
-    )
-    app = create_app(container)
-    _override_user(app, "normal_user", UserRole.USER)
-    with TestClient(app) as client:
-        resp = client.post("/runs/orig/rerun")
-    assert resp.status_code == 400
-
-
 def test_trigger_schedule_respects_inflight_cap() -> None:
     container = _make_container()
     container.settings.max_inflight_runs_per_user = 1
-    # Profiles default to subprocess; allow it so the cap is what's exercised.
-    container.settings.allow_subprocess_for_non_admins = True
     _seed_schedule_with_profile(container, schedule_owner="normal_user")
     _make_run_in_store(
         container.store, id="if-1", status=RunStatus.RUNNING, created_by="normal_user"
@@ -2881,18 +2793,6 @@ def test_trigger_schedule_respects_inflight_cap() -> None:
     with TestClient(app) as client:
         resp = client.post("/schedules/sched-x/trigger")
     assert resp.status_code == 429
-
-
-def test_trigger_schedule_respects_subprocess_gate() -> None:
-    container = _make_container()
-    container.settings.allow_subprocess_for_non_admins = False
-    # _seed_schedule_with_profile's profile defaults to executor_mode="subprocess".
-    _seed_schedule_with_profile(container, schedule_owner="normal_user")
-    app = create_app(container)
-    _override_user(app, "normal_user", UserRole.USER)
-    with TestClient(app) as client:
-        resp = client.post("/schedules/sched-x/trigger")
-    assert resp.status_code == 400
 
 
 def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:

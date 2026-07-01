@@ -44,7 +44,6 @@ export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UsePr
         args: [],
         allure: true,
         timeout: profile.timeout,
-        executor_mode: profile.executor_mode,
         selected_files: profile.selected_files,
         selected_markers: profile.selected_markers,
         extra_args: profile.extra_args,

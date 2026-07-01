@@ -212,16 +212,8 @@ class TestRunRequestValidation:
         assert RunRequest(tests_path="t", timeout=1).timeout == 1
         assert RunRequest(tests_path="t", timeout=cap).timeout == cap
 
-    def test_rejects_unknown_executor_mode(self):
-        from qarunner.models import RunRequest
-
-        with pytest.raises(ValidationError):
-            RunRequest(tests_path="t", executor_mode="hacker")
-
-    def test_accepts_known_modes_and_defaults_to_docker(self):
+    def test_defaults_executor_mode_to_docker(self):
         from qarunner.models import RunRequest
 
         assert RunRequest(tests_path="t").executor_mode == "docker"
-        assert RunRequest(tests_path="t", executor_mode="subprocess").executor_mode == "subprocess"
-        assert RunRequest(tests_path="t", executor_mode="docker").executor_mode == "docker"
 

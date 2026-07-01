@@ -14,7 +14,7 @@
 
 ## 四支柱
 
-1. **执行** — pytest / playwright × docker（默认强隔离）/ subprocess。
+1. **执行** — pytest / playwright × docker（沙箱隔离）。
 2. **调度** — cron + IANA 时区，定时或即席触发。
 3. **报告** — Allure 报告 + JUnit 解析 + 实时日志（SSE）+ Web 控制台 + 通知推送。
 4. **回归视图（差异化内核）** — 基线 diff / 通过率趋势 / flaky 检测 / 用例级历史。

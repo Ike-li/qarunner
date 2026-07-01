@@ -1162,22 +1162,12 @@ async def _create_run_guarded(
     container: Container, req: RunRequest, current_user: User,
     profile_id: str | None = None,
 ) -> Run:
-    """Shared run-creation chokepoint: subprocess-mode gate + per-user in-flight
-    cap (P2-7) + orchestrator error mapping.
+    """Shared run-creation chokepoint: per-user in-flight cap (P2-7) +
+    orchestrator error mapping.
 
     POST /runs, POST /runs/{id}/rerun and POST /schedules/{id}/trigger all funnel
-    through here so a new run-creating caller can't silently bypass the guards —
-    they used to live only in the create_run route body.
+    through here so a new run-creating caller can't silently bypass the guards.
     """
-    if (
-        req.executor_mode == "subprocess"
-        and current_user.role != UserRole.ADMIN
-        and not container.settings.allow_subprocess_for_non_admins
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Subprocess execution mode is restricted to administrators.",
-        )
     # Per-user in-flight cap (P2-7): bound unbounded run accumulation by one
     # authenticated user. Admins are exempt; a limit of 0 disables the check.
     limit = container.settings.max_inflight_runs_per_user

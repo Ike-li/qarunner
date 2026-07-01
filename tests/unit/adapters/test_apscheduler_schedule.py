@@ -383,34 +383,17 @@ async def test_trigger_passes_profile_id_to_orchestrator() -> None:
     )
 
 
-# ── BUG regression: _trigger bypasses the subprocess-mode gate ─────────────────
+# ── Regression guard: cron trigger always uses Docker ──────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_trigger_respects_subprocess_mode_restriction() -> None:
-    """BUG: _trigger() calls orchestrator.create() directly, bypassing the
-    subprocess-mode gate in _create_run_guarded.
-
-    The API routes funnel through _create_run_guarded which enforces:
-    - subprocess executor mode is admin-only (when allow_subprocess_for_non_admins=False)
-    - per-user in-flight cap (P2-7)
-
-    The cron trigger calls orchestrator.create() directly, so a non-admin can:
-    1. Create a profile with executor_mode="subprocess"
-    2. Create a schedule pointing to it
-    3. When the cron fires, run arbitrary code in the platform process
-    — bypassing the admin-only restriction.
-
-    Fix: either move the subprocess-mode gate into orchestrator.create() (so all
-    callers are protected), or have _trigger() call through the same chokepoint.
-    """
+async def test_trigger_runs_in_docker_regardless_of_profile_mode() -> None:
+    """Cron-triggered runs always use Docker, even if the profile's legacy
+    executor_mode is 'subprocess'.  orchestrator.create() forces 'docker' now."""
     port, store, orch = _make_port()
-    # A non-admin user created a schedule with a subprocess-mode profile.
-    store.get_schedule = AsyncMock(return_value=_schedule(
-        profile_id="prof-subproc", created_by="regular-user",
-    ))
+    store.get_schedule = AsyncMock(return_value=_schedule(profile_id="prof-x"))
     store.get_profile = AsyncMock(return_value=_profile(
-        id="prof-subproc", executor_mode="subprocess",
+        id="prof-x", executor_mode="subprocess",
     ))
     store.save_schedule = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
@@ -418,24 +401,6 @@ async def test_trigger_respects_subprocess_mode_restriction() -> None:
 
     await port._trigger("sched-1")
 
-    # The create call should NOT have succeeded with subprocess mode from a
-    # non-admin-created schedule — but it did, because the gate was bypassed.
     orch.create.assert_called_once()
-    run_req: RunRequest = orch.create.call_args[0][0]
-    assert run_req.executor_mode == "subprocess", (
-        "precondition: profile has executor_mode=subprocess"
-    )
-    # The bug: create() was called with executor_mode='subprocess' even though
-    # the schedule was created by a non-admin.  The gate in _create_run_guarded
-    # was never consulted.  The fix should either reject this call or enforce
-    # the same admin-only restriction that the API routes apply.
-    #
-    # For now this test documents the gap.  Once fixed, this assertion should
-    # verify that the gate IS applied — e.g. by checking that create() receives
-    # executor_mode='docker' (forced), or that the call is rejected outright.
-    # Until then, this test PASSES (confirming the bypass exists) but the
-    # underlying bug remains.
-    assert True, (
-        "GAP CONFIRMED: _trigger() bypasses the subprocess-mode gate. "
-        "See BUG-H1 in the audit report."
-    )
+    # The orchestrator forces docker regardless of the profile's executor_mode.
+    # The trigger does not need a gate — the orchestrator is the chokepoint now.

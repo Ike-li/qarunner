@@ -981,23 +981,23 @@ class TestWorkspaceJail:
 
 
     @pytest.mark.asyncio
-    async def test_docker_executor_mode_routing(self):
-        # Covers line 201
-        orch = _make_orchestrator()
-        # Mock self._process_docker
-        mock_docker = FakeProcessRunner(
-            handler=lambda cmd, cwd, env, timeout: ProcessResult(
-                exit_code=0, stdout="docker-ok", stderr="", duration_ms=5
-            )
+    async def test_all_runs_use_docker_executor(self):
+        # All runs now use the (docker) executor — subprocess path removed.
+        orch = _make_orchestrator(
+            collector_preset=CollectResult(
+                summary=TestSummary(
+                    total=1, passed=1, failed=0, skipped=0, error=0, duration_ms=1,
+                ),
+                cases=[],
+            ),
         )
-        orch._process_docker = mock_docker
-
-        req = RunRequest(tests_path="sample", executor_mode="docker")
+        req = RunRequest(tests_path="sample")
         run = await orch.create(req)
+        assert run.executor_mode == "docker"
         await orch.execute(run.id)
 
         stored = await orch._store.get(run.id)
-        assert stored.status == RunStatus.FAILED  # FAILED because no collector results preset
+        assert stored.status == RunStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_workspace_jail_copytree_exception(self, tmp_path):
@@ -1271,11 +1271,10 @@ class TestPlaywrightRunnerExecution:
                 duration_ms=10,
             )
 
-        orch._process_docker = FakeProcessRunner(handler=docker_handler)
+        orch._process = FakeProcessRunner(handler=docker_handler)
         req = RunRequest(
             tests_path="playwright_suite",
             runner="playwright",
-            executor_mode="docker",
         )
         run = await orch.create(req)
         await orch.execute(run.id)

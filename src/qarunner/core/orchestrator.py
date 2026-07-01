@@ -179,7 +179,6 @@ class RunOrchestrator:
         tests_root: str,
         artifacts_root: str,
         executable: str,
-        process_docker: ProcessRunner | None = None,
         default_timeout: int = 1800,
         worker_node_id: str = "default-node",
         public_url: str = "",
@@ -188,7 +187,6 @@ class RunOrchestrator:
         self._store = store
         self._scheduler = scheduler
         self._process = process
-        self._process_docker = process_docker
         self._collector = collector
         self._reporter = reporter
         self._clock = clock
@@ -228,7 +226,7 @@ class RunOrchestrator:
             args=compiled_args,
             allure_enabled=req.allure,
             timeout=req.timeout,
-            executor_mode=req.executor_mode,
+            executor_mode="docker",
             created_at=now,
             env=safe_env,
             worker_node_id=self._worker_node_id,
@@ -329,11 +327,9 @@ class RunOrchestrator:
             )
             cmd = runner.build_command(ctx)
 
-            # 3. Execute process
+            # 3. Execute process (always Docker — subprocess path removed)
             timeout = run.timeout or self._default_timeout
             runner_to_use = self._process
-            if run.executor_mode == "docker" and self._process_docker is not None:
-                runner_to_use = self._process_docker
 
             # playwright: JUnit output via env var, not CLI flag
             proc_env = dict(run.env)
