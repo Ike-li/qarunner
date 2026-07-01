@@ -38,6 +38,8 @@ class TestProfileResponse(BaseModel):
     created_by: str
     created_at: datetime
     env: dict[str, str] = Field(default_factory=dict)
+    # Feishu bot webhook URL for run-completion notifications.
+    webhook_url: str | None = None
 
 
 class TestProfileCreateRequest(BaseModel):
@@ -53,6 +55,8 @@ class TestProfileCreateRequest(BaseModel):
     executor_mode: Literal["subprocess", "docker"] = "docker"
     timeout: int | None = Field(default=None, gt=0, le=MAX_TIMEOUT_SECONDS)
     env: dict[str, str] = Field(default_factory=dict)
+    # Feishu bot webhook URL for run-completion notifications.
+    webhook_url: str | None = None
 
 
 class TestProfileUpdateRequest(BaseModel):
@@ -68,6 +72,8 @@ class TestProfileUpdateRequest(BaseModel):
     executor_mode: Literal["subprocess", "docker"] = "docker"
     timeout: int | None = Field(default=None, gt=0, le=MAX_TIMEOUT_SECONDS)
     env: dict[str, str] = Field(default_factory=dict)
+    # Feishu bot webhook URL for run-completion notifications.
+    webhook_url: str | None = None
 
 
 class RunResponse(BaseModel):
@@ -256,6 +262,7 @@ def profile_to_response(profile: TestProfile) -> TestProfileResponse:
         created_by=profile.created_by,
         created_at=profile.created_at,
         env=profile.env,
+        webhook_url=profile.webhook_url,
     )
 
 

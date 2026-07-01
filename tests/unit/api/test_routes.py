@@ -284,7 +284,7 @@ class FakeOrchestrator:
     raise_unknown_runner: bool = False
     raise_unsafe_path: bool = False
 
-    async def create(self, req: RunRequest, created_by: str) -> Run:
+    async def create(self, req: RunRequest, created_by: str, profile_id: str | None = None) -> Run:
         if self.raise_unknown_runner:
             raise UnknownRunner(req.runner)
         if self.raise_unsafe_path:

@@ -67,3 +67,4 @@ external_tests/
 # Local screenshot / verification tooling (contains a sample password)
 frontend/screenshot.mjs
 frontend/*-after.png
+.codex/

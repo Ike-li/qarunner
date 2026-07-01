@@ -153,6 +153,10 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             "ON run_test_cases(tests_path, suite, name, created_at);",
         ),
     ),
+    # v7: Feishu bot webhook URL, per-profile.
+    (7, ("ALTER TABLE test_profiles ADD COLUMN webhook_url TEXT;",)),
+    # v8: trace which profile triggered a run, for notification lookup at completion.
+    (8, ("ALTER TABLE runs ADD COLUMN profile_id TEXT;",)),
 )
 
 
@@ -430,8 +434,9 @@ class SqliteStore:
                 "INSERT INTO runs "
                 "(id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+                "profile_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "status=excluded.status, runner=excluded.runner, "
                 "created_by=excluded.created_by, tests_path=excluded.tests_path, "
@@ -462,6 +467,7 @@ class SqliteStore:
                     json.dumps(run.env),
                     1 if run.locked else 0,
                     run.worker_node_id,
+                    run.profile_id,
                 ),
             )
 
@@ -472,7 +478,8 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+                "profile_id "
                 "FROM runs WHERE id = ?",
                 (run_id,),
             )
@@ -486,7 +493,8 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+                "profile_id "
                 "FROM runs ORDER BY created_at DESC"
             )
             rows = await cursor.fetchall()
@@ -600,8 +608,9 @@ class SqliteStore:
             await db.execute(
                 "INSERT INTO test_profiles ("
                 "id, name, description, tests_path, runner, selected_files, selected_markers, "
-                "extra_args, executor_mode, timeout, created_by, created_at, env_json"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "extra_args, executor_mode, timeout, created_by, created_at, env_json, "
+                "webhook_url"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "name=excluded.name, description=excluded.description, "
                 "tests_path=excluded.tests_path, runner=excluded.runner, "
@@ -609,7 +618,7 @@ class SqliteStore:
                 "selected_markers=excluded.selected_markers, extra_args=excluded.extra_args, "
                 "executor_mode=excluded.executor_mode, timeout=excluded.timeout, "
                 "created_by=excluded.created_by, created_at=excluded.created_at, "
-                "env_json=excluded.env_json",
+                "env_json=excluded.env_json, webhook_url=excluded.webhook_url",
                 (
                     profile.id,
                     profile.name,
@@ -624,6 +633,7 @@ class SqliteStore:
                     profile.created_by,
                     _dt_to_iso(profile.created_at),
                     json.dumps(profile.env),
+                    profile.webhook_url,
                 ),
             )
             await db.commit()
@@ -633,7 +643,8 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, name, description, tests_path, runner, "
                 "selected_files, selected_markers, "
-                "extra_args, executor_mode, timeout, created_by, created_at, env_json "
+                "extra_args, executor_mode, timeout, created_by, created_at, env_json, "
+                "webhook_url "
                 "FROM test_profiles WHERE id = ?",
                 (profile_id,),
             )
@@ -648,7 +659,8 @@ class SqliteStore:
                 cursor = await db.execute(
                     "SELECT id, name, description, tests_path, runner, "
                     "selected_files, selected_markers, "
-                    "extra_args, executor_mode, timeout, created_by, created_at, env_json "
+                    "extra_args, executor_mode, timeout, created_by, created_at, env_json, "
+                    "webhook_url "
                     "FROM test_profiles WHERE tests_path = ? ORDER BY created_at DESC",
                     (tests_path,),
                 )
@@ -656,7 +668,8 @@ class SqliteStore:
                 cursor = await db.execute(
                     "SELECT id, name, description, tests_path, runner, "
                     "selected_files, selected_markers, "
-                    "extra_args, executor_mode, timeout, created_by, created_at, env_json "
+                    "extra_args, executor_mode, timeout, created_by, created_at, env_json, "
+                    "webhook_url "
                     "FROM test_profiles ORDER BY created_at DESC"
                 )
             rows = await cursor.fetchall()
@@ -811,7 +824,8 @@ class SqliteStore:
             cursor = await db.execute(
                 "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
                 "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id "
+                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+                "profile_id "
                 "FROM runs "
                 "WHERE finished_at <= ? AND locked = 0 "
                 "AND status IN ('completed', 'failed', 'timeout')",
@@ -986,6 +1000,7 @@ def _row_to_run(row: aiosqlite.Row) -> Run:
     env_data = json.loads(row[16]) if len(row) > 16 and row[16] else {}
     locked_val = bool(row[17]) if len(row) > 17 and row[17] else False
     worker_node_val = row[18] if len(row) > 18 else None
+    profile_id_val = row[19] if len(row) > 19 else None
     return Run(
         id=row[0],
         status=RunStatus(row[1]),
@@ -1006,6 +1021,7 @@ def _row_to_run(row: aiosqlite.Row) -> Run:
         env=env_data,
         locked=locked_val,
         worker_node_id=worker_node_val,
+        profile_id=profile_id_val,
     )
 
 
@@ -1034,6 +1050,8 @@ def _row_to_profile(row: aiosqlite.Row) -> TestProfile:
         created_at_val = _iso_to_dt(row[10])
         env_data = json.loads(row[11]) if row[11] else {}
 
+    webhook_url_val = row[13] if len(row) > 13 else None
+
     return TestProfile(
         id=row[0],
         name=row[1],
@@ -1048,6 +1066,7 @@ def _row_to_profile(row: aiosqlite.Row) -> TestProfile:
         created_by=created_by_val,
         created_at=created_at_val,
         env=env_data,
+        webhook_url=webhook_url_val,
     )
 
 

@@ -117,6 +117,8 @@ class TestProfile(BaseModel):
     created_by: str
     created_at: datetime
     env: dict[str, str] = Field(default_factory=dict)
+    # Feishu bot webhook URL for run-completion notifications.
+    webhook_url: str | None = None
 
 
 
@@ -288,5 +290,7 @@ class Run(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     locked: bool = False
     worker_node_id: str | None = None
+    # The profile that triggered this run (None for manual triggers).
+    profile_id: str | None = None
 
 

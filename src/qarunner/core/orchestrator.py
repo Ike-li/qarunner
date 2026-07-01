@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from qarunner.ports.scheduler import TaskScheduler
     from qarunner.ports.store import RunStore
 
+from qarunner.core.notification import build_run_card, send_feishu_card
+
 logger = logging.getLogger(__name__)
 
 
@@ -180,6 +182,7 @@ class RunOrchestrator:
         process_docker: ProcessRunner | None = None,
         default_timeout: int = 1800,
         worker_node_id: str = "default-node",
+        public_url: str = "",
     ) -> None:
         self._registry = registry
         self._store = store
@@ -195,10 +198,13 @@ class RunOrchestrator:
         self._executable = executable or sys.executable
         self._default_timeout = default_timeout
         self._worker_node_id = worker_node_id
+        self._public_url = public_url
 
     # ── create ────────────────────────────────────────────────────────────
 
-    async def create(self, req: RunRequest, created_by: str = "system") -> Run:
+    async def create(
+        self, req: RunRequest, created_by: str = "system", profile_id: str | None = None
+    ) -> Run:
         """Create a new run, persist it, and schedule background execution."""
         # 1. Validate runner
         runner = self._registry.get(req.runner)  # raises UnknownRunner
@@ -226,6 +232,7 @@ class RunOrchestrator:
             created_at=now,
             env=safe_env,
             worker_node_id=self._worker_node_id,
+            profile_id=profile_id,
         )
         await self._store.save(run)
 
@@ -382,6 +389,9 @@ class RunOrchestrator:
             )
             await self._store.save(run)
 
+            # Fire-and-forget notification: never blocks or fails the run.
+            asyncio.create_task(self._notify(run))
+
         except asyncio.CancelledError:
             # User-initiated cancel (or a shutdown drain past its deadline):
             # CancelledError is a BaseException, so the ``except Exception`` below
@@ -428,6 +438,25 @@ class RunOrchestrator:
                     logger.warning(
                         "Failed to cleanup Workspace Jail at %s: %r", jail_dir, clean_exc
                     )
+
+    async def _notify(self, run: Run) -> None:
+        """Send a Feishu card notification for *run* if its profile has a webhook.
+
+        Fire-and-forget via ``asyncio.create_task`` — failures are logged but
+        never propagated.
+        """
+        try:
+            if not self._public_url or not run.profile_id:
+                return
+            profile = await self._store.get_profile(run.profile_id)
+            if profile is None or not profile.webhook_url:
+                return
+
+            allure_url = f"{self._public_url}/runs/{run.id}/report"
+            card = build_run_card(run, allure_url)
+            await send_feishu_card(profile.webhook_url, card)
+        except Exception:
+            logger.exception("Notification failed for run %s", run.id)
 
     async def cancel(self, run_id: str) -> Run:
         """Cancel a queued or running run.

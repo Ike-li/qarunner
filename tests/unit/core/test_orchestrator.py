@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -40,6 +41,7 @@ def _make_orchestrator(
     tests_root="/work/tests",
     artifacts_root="/artifacts",
     worker_node_id="default-node",
+    public_url="",
 ):
     """Helper to build an orchestrator wired to fakes."""
     registry = RunnerRegistry()
@@ -74,6 +76,7 @@ def _make_orchestrator(
         executable="/usr/bin/python3",
         default_timeout=600,
         worker_node_id=worker_node_id,
+        public_url=public_url,
     )
 
 
@@ -397,6 +400,120 @@ class TestEnvHandling:
         req = RunRequest(tests_path="sample", env={bad_key: "x"})
         with pytest.raises(UnsafeArguments):
             await orch.create(req)
+
+
+class TestNotify:
+    """Coverage for the fire-and-forget _notify hook."""
+
+    async def test_notify_skips_when_no_public_url(self) -> None:
+        """_notify returns immediately when public_url is empty."""
+        orch = _make_orchestrator()  # public_url defaults to ""
+        run = await orch.create(RunRequest(tests_path="sample"))
+        # Must not raise or call anything.
+        await orch._notify(run)
+
+    async def test_notify_skips_when_no_profile_id(self) -> None:
+        """_notify returns when the run has no profile_id."""
+        orch = _make_orchestrator(public_url="https://qa.example.com")
+        run = await orch.create(RunRequest(tests_path="sample"))  # no profile_id
+        await orch._notify(run)
+
+    async def test_notify_sends_card_when_webhook_configured(self) -> None:
+        """_notify calls send_feishu_card when everything is wired."""
+        orch = _make_orchestrator(public_url="https://qa.example.com")
+        from qarunner.models import TestProfile
+
+        fake_profile = TestProfile(
+            id="prof-1",
+            name="p",
+            tests_path="sample",
+            runner="pytest",
+            created_by="u",
+            created_at=datetime(2026, 6, 30, tzinfo=UTC),
+            webhook_url="https://open.feishu.cn/hook/test",
+        )
+
+        async def _fake_get_profile(profile_id):
+            return fake_profile
+
+        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
+                          create=True), patch("qarunner.core.orchestrator.send_feishu_card",
+                   new_callable=AsyncMock) as mock_send:
+            run = await orch.create(
+                RunRequest(tests_path="sample"), profile_id="prof-1",
+            )
+            await orch._notify(run)
+
+            mock_send.assert_called_once()
+            call_args = mock_send.call_args
+            assert call_args[0][0] == "https://open.feishu.cn/hook/test"
+            assert call_args[0][1]["msg_type"] == "interactive"
+
+    async def test_notify_skips_when_profile_not_found(self) -> None:
+        """_notify returns when the profile no longer exists."""
+        orch = _make_orchestrator(public_url="https://qa.example.com")
+        async def _fake_get_profile(profile_id):
+            return None
+
+        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
+                          create=True):
+            run = await orch.create(
+                RunRequest(tests_path="sample"), profile_id="ghost-prof",
+            )
+            await orch._notify(run)  # must not raise
+
+    async def test_notify_skips_when_webhook_url_empty(self) -> None:
+        """_notify returns when profile has no webhook_url."""
+        orch = _make_orchestrator(public_url="https://qa.example.com")
+        from qarunner.models import TestProfile
+
+        fake_profile = TestProfile(
+            id="prof-2",
+            name="p",
+            tests_path="sample",
+            runner="pytest",
+            created_by="u",
+            created_at=datetime(2026, 6, 30, tzinfo=UTC),
+            webhook_url=None,
+        )
+        async def _fake_get_profile(profile_id):
+            return fake_profile
+
+        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
+                          create=True), patch("qarunner.core.orchestrator.send_feishu_card",
+                   new_callable=AsyncMock) as mock_send:
+            run = await orch.create(
+                RunRequest(tests_path="sample"), profile_id="prof-2",
+            )
+            await orch._notify(run)
+            mock_send.assert_not_called()
+
+    async def test_notify_catches_exceptions(self) -> None:
+        """_notify logs but does not raise when send_feishu_card fails."""
+        orch = _make_orchestrator(public_url="https://qa.example.com")
+        from qarunner.models import TestProfile
+
+        fake_profile = TestProfile(
+            id="prof-3",
+            name="p",
+            tests_path="sample",
+            runner="pytest",
+            created_by="u",
+            created_at=datetime(2026, 6, 30, tzinfo=UTC),
+            webhook_url="https://open.feishu.cn/hook/test",
+        )
+        async def _fake_get_profile(profile_id):
+            return fake_profile
+
+        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
+                          create=True), patch("qarunner.core.orchestrator.send_feishu_card",
+                   side_effect=RuntimeError("Boom")) as mock_send:
+            run = await orch.create(
+                RunRequest(tests_path="sample"), profile_id="prof-3",
+            )
+            # Must not raise.
+            await orch._notify(run)
+            mock_send.assert_called_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bad_key", ["", "A=B", "A\x00B"])

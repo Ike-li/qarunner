@@ -82,7 +82,9 @@ class ApschedulerSchedulePort:
 
         try:
             # Create and run
-            await self._orchestrator.create(run_req, created_by="system:schedule")
+            await self._orchestrator.create(
+                run_req, created_by="system:schedule", profile_id=schedule.profile_id
+            )
 
             # Update schedule execution times
             now = datetime.now(UTC)

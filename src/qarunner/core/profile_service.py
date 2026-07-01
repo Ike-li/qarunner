@@ -39,6 +39,7 @@ class ProfileService:
             created_by=created_by,
             created_at=datetime.now(UTC),
             env=req.env,
+            webhook_url=req.webhook_url,
         )
         await self._store.save_profile(profile)
         return profile
@@ -61,6 +62,7 @@ class ProfileService:
             created_by=existing.created_by,
             created_at=existing.created_at,
             env=req.env,
+            webhook_url=req.webhook_url,
         )
         await self._store.save_profile(updated)
         return updated

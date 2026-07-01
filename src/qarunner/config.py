@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     # non-admins are confined to the isolated docker executor by default. Set true
     # only for a trusted/dev deployment (see docker-compose.dev.yml).
     allow_subprocess_for_non_admins: bool = False
+    # Public-facing base URL of this instance (e.g. https://qa.example.com). Used
+    # to build absolute links in Feishu notification cards. Leave empty to skip
+    # notifications entirely (dev / no-webhook deployments).
+    public_url: str = ""
 
 
 

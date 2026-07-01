@@ -1159,7 +1159,8 @@ async def delete_profile(
 
 
 async def _create_run_guarded(
-    container: Container, req: RunRequest, current_user: User
+    container: Container, req: RunRequest, current_user: User,
+    profile_id: str | None = None,
 ) -> Run:
     """Shared run-creation chokepoint: subprocess-mode gate + per-user in-flight
     cap (P2-7) + orchestrator error mapping.
@@ -1189,7 +1190,7 @@ async def _create_run_guarded(
             )
     try:
         return await container.orchestrator.create(
-            req, created_by=current_user.username
+            req, created_by=current_user.username, profile_id=profile_id,
         )
     except UnknownRunner as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1624,7 +1625,8 @@ async def rerun_run(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(original, current_user)
     new_run = await _create_run_guarded(
-        container, RunRequest.from_run(original), current_user
+        container, RunRequest.from_run(original), current_user,
+        profile_id=original.profile_id,
     )
     return run_to_response(new_run)
 
@@ -1806,6 +1808,7 @@ async def trigger_schedule(
             detail=f"Schedule's profile '{schedule.profile_id}' no longer exists.",
         )
     run = await _create_run_guarded(
-        container, RunRequest.from_profile(profile), current_user
+        container, RunRequest.from_profile(profile), current_user,
+        profile_id=profile.id,
     )
     return run_to_response(run)
