@@ -3,12 +3,12 @@
 These run a throwaway container from each built image and read its effective
 uid/user via ``id``. They assert the image's baked-in ``USER`` is a non-root
 account — the executor image so untrusted test code never starts as root, the
-platform image as defence in depth.
+server image as defence in depth.
 
 Opt-in ``docker`` marker (needs a daemon + the images). The executor image is
-built on demand by DockerRunner; the platform image must be built first
-(``docker build -f Dockerfile.platform -t qarunner-platform:latest .``) or the
-platform check skips. Run with ``uv run pytest -m docker --no-cov``.
+built on demand by DockerRunner; the server image must be built first
+(``docker build -f Dockerfile.server -t qarunner:latest .``) or the
+server check skips. Run with ``uv run pytest -m docker --no-cov``.
 """
 
 from __future__ import annotations
@@ -59,9 +59,9 @@ def test_executor_image_runs_as_non_root(docker_client):
     assert "uid=1000(runner)" in out, out
 
 
-def test_platform_image_runs_as_non_root(docker_client):
-    """The platform image bakes a non-root USER (DEP-1)."""
-    _require_image(docker_client, "qarunner-platform:latest")
-    out = _id_output(docker_client, "qarunner-platform:latest")
-    assert "uid=0(" not in out, f"platform image runs as root: {out}"
+def test_server_image_runs_as_non_root(docker_client):
+    """The server image bakes a non-root USER (DEP-1)."""
+    _require_image(docker_client, "qarunner:latest")
+    out = _id_output(docker_client, "qarunner:latest")
+    assert "uid=0(" not in out, f"server image runs as root: {out}"
     assert "uid=1000(app)" in out, out

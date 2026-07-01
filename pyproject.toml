@@ -5,7 +5,6 @@ build-backend = "hatchling.build"
 [project]
 name = "qarunner"
 version = "0.1.0"
-description = "QA test runner — execute external pytest code, collect results, generate Allure reports"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1",

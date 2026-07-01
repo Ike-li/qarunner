@@ -86,7 +86,7 @@ git 来源需存 `repo_url/ref/凭证引用/owner`，而当前 suite 零元数�
 
 ```yaml
 services:
-  platform:
+  app:
     volumes:
       - suites-data:/app/external_tests        # 或 /srv/qarunner/suites:/app/external_tests
 volumes:
