@@ -31,6 +31,7 @@ export function ScheduleModal() {
       onCancel={() => s.setIsScheduleModalOpen(false)}
       footer={null}
       width={480}
+      data-testid="schedule-modal"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem 0' }}>
         <Row gutter={16}>
@@ -39,6 +40,7 @@ export function ScheduleModal() {
               placeholder={d.lang === 'zh' ? '调度名称' : 'Schedule name'}
               value={s.schedName}
               onChange={s.setSchedName}
+              data-testid="schedule-name-input"
             />
           </Col>
           <Col span={6}>
@@ -55,6 +57,7 @@ export function ScheduleModal() {
               value={s.schedExpression}
               onChange={s.setSchedExpression}
               prefix={<Clock size={14} />}
+              data-testid="schedule-cron-input"
             />
           </Col>
           <Col span={8}>
@@ -62,6 +65,7 @@ export function ScheduleModal() {
               value={s.schedTimezone}
               onChange={(v) => s.setSchedTimezone(v as string)}
               style={{ width: '100%' }}
+              data-testid="schedule-timezone-select"
             >
               <Select.Option value="UTC">UTC</Select.Option>
               <Select.Option value="Asia/Shanghai">Asia/Shanghai</Select.Option>
@@ -73,11 +77,11 @@ export function ScheduleModal() {
         </Row>
 
         {s.previewError && (
-          <Banner type="danger" description={s.previewError} onClose={() => {}} />
+          <Banner type="danger" description={s.previewError} onClose={() => {}} data-testid="schedule-preview-error" />
         )}
 
         {s.previewNextRuns.length > 0 && (
-          <div className={styles.schedulePreview}>
+          <div className={styles.schedulePreview} data-testid="schedule-preview">
             <span className={styles.schedulePreviewTitle}>
               {d.lang === 'zh' ? '接下来 5 次触发时间' : 'Next 5 fire times'}
             </span>
@@ -98,6 +102,7 @@ export function ScheduleModal() {
               type="danger"
               theme="light"
               onClick={() => s.handleDeleteSchedule(existing.id)}
+              data-testid="schedule-delete-button"
             >
               {d.lang === 'zh' ? '删除调度' : 'Delete'}
             </Button>
@@ -114,11 +119,12 @@ export function ScheduleModal() {
                   alert(d.lang === 'zh' ? '已触发一次运行' : 'Run triggered')
                 }
               }}
+              data-testid="schedule-trigger-button"
             >
               {d.lang === 'zh' ? '立即触发' : 'Run Now'}
             </Button>
           )}
-          <Button type="primary" theme="solid" onClick={s.handleSaveSchedule}>
+          <Button type="primary" theme="solid" onClick={s.handleSaveSchedule} data-testid="schedule-save-button">
             {d.lang === 'zh' ? '保存调度' : 'Save'}
           </Button>
         </div>

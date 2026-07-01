@@ -56,7 +56,6 @@ services:
       - "5173:5173"
     volumes:
       - ./frontend:/app/frontend
-      - /app/frontend/node_modules  # 匿名卷:容器独立 node_modules,隔离宿主 darwin 二进制(避免平台冲突 + 每次 up 重装)
     environment:
       - VITE_BACKEND_URL=http://backend:8000
       - VITE_USE_POLLING=true  # Forces Vite filesystem polling to work beautifully on macOS Docker volumes

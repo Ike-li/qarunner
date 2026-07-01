@@ -146,6 +146,7 @@ export function UserManagementModal() {
                 <Input
                   placeholder={d.lang === 'zh' ? '用户名' : 'Username'}
                   value={u.newUsername}
+                  onChange={u.setNewUsername}
                   data-testid="user-new-username"
                 />
               </Col>
@@ -154,6 +155,7 @@ export function UserManagementModal() {
                   placeholder={d.lang === 'zh' ? '密码' : 'Password'}
                   type="password"
                   value={u.newPassword}
+                  onChange={u.setNewPassword}
                   data-testid="user-new-password"
                 />
               </Col>

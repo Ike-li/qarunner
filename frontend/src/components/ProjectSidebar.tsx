@@ -307,6 +307,7 @@ export function ProjectSidebar() {
                                   icon={<IconClock style={{ fontSize: '10px' }} />}
                                   onClick={() => d.schedules.handleOpenScheduleModal(profile)}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+                                  data-testid="open-schedule-button"
                                 />
                               </Tooltip>
                               <Tooltip content={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}>
