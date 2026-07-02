@@ -250,8 +250,13 @@ class TestFakeScheduler:
 
     def test_cancel_records_key(self) -> None:
         scheduler = FakeScheduler()
-        scheduler.cancel("run-1")
+        scheduler.enqueue("run-1")
+        assert scheduler.cancel("run-1") is True
         assert "run-1" in scheduler.cancelled_keys
+
+    def test_cancel_returns_false_for_unknown_key(self) -> None:
+        scheduler = FakeScheduler()
+        assert scheduler.cancel("run-1") is False
 
     async def test_drain_records(self) -> None:
         scheduler = FakeScheduler()

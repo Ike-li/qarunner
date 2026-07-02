@@ -24,6 +24,12 @@ uv run pytest -m e2e
 # Lint
 uv run ruff check .
 
+# Frontend: unit tests + type check
+cd frontend && npm ci && npx vitest run && npx tsc --noEmit
+
+# Frontend: E2E tests (requires Playwright browsers)
+cd frontend && npx playwright install chromium && npx playwright test
+
 # Start server (serves the API; build frontend/ separately for the SPA)
 uv run uvicorn qarunner.api.app:app --reload
 ```

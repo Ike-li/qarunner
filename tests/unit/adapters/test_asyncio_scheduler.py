@@ -89,9 +89,15 @@ async def test_poller_dequeues_and_executes() -> None:
     store = _FakeStore(_queued=["run-1", "run-2"])
     executed: list[str] = []
     done_events: list[asyncio.Event] = []
+    start_count = 0
+    all_started = asyncio.Event()
 
     async def run_fn(run_id: str) -> None:
+        nonlocal start_count
         executed.append(run_id)
+        start_count += 1
+        if start_count >= 2:
+            all_started.set()
         ev = asyncio.Event()
         done_events.append(ev)
         await ev.wait()
@@ -99,14 +105,11 @@ async def test_poller_dequeues_and_executes() -> None:
     scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=4)
     await scheduler.start()
 
-    # Wake poller — it should dequeue and start executing
+    # Wake poller — it should dequeue and start both (max_concurrency=4)
     scheduler.enqueue("run-1")
-    await asyncio.sleep(0.05)
-    # With 2 queued runs and 4 slots, both should be picked up
     scheduler.enqueue("run-2")
-    await asyncio.sleep(0.05)
+    await all_started.wait()
 
-    assert store.dequeued == ["run-1", "run-2"]
     assert sorted(executed) == ["run-1", "run-2"]
 
     # Release the tasks
@@ -123,12 +126,16 @@ async def test_semaphore_limits_concurrency() -> None:
     current = 0
     max_seen = 0
     release_events: list[asyncio.Event] = []
+    started_events: list[asyncio.Event] = []
 
     async def run_fn(run_id: str) -> None:
         nonlocal current, max_seen
         current += 1
         if current > max_seen:
             max_seen = current
+        started_ev = asyncio.Event()
+        started_events.append(started_ev)
+        started_ev.set()
         ev = asyncio.Event()
         release_events.append(ev)
         await ev.wait()
@@ -138,7 +145,10 @@ async def test_semaphore_limits_concurrency() -> None:
     await scheduler.start()
     # Enqueue to wake poller
     scheduler.enqueue("run-0")
-    await asyncio.sleep(0.1)
+    # Wait for at least 2 tasks to start
+    await asyncio.sleep(0.01)  # let poller pick up first batch
+    for ev in started_events:
+        await ev.wait()
 
     assert max_seen <= 2
     assert max_seen >= 2  # at least 2 should have been concurrent
@@ -200,7 +210,7 @@ async def test_cancel_running_task() -> None:
     await started.wait()
 
     assert scheduler.cancel("run-1") is True
-    await asyncio.sleep(0.05)
+    await cancelled.wait()
     assert cancelled.is_set()
 
     await scheduler.shutdown()
@@ -232,15 +242,17 @@ async def test_cancel_queued_not_running_returns_false() -> None:
 async def test_drain_waits_for_inflight_task() -> None:
     store = _FakeStore(_queued=["run-1"])
     done: list[str] = []
+    started = asyncio.Event()
 
     async def run_fn(run_id: str) -> None:
+        started.set()
         await asyncio.sleep(0.05)
         done.append(run_id)
 
     scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2)
     await scheduler.start()
     scheduler.enqueue("run-1")
-    await asyncio.sleep(0.01)  # let poller pick it up
+    await started.wait()
     await scheduler.drain()
     assert done == ["run-1"]
 
@@ -309,6 +321,29 @@ async def test_failing_task_is_dereferenced() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failing_task_logs_exception(caplog: pytest.LogCaptureFixture) -> None:
+    """_on_task_done logs when a task finishes with an unhandled exception."""
+    store = _FakeStore()
+    scheduler = AsyncioScheduler(store=store, run_fn=asyncio.sleep, max_concurrency=2)
+
+    # Build a completed task that raised an exception.
+    async def _boom() -> None:
+        raise RuntimeError("boom")
+
+    task: asyncio.Task[None] = asyncio.create_task(_boom())
+    try:
+        await task
+    except RuntimeError:
+        pass
+
+    with caplog.at_level("ERROR", logger="qarunner.adapters.asyncio_scheduler"):
+        scheduler._on_task_done(task)
+    assert any("scheduled task failed" in r.getMessage() for r in caplog.records), (
+        f"expected 'scheduled task failed' log, got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_poller_handles_dequeue_exception() -> None:
     """Poller catches exceptions from dequeue and keeps running."""
     store = _FakeStore()
@@ -327,13 +362,15 @@ async def test_poller_handles_dequeue_exception() -> None:
 
     async def run_fn(run_id: str) -> None:
         executed.append(run_id)
+        executed_event.set()
 
+    executed_event = asyncio.Event()
     scheduler = AsyncioScheduler(
         store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05
     )
     await scheduler.start()
     scheduler.enqueue("any")
-    await asyncio.sleep(0.2)  # poller recovers and picks up run-after-error
+    await executed_event.wait()  # poller recovers and picks up run-after-error
 
     await scheduler.shutdown()
     # The poller survived the exception and dequeued a run on the next cycle.

@@ -94,6 +94,7 @@ export function TriggerRunModal() {
           </label>
           <Select
             id="trigger-runner"
+            data-testid="trigger-runner-select"
             value={d.form.selectedRunner}
             onChange={(val) => d.form.setSelectedRunner(val as string)}
             style={{ width: '100%' }}
@@ -113,6 +114,7 @@ export function TriggerRunModal() {
             <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
               <Select
                 id="trigger-profile"
+                data-testid="trigger-profile-select"
                 value={d.form.selectedProfileId}
                 onChange={(val) => {
                   const profileId = val as string

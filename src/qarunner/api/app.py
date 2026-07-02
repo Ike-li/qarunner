@@ -49,6 +49,22 @@ def create_app(container: Container | None = None) -> FastAPI:
     """Build and return a configured ``FastAPI`` instance."""
     app = FastAPI(title="qarunner", lifespan=lifespan)
     app.include_router(router)
+
+    # CORS — only add middleware when origins are configured. Same-origin
+    # deployments (static files mounted at "/") don't need CORS at all.
+    if container is not None:
+        origins = [o.strip() for o in container.settings.cors_origins.split(",") if o.strip()]
+        if origins:
+            from fastapi.middleware.cors import CORSMiddleware
+
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=origins,
+                allow_credentials=True,
+                allow_methods=["GET", "POST", "PUT", "DELETE"],
+                allow_headers=["Authorization", "Content-Type"],
+            )
+
     if container is not None:
         app.state.container = container
 

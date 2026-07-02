@@ -42,11 +42,8 @@ test.describe('User management — Admin operations', () => {
     // Submit new user
     await page.getByTestId('user-add-submit').click();
 
-    // Wait for user to be created
-    await page.waitForTimeout(1000);
-
     // Verify new user appears in the list
-    await expect(page.getByTestId('user-row-username').filter({ hasText: uniqueUsername })).toBeVisible();
+    await expect(page.getByTestId('user-row-username').filter({ hasText: uniqueUsername })).toBeVisible({ timeout: 5000 });
   });
 
   test('toggles user role', async ({ page }) => {
@@ -66,14 +63,15 @@ test.describe('User management — Admin operations', () => {
       await page.getByTestId('user-new-username').fill(tmpUser);
       await page.getByTestId('user-new-password').fill('TmpPass123!');
       await page.getByTestId('user-add-submit').click();
-      await page.waitForTimeout(1000);
+      await expect(page.getByTestId('user-row-username').filter({ hasText: tmpUser })).toBeVisible({ timeout: 5000 });
     }
 
     // Click toggle role button on the second user (non-admin)
     const toggleBtn = page.getByTestId('user-toggle-role').nth(1);
     if (await toggleBtn.isVisible()) {
       await toggleBtn.click();
-      await page.waitForTimeout(500);
+      // Role toggle is optimistic — button should still be visible after click
+      await expect(toggleBtn).toBeVisible();
     }
   });
 
@@ -88,7 +86,8 @@ test.describe('User management — Admin operations', () => {
     const pwdBtn = page.getByTestId('user-change-password').first();
     if (await pwdBtn.isVisible()) {
       await pwdBtn.click();
-      await page.waitForTimeout(500);
+      // A password dialog or input should appear — just verify button was clickable
+      await expect(pwdBtn).toBeVisible();
     }
   });
 
@@ -104,10 +103,9 @@ test.describe('User management — Admin operations', () => {
     await page.getByTestId('user-new-username').fill(uniqueUsername);
     await page.getByTestId('user-new-password').fill('DeletePass123!');
     await page.getByTestId('user-add-submit').click();
-    await page.waitForTimeout(1500);
 
     // Verify user was created
-    await expect(page.getByTestId('user-row-username').filter({ hasText: uniqueUsername })).toBeVisible();
+    await expect(page.getByTestId('user-row-username').filter({ hasText: uniqueUsername })).toBeVisible({ timeout: 5000 });
 
     // Override window.confirm to auto-accept
     await page.evaluate(() => {
@@ -120,8 +118,7 @@ test.describe('User management — Admin operations', () => {
     await userRow.getByTestId('user-delete').click();
 
     // Verify user is removed
-    await page.waitForTimeout(1500);
-    await expect(page.getByTestId('user-row-username').filter({ hasText: uniqueUsername })).not.toBeVisible();
+    await expect(page.getByTestId('user-row-username').filter({ hasText: uniqueUsername })).not.toBeVisible({ timeout: 5000 });
   });
 
   test('closes user management modal', async ({ page }) => {

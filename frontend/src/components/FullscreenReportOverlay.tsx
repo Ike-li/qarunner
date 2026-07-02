@@ -17,7 +17,8 @@ export function FullscreenReportOverlay() {
   return (
     <div className={styles.fullscreenTerminalOverlay} onClick={() => d.terminal.setIsReportFullscreen(false)}>
       <div ref={dialogRef} className={styles.fullscreenTerminal} role="dialog" aria-modal="true"
-        aria-labelledby="fullscreen-report-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+        aria-labelledby="fullscreen-report-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}
+        data-testid="fullscreen-report-overlay">
         <div className={styles.fullscreenTerminalHeader}>
           <div className={styles.terminalTitleGroup}>
             <BarChart3 size={16} className={styles.terminalHeaderIcon} style={{ color: '#a855f7' }} />
@@ -36,7 +37,8 @@ export function FullscreenReportOverlay() {
             <button className={styles.fullscreenTerminalCloseBtn}
               onClick={() => d.terminal.setIsReportFullscreen(false)}
               title={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
-              aria-label={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}>
+              aria-label={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
+              data-testid="fullscreen-report-close">
               <X size={16} />
             </button>
           </div>
@@ -51,7 +53,8 @@ export function FullscreenReportOverlay() {
             </div>
           )}
           <iframe src={`/runs/${selectedRun.id}/report`} className={styles.fullscreenReportIframe}
-            onLoad={() => setIsIframeLoading(false)} title="Allure Fullscreen Report" />
+            onLoad={() => setIsIframeLoading(false)} title="Allure Fullscreen Report"
+            data-testid="fullscreen-report-iframe" />
         </div>
       </div>
     </div>

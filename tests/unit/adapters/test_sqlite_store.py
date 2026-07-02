@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -1105,6 +1105,67 @@ async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:
     # FK ON DELETE CASCADE: deleting the run drops its cases automatically.
     await store.delete_run("run-cascade")
     assert await store.get_cases_for_run("run-cascade") == []
+
+
+async def test_count_flaky_tests_detects_flips(store: SqliteStore) -> None:
+    now = datetime.now(UTC)
+    # 4 runs with alternating pass/fail for the same test case → flaky (3 flips).
+    for i, st in enumerate(["passed", "failed", "passed", "failed"]):
+        run = _make_run(
+            id=f"fl{i}", tests_path="suite_a", status=RunStatus.COMPLETED,
+            created_at=now - timedelta(hours=4 - i),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"fl{i}", "suite_a", run.created_at,
+            [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
+        )
+    assert await store.count_flaky_tests(days=30) == 1
+
+
+async def test_count_flaky_tests_ignores_stable(store: SqliteStore) -> None:
+    now = datetime.now(UTC)
+    for i, st in enumerate(["passed", "passed", "passed"]):
+        run = _make_run(
+            id=f"st{i}", tests_path="suite_a", status=RunStatus.COMPLETED,
+            created_at=now - timedelta(hours=3 - i),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"st{i}", "suite_a", run.created_at,
+            [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
+        )
+    assert await store.count_flaky_tests(days=30) == 0
+
+
+async def test_count_flaky_tests_owner_scoped(store: SqliteStore) -> None:
+    now = datetime.now(UTC)
+    # alice's test: flaky; bob's test: stable.
+    for i, (owner, st) in enumerate([("alice", "passed"), ("alice", "failed"), ("alice", "passed")]):
+        run = _make_run(
+            id=f"own{i}", tests_path="suite_a", created_by=owner,
+            status=RunStatus.COMPLETED, created_at=now - timedelta(hours=3 - i),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"own{i}", "suite_a", run.created_at,
+            [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
+        )
+    run_bob = _make_run(
+        id="bob0", tests_path="suite_a", created_by="bob",
+        status=RunStatus.COMPLETED, created_at=now - timedelta(hours=1),
+    )
+    await store.save(run_bob)
+    await store.save_cases(
+        "bob0", "suite_a", run_bob.created_at,
+        [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
+    )
+    # Admin sees all → 1 flaky (alice's).
+    assert await store.count_flaky_tests(days=30) == 1
+    # alice scope → 1 flaky.
+    assert await store.count_flaky_tests(days=30, created_by="alice") == 1
+    # bob scope → 0 flaky.
+    assert await store.count_flaky_tests(days=30, created_by="bob") == 0
 
 
 # ── BUG regression: list() and get_old_unlocked_runs() missing profile_id ────

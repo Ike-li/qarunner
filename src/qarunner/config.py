@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # dev and the test client work; MUST be true in production (HTTPS) so the
     # HttpOnly auth cookie never rides a plaintext connection.
     cookie_secure: bool = False
+    # CORS allowed origins (comma-separated). Empty = same-origin only (no
+    # Access-Control-Allow-Origin header). Set to e.g. "http://localhost:5173"
+    # for local frontend dev, or "https://qa.example.com" for production.
+    cors_origins: str = ""
     admin_user: str = "admin"
     # Initial admin password — required, no default (SEC-2).
     admin_password: str

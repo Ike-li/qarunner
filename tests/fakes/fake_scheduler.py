@@ -18,6 +18,7 @@ class FakeScheduler:
     cancelled_keys: list[str] = field(default_factory=list)
 
     _running: bool = False
+    _running_keys: set[str] = field(default_factory=set)
 
     async def start(self) -> None:
         self._running = True
@@ -28,12 +29,13 @@ class FakeScheduler:
     def enqueue(self, run_id: str) -> None:
         """Record the enqueue call (no real execution)."""
         self.enqueued += 1
+        self._running_keys.add(run_id)
 
     def cancel(self, key: str) -> bool:
-        """Record the cancel request.  In the fake, cancelling a QUEUED run
-        (not yet executing) is handled by the orchestrator writing CANCELLED
-        to the store, so this only needs to track the key for test assertions.
-        """
+        """Record the cancel request. Returns False if key is not in-flight."""
+        if key not in self._running_keys:
+            return False
+        self._running_keys.discard(key)
         self.cancelled_keys.append(key)
         return True
 

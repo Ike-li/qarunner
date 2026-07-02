@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from qarunner.ports.process import ProcessRunner
     from qarunner.ports.reporter import AllureReporter
     from qarunner.ports.scheduler import TaskScheduler
-    from qarunner.ports.store import RunStore
+    from qarunner.ports.store import Store
 
 from qarunner.core.notification import build_run_card, send_feishu_card
 
@@ -169,7 +169,7 @@ class RunOrchestrator:
         self,
         *,
         registry: RunnerRegistry,
-        store: RunStore,
+        store: Store,
         scheduler: TaskScheduler,
         process: ProcessRunner,
         collector: ResultCollector,

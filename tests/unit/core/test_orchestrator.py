@@ -95,6 +95,7 @@ class TestCancel:
             created_at=datetime.now(UTC),
         )
         await orch._store.save(run)
+        orch._scheduler.enqueue("r-run")
         result = await orch.cancel("r-run")
         assert result.status == RunStatus.CANCELLED
         assert result.finished_at is not None

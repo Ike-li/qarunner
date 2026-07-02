@@ -46,10 +46,10 @@ def create_app(container: Container | None = None) -> FastAPI:
     app = _real_create_app(container)
 
     async def mock_get_current_user() -> User:
-        return User(username="test_user", role=UserRole.ADMIN, created_at=datetime.now())
+        return User(username="test_user", role=UserRole.ADMIN, created_at=NOW)
 
     async def mock_get_current_admin() -> User:
-        return User(username="test_user", role=UserRole.ADMIN, created_at=datetime.now())
+        return User(username="test_user", role=UserRole.ADMIN, created_at=NOW)
 
     app.dependency_overrides[get_current_user] = mock_get_current_user
     app.dependency_overrides[get_current_admin] = mock_get_current_admin
@@ -177,6 +177,29 @@ class FakeStore:
             CaseHistoryPoint(created_at=ca, status=st)
             for ca, st in reversed(rows[:limit])
         ]
+
+    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
+        from datetime import timedelta
+        since = datetime.now(UTC) - timedelta(days=days)
+        grouped: dict[tuple[str, str, str], list[str]] = {}
+        for run_id, cases in self._cases.items():
+            run = self._runs.get(run_id)
+            if run is None or run.status != RunStatus.COMPLETED:
+                continue
+            if run.created_at < since:
+                continue
+            if created_by is not None and run.created_by != created_by:
+                continue
+            for c in cases:
+                key = (run.tests_path, c.suite, c.name)
+                grouped.setdefault(key, []).append(c.status)
+        count = 0
+        for statuses in grouped.values():
+            seq = "".join("F" if s in ("failed", "error") else "P" for s in statuses)
+            flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
+            if flips >= 2:
+                count += 1
+        return count
 
     async def lock_run(self, run_id: str, locked: bool) -> None:
         if run_id in self._runs:
@@ -897,6 +920,122 @@ def test_runs_trend_empty_for_unknown_suite() -> None:
         resp = client.get("/runs/trend?tests_path=nope")
     assert resp.status_code == 200
     assert resp.json()["points"] == []
+
+
+# ── GET /metrics ────────────────────────────────────────────────────────
+
+
+def test_metrics_empty_data() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_runs"] == 0
+    assert body["completed_runs"] == 0
+    assert body["pass_rate_7d"] == 0.0
+    assert body["avg_duration_ms_7d"] == 0.0
+    assert body["flaky_count_30d"] == 0
+    assert body["run_volume_7d"] == 0
+    assert body["suites"] == []
+
+
+def test_metrics_computes_pass_rate_and_duration() -> None:
+    container = _make_container()
+    recent = datetime.now(UTC) - timedelta(hours=1)
+    # 2 completed runs: one passed, one failed
+    _make_run_in_store(
+        container.store, id="r1", created_by="alice", tests_path="suite/",
+        status=RunStatus.COMPLETED, created_at=recent,
+        finished_at=recent + timedelta(seconds=10),
+        summary=TestSummary(total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=1000, pass_rate=1.0),
+    )
+    _make_run_in_store(
+        container.store, id="r2", created_by="alice", tests_path="suite/",
+        status=RunStatus.COMPLETED, created_at=recent + timedelta(minutes=1),
+        finished_at=recent + timedelta(minutes=1, seconds=20),
+        summary=TestSummary(total=5, passed=3, failed=2, skipped=0, error=0, duration_ms=2000, pass_rate=0.6),
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    body = resp.json()
+    assert body["completed_runs"] == 2
+    assert body["pass_rate_7d"] == 0.5  # 1 of 2 passed
+    assert body["avg_duration_ms_7d"] == 1500.0  # (1000+2000)/2
+    assert body["run_volume_7d"] == 2
+    assert len(body["suites"]) == 1
+    assert body["suites"][0]["tests_path"] == "suite/"
+    assert body["suites"][0]["pass_rate"] == 0.5
+
+
+def test_metrics_excludes_non_completed_runs() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r1", created_by="alice", tests_path="suite/",
+        status=RunStatus.QUEUED, created_at=NOW,
+    )
+    _make_run_in_store(
+        container.store, id="r2", created_by="alice", tests_path="suite/",
+        status=RunStatus.RUNNING, created_at=NOW + timedelta(minutes=1),
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    body = resp.json()
+    assert body["total_runs"] == 2
+    assert body["completed_runs"] == 0
+    assert body["run_volume_7d"] == 0
+
+
+def test_metrics_owner_scoped_for_non_admin() -> None:
+    container = _make_container()
+    recent = datetime.now(UTC) - timedelta(hours=1)
+    _make_run_in_store(
+        container.store, id="r-alice", created_by="alice", tests_path="suite/",
+        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=100, pass_rate=1.0),
+    )
+    _make_run_in_store(
+        container.store, id="r-bob", created_by="bob", tests_path="suite/",
+        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(total=2, passed=0, failed=2, skipped=0, error=0, duration_ms=100, pass_rate=0.0),
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    body = resp.json()
+    assert body["total_runs"] == 1  # only alice's run
+    assert body["pass_rate_7d"] == 1.0
+
+
+def test_metrics_per_suite_breakdown() -> None:
+    container = _make_container()
+    recent = datetime.now(UTC) - timedelta(hours=1)
+    _make_run_in_store(
+        container.store, id="r1", created_by="alice", tests_path="suite_a/",
+        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=500, pass_rate=1.0),
+    )
+    _make_run_in_store(
+        container.store, id="r2", created_by="alice", tests_path="suite_b/",
+        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(total=3, passed=1, failed=2, skipped=0, error=0, duration_ms=300, pass_rate=0.33),
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    suites = resp.json()["suites"]
+    assert len(suites) == 2
+    by_path = {s["tests_path"]: s for s in suites}
+    assert by_path["suite_a/"]["pass_rate"] == 1.0
+    assert by_path["suite_b/"]["pass_rate"] == 0.0  # 0 of 1 passed
 
 
 # ── GET /cases/history (cross-run stage 3) ──────────────────────────────

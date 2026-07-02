@@ -75,3 +75,29 @@ class InMemoryRunStore:
         })
         self._runs[run.id] = run
         return run.id
+
+    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
+        """Count unique test cases with ≥2 pass/fail flips (in-memory impl)."""
+        from datetime import timedelta
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        # Group statuses by (tests_path, suite, name).
+        grouped: dict[tuple[str, str, str], list[str]] = {}
+        for run_id, cases in self._cases.items():
+            run = self._runs.get(run_id)
+            if run is None or run.status != RunStatus.COMPLETED:
+                continue
+            if run.created_at < since:
+                continue
+            if created_by is not None and run.created_by != created_by:
+                continue
+            for c in cases:
+                key = (run.tests_path, c.suite, c.name)
+                grouped.setdefault(key, []).append(c.status)
+        count = 0
+        for statuses in grouped.values():
+            seq = "".join("F" if s in ("failed", "error") else "P" for s in statuses)
+            flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
+            if flips >= 2:
+                count += 1
+        return count

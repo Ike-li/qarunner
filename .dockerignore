@@ -31,6 +31,7 @@ external_tests
 .claude
 .codegraph
 .reasonix
+.devcontainer
 docs
 
 # Docs / meta not needed at runtime

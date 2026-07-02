@@ -15,6 +15,7 @@ import {
 } from '@douyinfe/semi-icons'
 import styles from '../App.module.css'
 import { activateOnKey } from '../a11y'
+import { filterRuns } from '../filterRuns'
 import { formatDuration } from '../logUtils'
 import { passRateColor, statusTagColor } from './runStatus'
 import type { Run } from '../types'
@@ -29,16 +30,13 @@ export function RunsTable() {
   const d = useDashboard()
 
   const filteredRuns = useMemo(
-    () =>
-      d.runs.runs.filter((r) => {
-        if (d.selectedSuiteFilter && r.tests_path !== d.selectedSuiteFilter) return false
-        if (d.logFilterTab === 'Manual' && r.created_by === 'system:schedule') return false
-        if (d.logFilterTab === 'Scheduled' && r.created_by !== 'system:schedule') return false
-        if (d.searchRunId && !r.id.toLowerCase().includes(d.searchRunId.toLowerCase())) return false
-        if (d.filterStatus !== 'ALL' && r.status !== d.filterStatus) return false
-        if (d.filterOwner !== 'ALL' && r.created_by !== d.filterOwner) return false
-        return true
-      }),
+    () => filterRuns(d.runs.runs, {
+      suiteFilter: d.selectedSuiteFilter,
+      logFilterTab: d.logFilterTab,
+      searchRunId: d.searchRunId,
+      filterStatus: d.filterStatus,
+      filterOwner: d.filterOwner,
+    }),
     [
       d.runs.runs,
       d.selectedSuiteFilter,
@@ -262,6 +260,7 @@ export function RunsTable() {
           onChange={value => d.setSearchRunId(value)}
           showClear
           style={{ width: '220px' }}
+          data-testid="search-run-input"
         />
 
         {/* 状态筛选下拉框 */}
@@ -270,6 +269,7 @@ export function RunsTable() {
           onChange={value => d.setFilterStatus(value as string)}
           style={{ width: '150px' }}
           placeholder={d.t('filterStatusPlaceholder')}
+          data-testid="filter-status-select"
         >
           <Select.Option value="ALL">{d.t('filterStatusPlaceholder')}</Select.Option>
           <Select.Option value="queued">{d.t('status_queued')}</Select.Option>
@@ -285,6 +285,7 @@ export function RunsTable() {
           onChange={value => d.setFilterOwner(value as string)}
           style={{ width: '150px' }}
           placeholder={d.t('filterOwnerPlaceholder')}
+          data-testid="filter-owner-select"
         >
           <Select.Option value="ALL">{d.t('filterOwnerPlaceholder')}</Select.Option>
           {uniqueOwners.map(owner => (
@@ -301,6 +302,7 @@ export function RunsTable() {
             theme="borderless"
             onClick={resetFilters}
             style={{ marginLeft: 'auto' }}
+            data-testid="reset-filters-button"
           >
             {d.t('clearFilters')}
           </Button>

@@ -149,27 +149,9 @@ fake adapters.
 - **Factory**: `create_app()` in `app.py` — registers router, attaches lifespan,
   mounts static SPA if `frontend/dist/` exists
 - **Lifespan**: Database init → crash recovery → scheduler start → graceful shutdown
-- **Routes** (`routes.py`, ~51K lines):
-
-| Prefix | Resource | Auth |
-|--------|----------|------|
-| `POST /auth/login` | Login (returns JWT) | Public |
-| `POST /auth/logout` | Logout | Authenticated |
-| `GET /auth/me` | Current user | Authenticated |
-| `GET/POST /users` | User management | Admin |
-| `GET/POST /runs` | List & trigger test runs | Authenticated |
-| `GET /runs/{id}` | Run detail | Owner/Admin |
-| `GET /runs/{id}/stream` | SSE log streaming | Owner/Admin |
-| `GET /runs/{id}/report` | Allure report download | Owner/Admin |
-| `GET/POST /profiles` | Test execution profiles | Authenticated |
-| `GET/POST /schedules` | Cron schedules | Authenticated |
-| `POST /suites/link` | Register local test suite | Authenticated |
-| `POST /suites/clone` | Register git test suite | Authenticated |
-| `GET /suites/{name}/files` | Suite file tree | Authenticated |
-| `GET /health` | Readiness (DB round-trip) | Public |
-
-Object-level authorization (`_require_owner_access`): non-admin users only see
-and modify their own runs, profiles, and schedules.
+- **Routes** (`routes.py`, ~1900 lines, 46 endpoints):
+  完整端点列表见 [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)。
+  主要域：auth/users、credentials、suites (git ops)、profiles、runs (CRUD + SSE + diff/trend/metrics)、schedules。
 
 ---
 
@@ -267,7 +249,15 @@ frontend/src/
 │   ├── TestFileTree.tsx             — File tree browser
 │   ├── FullscreenTerminalOverlay.tsx— Terminal-style log viewer
 │   ├── FullscreenReportOverlay.tsx  — Allure report in-app viewer
-│   └── runStatus.tsx                — Status badge/color mapping
+│   ├── SuiteTrend.tsx              — Pass-rate trend SVG sparkline
+│   └── runStatus.ts                — Status badge/color mapping
+│
+├── (utility modules)
+│   ├── filterRuns.ts                — RunsTable filter pipeline (pure fn)
+│   ├── runDiff.ts                   — Diff bucket classification (pure fn)
+│   ├── runTrend.ts                  — Trend geometry helpers (pure fn)
+│   ├── runCaseHistory.ts            — Case history cell rendering (pure fn)
+│   └── logUtils.ts                  — Log line classification + formatting
 │
 └── hooks/
     ├── DashboardContext.tsx          — Global state context
@@ -278,6 +268,7 @@ frontend/src/
     ├── useSchedules.ts              — Schedule CRUD
     ├── useSuites.ts                 — Suite CRUD + file tree
     ├── useUsers.ts                  — User management CRUD
+    ├── useCredentials.ts            — Credential CRUD
     ├── useTriggerForm.ts            — Run trigger form state/validation
     ├── useTerminalView.tsx           — SSE log streaming + ANSI rendering
     ├── useFileTreeSelection.ts       — File/folder multi-select

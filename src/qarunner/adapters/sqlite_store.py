@@ -7,7 +7,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -157,6 +157,13 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
     (7, ("ALTER TABLE test_profiles ADD COLUMN webhook_url TEXT;",)),
     # v8: trace which profile triggered a run, for notification lookup at completion.
     (8, ("ALTER TABLE runs ADD COLUMN profile_id TEXT;",)),
+    # v9: indexes on runs for hot query paths (dequeue, inflight count, list).
+    (9, (
+        "CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);",
+        "CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at);",
+        "CREATE INDEX IF NOT EXISTS idx_runs_owner_status ON runs(created_by, status);",
+        "CREATE INDEX IF NOT EXISTS idx_runs_locked_status ON runs(locked, status, finished_at);",
+    )),
 )
 
 
@@ -596,6 +603,43 @@ class SqliteStore:
             CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1])
             for r in reversed(rows)
         ]
+
+    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
+        """Count unique test cases with ≥2 pass/fail flips in the last *days*.
+
+        A "flip" is an adjacent pair of runs where the case passed in one and
+        failed (or errored) in the next.  Groups by (tests_path, suite, name)
+        across all completed runs in the window.
+        """
+        since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        owner_filter = ""
+        params: list[object] = [since]
+        if created_by is not None:
+            owner_filter = "AND r.created_by = ?"
+            params.append(created_by)
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT c.tests_path, c.suite, c.name, "
+                "  GROUP_CONCAT(CASE WHEN c.status IN ('failed','error') THEN 'F' ELSE 'P' END, '') "
+                "  AS seq "
+                "FROM run_test_cases c "
+                "JOIN runs r ON r.id = c.run_id "
+                "WHERE r.status = 'completed' AND c.created_at >= ? "
+                + owner_filter +
+                " GROUP BY c.tests_path, c.suite, c.name "
+                "ORDER BY c.tests_path, c.suite, c.name",
+                params,
+            )
+            rows = await cursor.fetchall()
+        # Count sequences with ≥2 adjacent transitions (P→F or F→P).
+        count = 0
+        for _tp, _suite, _name, seq in rows:
+            if not seq:
+                continue
+            flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
+            if flips >= 2:
+                count += 1
+        return count
 
     async def save_profile(self, profile: TestProfile) -> None:
         # Row-preserving upsert (create + update). A plain INSERT OR REPLACE

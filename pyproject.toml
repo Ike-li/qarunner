@@ -29,6 +29,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "ruff",
+    "pip-audit",
 ]
 
 [tool.hatch.build.targets.wheel]

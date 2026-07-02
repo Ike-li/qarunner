@@ -98,7 +98,7 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 ## 8. 两种使用界面
 
 - **Web 控制台**(React 18 + Vite + Semi UI 单页应用):登录;仪表板 4 张统计卡片(总数 / 成功率 / 失败 / 活跃队列);左栏套件 + Profile 管理;右栏运行表格(按状态 / 引擎 / 归属 / 手动·调度多维过滤 + 搜索);详情抽屉(日志 + 报告);触发弹窗(文件树 + marker + env 编辑);调度 / 用户管理弹窗。工程特性:中英 **i18n**、**明暗主题**、**无障碍 a11y**(焦点管理 + 键盘激活)、SSE 实时更新 + 轮询。
-- **REST API**(45 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
+- **REST API**(46 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
 → `frontend/src/components/*`、`frontend/src/hooks/*`
 
 ## 9. 部署与运维

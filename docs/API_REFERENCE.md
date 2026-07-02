@@ -303,6 +303,12 @@
 - 非 admin 经 run 的 `created_by` 过滤,只看自己 run 里的该用例历史。
 - ⚠️ `flaky` 阈值为保守占位（`[GUESS]`，待真实数据校准）,判定逻辑与端点契约稳定,**阈值本身可能调整**。
 
+#### `GET /metrics` — 认证（非 admin 只看自己的）
+仪表盘级质量指标聚合。
+- 返回 7 天窗口的 pass rate、平均 duration、run volume，30 天窗口的 flaky test count，以及按 suite 分组的 breakdown。
+- **成功**：`200` `MetricsSummary`（见 §八）。
+- 非 admin 经 `created_by` 过滤,只看自己的 runs。
+
 ---
 
 ## 七、调度（Schedule）
@@ -407,6 +413,12 @@
 
 ### LinkTestSuiteResponse
 `success: bool` · `suite_name: str` · `is_accessible: bool` · `message: str`
+
+### MetricsSummary
+`window_days: int` · `total_runs: int` · `completed_runs: int` · `pass_rate_7d: float` · `avg_duration_ms_7d: float` · `flaky_count_30d: int` · `run_volume_7d: int` · `suites: list[SuiteMetrics]`
+
+### SuiteMetrics
+`tests_path: str` · `total_runs: int` · `pass_rate: float` · `avg_duration_ms: float` · `last_run_at: datetime | None`
 
 ### 枚举
 - **RunStatus**：`queued` → `running` → 终态 `completed` / `failed` / `timeout` / `cancelled`（用户主动取消）。

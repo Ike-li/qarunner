@@ -10,13 +10,14 @@ import stat
 import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import Container, get_current_admin, get_current_user
+from qarunner.ports.store import Store
 from qarunner.api.schemas import (
     CaseHistoryResponse,
     CloneTestSuiteRequest,
@@ -63,9 +64,11 @@ from qarunner.errors import (
 )
 from qarunner.models import (
     Credential,
+    MetricsSummary,
     Run,
     RunRequest,
     RunStatus,
+    SuiteMetrics,
     TestSuite,
     User,
     UserRole,
@@ -205,7 +208,7 @@ async def _git_auth_env(secret: str | None) -> AsyncIterator[dict[str, str] | No
 
 
 async def _resolve_credential_secret(
-    store: object, credential_ref: str | None, current_user: User, secret_key: str
+    store: Store, credential_ref: str | None, current_user: User, secret_key: str
 ) -> str | None:
     """Resolve a credential_ref to a decrypted secret for git auth (P0-1).
 
@@ -214,13 +217,13 @@ async def _resolve_credential_secret(
     """
     if not credential_ref:
         return None
-    cred = await store.get_credential(credential_ref)  # type: ignore[attr-defined]
+    cred = await store.get_credential(credential_ref)
     if cred is None:
         raise HTTPException(
             status_code=400, detail=f"Credential '{credential_ref}' not found"
         )
     _require_owner_access(cred.created_by, current_user)
-    enc = await store.get_credential_secret(credential_ref)  # type: ignore[attr-defined]
+    enc = await store.get_credential_secret(credential_ref)
     if enc is None:
         # Raced with a concurrent delete after the existence check — degrade to
         # no auth (like pull) instead of crashing on decrypt(None).
@@ -1242,6 +1245,84 @@ async def get_runs_trend(
         runs = [r for r in runs if r.created_by == current_user.username]
     points = trend.trend_points(runs, tests_path, limit)
     return RunTrendResponse(tests_path=tests_path, points=points)
+
+
+@router.get("/metrics", response_model=MetricsSummary)
+async def get_metrics(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> MetricsSummary:
+    """Dashboard-level quality metrics (pass rate, flaky, duration, volume).
+
+    Computes server-side aggregates from the runs and run_test_cases tables.
+    Owner-scoped: non-admins see only their own runs.
+    """
+    container = request.app.state.container
+    runs = await container.store.list()
+    owner = current_user.username if current_user.role != UserRole.ADMIN else None
+    if owner is not None:
+        runs = [r for r in runs if r.created_by == owner]
+
+    now = datetime.now(UTC)
+    since_7d = now - timedelta(days=7)
+
+    # ── 7-day window: completed runs with a summary ──
+    completed_7d = [
+        r for r in runs
+        if r.status == RunStatus.COMPLETED
+        and r.finished_at is not None
+        and r.finished_at >= since_7d
+    ]
+    with_summary = [r for r in completed_7d if r.summary is not None]
+
+    pass_rate_7d = 0.0
+    avg_duration_ms_7d = 0.0
+    if with_summary:
+        passed_count = sum(1 for r in with_summary if r.summary.pass_rate >= 1.0)  # type: ignore[union-attr]
+        pass_rate_7d = passed_count / len(with_summary)
+        durations = [
+            r.summary.duration_ms for r in with_summary if r.summary.duration_ms > 0  # type: ignore[union-attr]
+        ]
+        avg_duration_ms_7d = sum(durations) / len(durations) if durations else 0.0
+
+    # ── Flaky count (30-day window) ──
+    flaky_count = await container.store.count_flaky_tests(days=30, created_by=owner)
+
+    # ── Per-suite breakdown (all completed runs, not just 7-day) ──
+    suite_map: dict[str, list[Run]] = {}
+    for r in runs:
+        if r.status == RunStatus.COMPLETED:
+            suite_map.setdefault(r.tests_path, []).append(r)
+
+    suites: list[SuiteMetrics] = []
+    for tp, suite_runs in sorted(suite_map.items()):
+        sw = [r for r in suite_runs if r.finished_at and r.finished_at >= since_7d]
+        sw_summary = [r for r in sw if r.summary is not None]
+        sr = 0.0
+        ad = 0.0
+        if sw_summary:
+            sr = sum(1 for r in sw_summary if r.summary.pass_rate >= 1.0) / len(sw_summary)  # type: ignore[union-attr]
+            durs = [r.summary.duration_ms for r in sw_summary if r.summary.duration_ms > 0]  # type: ignore[union-attr]
+            ad = sum(durs) / len(durs) if durs else 0.0
+        last = max((r.finished_at for r in suite_runs if r.finished_at), default=None)
+        suites.append(SuiteMetrics(
+            tests_path=tp,
+            total_runs=len(sw),
+            pass_rate=round(sr, 4),
+            avg_duration_ms=round(ad, 1),
+            last_run_at=last,
+        ))
+
+    return MetricsSummary(
+        window_days=7,
+        total_runs=len(runs),
+        completed_runs=len(completed_7d),
+        pass_rate_7d=round(pass_rate_7d, 4),
+        avg_duration_ms_7d=round(avg_duration_ms_7d, 1),
+        flaky_count_30d=flaky_count,
+        run_volume_7d=len(completed_7d),
+        suites=suites,
+    )
 
 
 _RUN_LOG_MAX_BYTES = 256 * 1024

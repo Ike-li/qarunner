@@ -354,7 +354,7 @@ export function RunDetailsDrawer() {
               <Tabs.TabPane
                 itemKey="report"
                 tab={
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }} data-testid="drawer-tab-report">
                     <BarChart3 size={14} />
                     <span>{d.t('testReport')}</span>
                   </span>
@@ -588,17 +588,19 @@ export function RunDetailsDrawer() {
                         className={styles.portalBtnPrimary}
                         onClick={() => d.terminal.setIsReportFullscreen(true)}
                         title={d.lang === 'zh' ? '全屏查看测试报告' : 'View Test Report in Fullscreen'}
+                        data-testid="report-fullscreen-button"
                       >
                         <Maximize2 size={14} />
                         <span>{d.lang === 'zh' ? '全屏查看报告' : 'Fullscreen Report'}</span>
                       </button>
 
-                      <a 
+                      <a
                         href={`/runs/${d.runs.selectedRun.id}/report`}
                         target="_blank"
                         rel="noreferrer"
                         className={styles.portalBtnSecondary}
                         title={d.lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
+                        data-testid="report-new-window-link"
                       >
                         <ExternalLink size={14} />
                         <span>{d.lang === 'zh' ? '在新窗口打开' : 'Open in New Window'}</span>

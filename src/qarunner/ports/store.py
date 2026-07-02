@@ -188,6 +188,10 @@ class Store(
         """
         ...
 
+    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
+        """Count unique test cases with ≥2 pass/fail flips in the last *days*."""
+        ...
+
     async def dequeue_next_queued(self) -> str | None:
         """Atomically claim and return the oldest QUEUED run id, marking it RUNNING.
 

@@ -266,6 +266,29 @@ class ReportRef(BaseModel):
     html_generated: bool = False
 
 
+class SuiteMetrics(BaseModel):
+    """Per-suite metrics summary."""
+
+    tests_path: str
+    total_runs: int
+    pass_rate: float  # 0.0–1.0
+    avg_duration_ms: float
+    last_run_at: datetime | None = None
+
+
+class MetricsSummary(BaseModel):
+    """Dashboard-level quality metrics (GET /metrics)."""
+
+    window_days: int = 7
+    total_runs: int = 0
+    completed_runs: int = 0
+    pass_rate_7d: float = 0.0
+    avg_duration_ms_7d: float = 0.0
+    flaky_count_30d: int = 0
+    run_volume_7d: int = 0
+    suites: list[SuiteMetrics] = Field(default_factory=list)
+
+
 class Run(BaseModel):
     """A single test run record."""
 

@@ -16,7 +16,7 @@
 
 1. **执行** — pytest / playwright × docker（沙箱隔离）。
 2. **调度** — cron + IANA 时区，定时或即席触发。
-3. **报告** — Allure 报告 + JUnit 解析 + 实时日志（SSE）+ Web 控制台 + 通知推送。
+3. **报告** — Allure 报告 + JUnit 解析 + 实时日志（SSE）+ Web 控制台。
 4. **回归视图（差异化内核）** — 基线 diff / 通过率趋势 / flaky 检测 / 用例级历史。
    把孤立的单次结果连成时间线，是 qarunner 区别于「跑一次看一次」runner 的核心。
 
