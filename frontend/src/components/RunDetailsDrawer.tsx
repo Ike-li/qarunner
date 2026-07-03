@@ -210,7 +210,7 @@ export function RunDetailsDrawer() {
     <SideSheet
       visible={!!d.runs.selectedRun}
       onCancel={() => {
-        d.runs.setSelectedRunId(null)
+        d.runs.closeDrawer()
       }}
       width="680px"
       title={

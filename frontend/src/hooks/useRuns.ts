@@ -331,6 +331,15 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     0,
   )
 
+  // ── close drawer ───────────────────────────────────────────────────────
+
+  const closeDrawer = useCallback(() => {
+    setSelectedRunId(null)
+    setSelectedRunDetails(null)
+    setStreamedStdout('')
+    setIsStreaming(false)
+  }, [])
+
   return {
     // state
     runs,
@@ -338,6 +347,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     selectedRunId,
     setSelectedRunId,
     selectedRunDetails,
+    closeDrawer,
     detailsLoading,
     streamedStdout,
     isStreaming,
