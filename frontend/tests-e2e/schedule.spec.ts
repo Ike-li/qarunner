@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 // Schedule management E2E tests — covers scheduling system critical user journey.
-// Uses stable data-testid hooks (same convention as other spec files).
+// Creates a profile via API in beforeEach so schedule buttons are always visible.
 
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'Demo-Qarunner-2026!';
 
@@ -13,43 +13,63 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
-// Helper to get auth token for API calls
 async function getAuthToken(page: import('@playwright/test').Page): Promise<string> {
   const resp = await page.request.post('/auth/login', {
-    data: { username: 'admin', password: ADMIN_PASSWORD }
+    data: { username: 'admin', password: ADMIN_PASSWORD },
   });
   const data = await resp.json();
   return data.access_token;
 }
 
-// Helper to create a profile via API
-async function createProfile(page: import('@playwright/test').Page, token: string, suiteName: string) {
+async function createProfile(page: import('@playwright/test').Page, token: string, suiteName: string): Promise<string> {
   const resp = await page.request.post('/profiles', {
     headers: { Authorization: `Bearer ${token}` },
     data: {
-      name: 'Test Profile',
+      name: 'E2E Schedule Test Profile',
       tests_path: suiteName,
-      runner: 'pytest'
-    }
+      runner: 'pytest',
+    },
   });
-  return resp.ok();
+  const data = await resp.json();
+  return data.id;
+}
+
+async function createSchedule(page: import('@playwright/test').Page, token: string, profileId: string): Promise<string> {
+  const resp = await page.request.post('/schedules', {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: 'E2E Test Schedule',
+      profile_id: profileId,
+      cron_expression: '0 2 * * *',
+      timezone: 'UTC',
+      enabled: true,
+    },
+  });
+  const data = await resp.json();
+  return data.id;
 }
 
 test.describe('Schedule management — Schedule modal', () => {
-  test('opens schedule modal from profile sidebar', async ({ page }) => {
+  test.beforeEach(async ({ page }) => {
     await login(page);
+    const token = await getAuthToken(page);
 
-    // Check if there are any profiles with schedule buttons
+    // Mock /tests to return a suite name so the sidebar has profiles.
+    await page.route('**/tests', async (route) => {
+      await route.fulfill({ json: ['e2e_suite/'] });
+    });
+
+    // Create a profile via API so the schedule button is always visible.
+    await createProfile(page, token, 'e2e_suite/');
+
+    // Reload to pick up the new profile in the sidebar.
+    await page.reload();
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+  });
+
+  test('opens schedule modal from profile sidebar', async ({ page }) => {
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      // No profiles exist, skip this test
-      test.skip();
-      return;
-    }
-
-    // Click the schedule button (clock icon) on the first profile
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
 
     // Verify modal is visible
@@ -63,19 +83,10 @@ test.describe('Schedule management — Schedule modal', () => {
   });
 
   test('validates cron expression and shows preview', async ({ page }) => {
-    await login(page);
-
-    // Check if there are any profiles with schedule buttons
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      test.skip();
-      return;
-    }
-
-    // Open schedule modal
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
+
     await expect(page.getByTestId('schedule-modal')).toBeVisible();
 
     // Fill in a valid cron expression
@@ -90,19 +101,10 @@ test.describe('Schedule management — Schedule modal', () => {
   });
 
   test('shows error for invalid cron expression', async ({ page }) => {
-    await login(page);
-
-    // Check if there are any profiles with schedule buttons
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      test.skip();
-      return;
-    }
-
-    // Open schedule modal
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
+
     await expect(page.getByTestId('schedule-modal')).toBeVisible();
 
     // Fill in an invalid cron expression
@@ -113,19 +115,10 @@ test.describe('Schedule management — Schedule modal', () => {
   });
 
   test('saves a new schedule', async ({ page }) => {
-    await login(page);
-
-    // Check if there are any profiles with schedule buttons
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      test.skip();
-      return;
-    }
-
-    // Open schedule modal
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
+
     await expect(page.getByTestId('schedule-modal')).toBeVisible();
 
     // Fill in schedule details
@@ -140,65 +133,61 @@ test.describe('Schedule management — Schedule modal', () => {
   });
 
   test('triggers schedule immediately', async ({ page }) => {
-    await login(page);
+    const token = await getAuthToken(page);
 
-    // Check if there are any profiles with schedule buttons
+    // Need an existing schedule for trigger — create one via API.
+    const profileId = await createProfile(page, token, 'e2e_suite/');
+    await createSchedule(page, token, profileId);
+
+    // Reload so the schedule appears in the modal.
+    await page.reload();
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+
+    // Mock the trigger endpoint to avoid actually running tests.
+    page.on('dialog', (dialog) => dialog.accept());
+
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      test.skip();
-      return;
-    }
-
-    // Open schedule modal (assuming a schedule already exists)
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
+
     await expect(page.getByTestId('schedule-modal')).toBeVisible();
 
     // Click the trigger button
     await page.getByTestId('schedule-trigger-button').click();
 
     // Modal should close after trigger
-    await expect(page.getByTestId('schedule-modal')).not.toBeVisible();
+    await expect(page.getByTestId('schedule-modal')).not.toBeVisible({ timeout: 5000 });
   });
 
   test('deletes an existing schedule', async ({ page }) => {
-    await login(page);
+    const token = await getAuthToken(page);
 
-    // Check if there are any profiles with schedule buttons
+    // Need an existing schedule for delete — create one via API.
+    const profileId = await createProfile(page, token, 'e2e_suite/');
+    await createSchedule(page, token, profileId);
+
+    // Reload so the schedule appears in the modal.
+    await page.reload();
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      test.skip();
-      return;
-    }
-
-    // Open schedule modal (assuming a schedule already exists)
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
+
     await expect(page.getByTestId('schedule-modal')).toBeVisible();
 
     // Click the delete button
     await page.getByTestId('schedule-delete-button').click();
 
     // Modal should close after delete
-    await expect(page.getByTestId('schedule-modal')).not.toBeVisible();
+    await expect(page.getByTestId('schedule-modal')).not.toBeVisible({ timeout: 5000 });
   });
 
   test('changes timezone and updates preview', async ({ page }) => {
-    await login(page);
-
-    // Check if there are any profiles with schedule buttons
     const scheduleButtons = page.getByTestId('open-schedule-button');
-    const count = await scheduleButtons.count();
-
-    if (count === 0) {
-      test.skip();
-      return;
-    }
-
-    // Open schedule modal
+    await expect(scheduleButtons.first()).toBeVisible({ timeout: 10000 });
     await scheduleButtons.first().click();
+
     await expect(page.getByTestId('schedule-modal')).toBeVisible();
 
     // Fill in a cron expression
