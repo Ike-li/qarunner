@@ -1,74 +1,56 @@
 # qarunner
 
-> **qarunner** — for the product direction, see [docs/DIRECTION.md](docs/DIRECTION.md) (the single source of truth).
+> **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。
 
-## Quick start (local development)
+## 本地部署
 
-The app refuses to start without a JWT secret and an admin password (SEC-2), so
-export them first — even for local dev:
+**日常开发和部署指南详见 [docs/deployment.md](docs/deployment.md)**。
 
-```bash
-# Install dependencies
-uv sync --all-extras
-
-# Required: a strong JWT secret and a non-default admin password
-export QARUNNER_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
-export QARUNNER_ADMIN_PASSWORD='choose-a-strong-dev-password'
-
-# Run unit tests (100% coverage gate)
-uv run pytest
-
-# Run e2e smoke tests (requires real pytest + allure CLI)
-uv run pytest -m e2e
-
-# Lint
-uv run ruff check .
-
-# Frontend: unit tests + type check
-cd frontend && npm ci && npx vitest run && npx tsc --noEmit
-
-# Frontend: E2E tests (requires Playwright browsers)
-cd frontend && npx playwright install chromium && npx playwright test
-
-# Start server (serves the API; build frontend/ separately for the SPA)
-uv run uvicorn qarunner.api.app:app --reload
-```
-
-For local HTTP dev the auth cookie stays non-`Secure` (`QARUNNER_COOKIE_SECURE`
-defaults to `false`). **Set it to `true` in production** — see below.
-
-## Local development with Docker (hot reload)
-
-`docker-compose.dev.yml` runs the API and the React app as **two separate
-containers with live reload**, so edits to `src/` or `frontend/src/` take effect
-without a rebuild. Use this for day-to-day development instead of the baked
-production image.
+快速启动（开发模式）：
 
 ```bash
-# Secrets are optional here — the dev compose ships safe placeholders
-# (admin password "admin123"); override via a local .env if you like.
-docker compose -f docker-compose.dev.yml up
+# 启动开发环境（前后端热更新）
+docker compose -f docker-compose.dev.yml up -d
+
+# 访问 http://localhost:5173
+# 默认管理员: admin / admin123
 ```
 
-- **Open the app at `http://localhost:5173`** — the Vite dev server, *not* port
-  8000. The backend API stays on `:8000`, but Vite proxies `/auth`, `/runs`,
-  `/tests`, `/profiles`, `/schedules`, and `/users` to it, so the browser sees a
-  single origin and the `SameSite=Strict` auth cookie (SEC-6) still rides along.
-  Hitting `:8000` directly in dev returns `404` at `/` — that container serves no SPA.
-- **Hot reload**: the frontend uses Vite HMR (filesystem polling via
-  `VITE_USE_POLLING`, to survive the macOS Docker bind mount); the backend runs
-  `uvicorn --reload` with `WATCHFILES_FORCE_POLLING` as a fallback for when
-  inotify events don't cross the mount. `frontend/node_modules` is an anonymous
-  volume, so the container's Linux binaries never collide with the host's.
-- **Linking a local suite**: "Add suite → local path" symlinks a host project
-  into `external_tests`. For the symlink to resolve *inside* the container, the
-  host projects root is bind-mounted read-only at the same path
-  (`QARUNNER_PROJECTS_ROOT`, default `~/code`); narrow it in `.env` for a tighter
-  mount. Git suites instead clone straight into `external_tests` and need no such
-  mount.
-- **Don't use a bare `docker compose up` for development** — with no `-f` flag it
-  starts the *production* `docker-compose.yml` (baked SPA on `:8000`, zero hot
-  reload).
+代码更新后：
+
+| 修改了什么 | 需要做什么 |
+|-----------|-----------|
+| 前端 `src/*.tsx` | 自动生效，刷新浏览器 |
+| 后端 `src/*.py` | 自动重启，等 2-3 秒 |
+| 新增依赖包 | `docker compose -f docker-compose.dev.yml up -d --build` |
+
+详细说明（生产部署、运行测试、容器运维）见 **[docs/deployment.md](docs/deployment.md)**。
+
+## 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| [docs/deployment.md](docs/deployment.md) | **本地部署与更新指南**（开发/生产模式、代码更新、运维命令） |
+| [docs/DIRECTION.md](docs/DIRECTION.md) | 产品方向（唯一权威来源） |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | API 端点参考（所有路由、请求/响应字段） |
+| [docs/FEATURES.md](docs/FEATURES.md) | 功能列表 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构说明（六边形架构） |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 代码架构（层次、端口、适配器） |
+| [specs/ui-test-plan.md](specs/ui-test-plan.md) | E2E 测试计划 |
+| [specs/TEST_PLAN_TEMPLATE.md](specs/TEST_PLAN_TEMPLATE.md) | 测试计划模板（含组件交互清单） |
+
+## 配置参考
+
+所有配置通过 `QARUNNER_` 前缀的环境变量设置，见 [docs/deployment.md](docs/deployment.md) 和 `.env.example`。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `QARUNNER_SECRET_KEY` | **（必填）** | JWT 签名密钥 |
+| `QARUNNER_ADMIN_PASSWORD` | **（必填）** | 管理员初始密码 |
+| `QARUNNER_DB_PATH` | `./artifacts/qarunner.db` | SQLite 数据库路径 |
+| `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | 非管理员能否使用 subprocess 执行器 |
+| `QARUNNER_COOKIE_SECURE` | `false` | 生产环境需设为 `true` |
+| `QARUNNER_MAX_CONCURRENCY` | `4` | 最大并发测试数 |
 
 ## Production deployment (Docker Compose)
 
