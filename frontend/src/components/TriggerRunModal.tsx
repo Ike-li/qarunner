@@ -3,6 +3,7 @@ import { Modal, Banner, Select, Input, Row, Col, Button, Tag, Checkbox } from '@
 import styles from '../App.module.css'
 import { TestFileTree } from './TestFileTree'
 import { useDashboard } from '../hooks/DashboardContext'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 
 /** Trigger-run / edit-profile modal: target dir + saved-profile picker, test-file
  *  tree, marker chips, executor mode, env-var grid, and save-as-profile form. */
@@ -10,6 +11,7 @@ export function TriggerRunModal() {
   const d = useDashboard()
 
   const onClose = () => d.setIsTriggerModalOpen(false)
+  const dialogRef = useDialogA11y({ isOpen: d.isTriggerModalOpen, onClose })
   const onTriggerRun = (e: React.FormEvent) =>
     d.form.handleTriggerRun(e, (runId: string) => {
       d.setIsTriggerModalOpen(false)
@@ -47,7 +49,7 @@ export function TriggerRunModal() {
         </div>
       }
     >
-      <div data-testid="trigger-modal">
+      <div ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1} data-testid="trigger-modal">
         <form onSubmit={d.form.editingProfileId ? onUpdateProfile : onTriggerRun}>
         {d.form.formError && (
           <Banner

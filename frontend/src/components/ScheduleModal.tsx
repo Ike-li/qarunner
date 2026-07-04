@@ -2,6 +2,7 @@ import { Calendar, Clock, Play } from 'lucide-react'
 import { Modal, Banner, Input, Select, Checkbox, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 
 /** Cron schedule editor — reads everything from DashboardContext. */
 export function ScheduleModal() {
@@ -9,6 +10,9 @@ export function ScheduleModal() {
   const s = d.schedules
 
   if (!s.isScheduleModalOpen || !s.scheduleProfile) return null
+
+  const onClose = () => s.setIsScheduleModalOpen(false)
+  const dialogRef = useDialogA11y({ isOpen: s.isScheduleModalOpen, onClose })
 
   // The schedule (if any) already saved for this profile — computed once and
   // reused by the Delete / Run Now render guards and their handlers.
@@ -33,6 +37,7 @@ export function ScheduleModal() {
       width={480}
       data-testid="schedule-modal"
     >
+      <div ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem 0' }}>
         <Row gutter={16}>
           <Col span={18}>
@@ -128,6 +133,7 @@ export function ScheduleModal() {
             {d.lang === 'zh' ? '保存调度' : 'Save'}
           </Button>
         </div>
+      </div>
       </div>
     </Modal>
   )

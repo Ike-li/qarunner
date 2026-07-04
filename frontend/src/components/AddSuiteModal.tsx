@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Modal, Button, Input, Banner, Tabs, Select } from '@douyinfe/semi-ui'
 import { FolderPlus, GitBranch, KeyRound, Link, Settings, Terminal } from 'lucide-react'
 import { useDashboard } from '../hooks/DashboardContext'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 
 interface AddSuiteModalProps {
   isOpen: boolean
@@ -10,6 +11,7 @@ interface AddSuiteModalProps {
 
 export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
   const d = useDashboard()
+  const dialogRef = useDialogA11y({ isOpen, onClose })
   const isZh = d.lang === 'zh'
   const [path, setPath] = useState('')
   const [linking, setLinking] = useState(false)
@@ -117,6 +119,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
       width={520}
       data-testid="add-suite-modal"
     >
+      <div ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1}>
       <Tabs activeKey={activeTab} onChange={(k) => setActiveTab(k as 'local' | 'git')}>
         <Tabs.TabPane tab={<span data-testid="suite-tab-local"><Link size={14} /> {isZh ? '本地路径' : 'Local Path'}</span>} itemKey="local">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem 0' }}>
@@ -210,6 +213,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
           </div>
         </Tabs.TabPane>
       </Tabs>
+      </div>
     </Modal>
   )
 }

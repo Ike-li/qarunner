@@ -10,6 +10,7 @@ import { formatDuration } from '../logUtils'
 import { diffBuckets, diffIsEmpty, type DiffTone } from '../runDiff'
 import { caseCells, type CaseTone } from '../runCaseHistory'
 import { useDashboard } from '../hooks/DashboardContext'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import type { CaseHistory, RunDiff, TestCaseResult } from '../types'
 
 const DIFF_TONE_COLOR: Record<DiffTone, string> = {
@@ -153,6 +154,8 @@ const actionBtnStyle = (color: string): CSSProperties => ({
  *  All state lives in App (terminal prefs via useTerminalView); this displays. */
 export function RunDetailsDrawer() {
   const d = useDashboard()
+  const onClose = () => d.runs.closeDrawer()
+  const dialogRef = useDialogA11y({ isOpen: !!d.runs.selectedRun, onClose })
   const [runDiff, setRunDiff] = useState<RunDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
 
@@ -277,6 +280,7 @@ export function RunDetailsDrawer() {
       closable={true}
       bodyStyle={{ padding: '16px' }}
     >
+      <div ref={dialogRef} tabIndex={-1}>
       {d.runs.selectedRun && (
         <div className={styles.drawerContent} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             {/* Top Big Status Badge */}
@@ -672,6 +676,7 @@ export function RunDetailsDrawer() {
             )}
           </div>
         )}
+      </div>
     </SideSheet>
   )
 }
