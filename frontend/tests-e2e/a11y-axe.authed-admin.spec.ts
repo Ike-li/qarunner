@@ -98,10 +98,19 @@ test.describe('A0.3 Modal/Drawer dialog 语义', () => {
     await page.keyboard.press('Escape');
   });
 
-  test.fixme('UserManagementModal 有 dialog 语义', async ({ page }) => {
-    // Semi Modal renders in portal — click opens but modal stays hidden in test.
-    // Deferred until Semi Modal portal behavior is understood.
+  test('UserManagementModal 有 dialog 语义', async ({ page }) => {
     await page.goto('/');
+    await expect(page.getByTestId('stat-total')).toBeVisible();
+
+    await page.getByTestId('open-users-button').click();
+    await page.waitForTimeout(500);
+
+    // Semi Modal portal — use evaluate to check dialog semantics
+    const hasDialog = await page.evaluate(() => {
+      const modal = document.querySelector('.semi-modal-content');
+      return modal?.getAttribute('role') === 'dialog';
+    });
+    expect(hasDialog).toBe(true);
   });
 
   test('RunDetailsDrawer 有 dialog 语义', async ({ page }) => {

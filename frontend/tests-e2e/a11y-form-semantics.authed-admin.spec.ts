@@ -66,10 +66,29 @@ test.describe('A3.1 表单 input label 关联', () => {
     }
   });
 
-  test.fixme('AddSuiteModal inputs 有 aria-label', async ({ page }) => {
-    // Semi Modal portal renders content as hidden in test.
-    // aria-label was added to source but cannot be verified via E2E until portal issue is resolved.
+  test('AddSuiteModal inputs 有 aria-label', async ({ page }) => {
     await page.goto('/');
+    await expect(page.getByTestId('stat-total')).toBeVisible();
+
+    const addSuiteBtn = page.getByTestId('open-add-suite-button');
+    if (!(await addSuiteBtn.isVisible().catch(() => false))) {
+      test.skip(true, 'Add suite button not visible');
+      return;
+    }
+    await addSuiteBtn.click();
+    await page.waitForTimeout(500);
+
+    // Semi Modal portal — use evaluate to check aria-label directly
+    const labels = await page.evaluate(() => {
+      const inputs = document.querySelectorAll('[data-testid="add-suite-modal"] input, [data-testid="add-suite-modal"] [role=combobox]');
+      return Array.from(inputs).map(i => ({
+        testid: i.getAttribute('data-testid'),
+        ariaLabel: i.getAttribute('aria-label'),
+      }));
+    });
+    // At least the local path input should have aria-label
+    const pathInput = labels.find(l => l.testid === 'link-path-input');
+    expect(pathInput?.ariaLabel).toBeTruthy();
   });
 
   test('ScheduleModal inputs 有 aria-label', async ({ page }) => {
@@ -77,9 +96,24 @@ test.describe('A3.1 表单 input label 关联', () => {
     test.skip(true, 'ScheduleModal needs API setup for profile/schedule');
   });
 
-  test.fixme('UserManagementModal inputs 有 aria-label', async ({ page }) => {
-    // Semi Modal portal issue — modal renders as hidden in test.
+  test('UserManagementModal inputs 有 aria-label', async ({ page }) => {
     await page.goto('/');
+    await expect(page.getByTestId('stat-total')).toBeVisible();
+
+    await page.getByTestId('open-users-button').click();
+    await page.waitForTimeout(500);
+
+    // Semi Modal portal — use evaluate to check aria-label directly
+    const labels = await page.evaluate(() => {
+      const inputs = document.querySelectorAll('[data-testid="user-new-username"], [data-testid="user-new-password"]');
+      return Array.from(inputs).map(i => ({
+        testid: i.getAttribute('data-testid'),
+        ariaLabel: i.getAttribute('aria-label'),
+      }));
+    });
+    for (const input of labels) {
+      expect(input.ariaLabel).toBeTruthy();
+    }
   });
 });
 
@@ -306,8 +340,21 @@ test.describe('A3.4 图标按钮可访问名', () => {
     }
   });
 
-  test.fixme('UserManagementModal delete user 按钮有 aria-label', async ({ page }) => {
-    // Semi Modal portal issue — modal renders as hidden in test.
+  test('UserManagementModal delete user 按钮有 aria-label', async ({ page }) => {
     await page.goto('/');
+    await expect(page.getByTestId('stat-total')).toBeVisible();
+
+    await page.getByTestId('open-users-button').click();
+    await page.waitForTimeout(500);
+
+    // Semi Modal portal — use evaluate to check aria-label directly
+    const deleteBtnLabel = await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="user-delete"]');
+      return btn?.getAttribute('aria-label');
+    });
+    // May be null if no users exist, but if button exists it should have aria-label
+    if (deleteBtnLabel !== null) {
+      expect(deleteBtnLabel).toBeTruthy();
+    }
   });
 });

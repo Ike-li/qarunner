@@ -215,14 +215,31 @@ test.describe.fixme('A1.3 ScheduleModal 焦点管理', () => {
   });
 });
 
-// ── A1.4  UserManagementModal — Semi Modal 内部焦点管理 ──────────────────
+// ── A1.4  UserManagementModal (Semi Modal — 用 evaluate 绕过 portal) ──────
 
 test.describe('A1.4 UserManagementModal 焦点管理', () => {
-  test.fixme('Semi Modal 内部焦点管理与 useDialogA11y 冲突，暂不接入', async ({ page }) => {
-    // UserManagementModal uses Semi <Modal> which has its own focus management.
-    // Adding useDialogA11y wrapper causes the modal to be hidden (CSS conflict).
-    // Deferred until Semi Modal focus behavior is better understood.
+  test('F1+F3: dialog 语义正确 → Esc 关闭', async ({ page }) => {
     await page.goto('/');
+    await expect(page.getByTestId('stat-total')).toBeVisible();
+
+    await page.getByTestId('open-users-button').click();
+    await page.waitForTimeout(500); // wait for modal animation
+
+    // Semi Modal renders in portal — content is in DOM but portal wrapper is "hidden".
+    // Use evaluate to check dialog semantics directly.
+    const hasDialog = await page.evaluate(() => {
+      const modal = document.querySelector('.semi-modal-content');
+      return modal?.getAttribute('role') === 'dialog';
+    });
+    expect(hasDialog).toBe(true);
+
+    // Esc closes the modal
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+
+    // Verify modal is gone from DOM
+    const modalGone = await page.evaluate(() => !document.querySelector('.semi-modal-content'));
+    expect(modalGone).toBe(true);
   });
 });
 
