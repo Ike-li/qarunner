@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "playwright-test": {
+      "command": "node",
+      "args": [
+        "frontend/node_modules/@playwright/test/cli.js",
+        "run-test-mcp-server",
+        "--config",
+        "frontend/playwright.config.ts"
+      ]
+    }
+  }
+}
