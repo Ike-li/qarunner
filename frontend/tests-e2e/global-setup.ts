@@ -7,8 +7,8 @@
 //   - Writes two HttpOnly-cookie storageState files under tests-e2e/.auth/
 //     (gitignored — never committed).
 //
-// Invoked once before any test runs. Existing 21 specs run under the plain
-// `chromium` project with NO storageState, so this changes nothing for them.
+// Invoked once before any test runs. Specs still under the plain `chromium`
+// project have NO storageState, so this changes nothing for them.
 
 import { request } from '@playwright/test';
 import {

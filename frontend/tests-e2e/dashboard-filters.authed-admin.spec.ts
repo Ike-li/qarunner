@@ -2,8 +2,7 @@ import { test, expect } from '@playwright/test';
 
 // Dashboard filtering E2E tests — verifies the RunsTable filter pipeline
 // (status, owner, search, reset) using route-mocked run data for determinism.
-
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
+// Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
 
 const MOCK_RUNS = [
   {
@@ -88,11 +87,8 @@ const MOCK_RUNS = [
   },
 ];
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -105,7 +101,7 @@ test.describe('Dashboard filters', () => {
         await route.fallback();
         return;
       }
-      await route.fulfill({ json: MOCK_RUNS });
+      await route.fulfill({ json: { runs: MOCK_RUNS } });
     });
     // Mock /suites and /tests to avoid backend dependency for sidebar/trend.
     await page.route('**/suites', async (route) => {
@@ -114,7 +110,7 @@ test.describe('Dashboard filters', () => {
     await page.route('**/tests', async (route) => {
       await route.fulfill({ json: ['suite_a/', 'suite_b/', 'suite_c/'] });
     });
-    await login(page);
+    await openDashboard(page);
     // Wait for the runs table to render.
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
   });
@@ -135,7 +131,7 @@ test.describe('Dashboard filters', () => {
     // Should show only the failed run
     const rows = page.locator('table tbody tr');
     await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText('run-beta-0002');
+    await expect(rows.first()).toContainText('run-beta');
   });
 
   test('filter by owner shows only matching runs', async ({ page }) => {
@@ -145,7 +141,7 @@ test.describe('Dashboard filters', () => {
 
     const rows = page.locator('table tbody tr');
     await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText('run-beta-0002');
+    await expect(rows.first()).toContainText('run-beta');
   });
 
   test('search by run ID filters correctly', async ({ page }) => {
@@ -154,7 +150,7 @@ test.describe('Dashboard filters', () => {
 
     const rows = page.locator('table tbody tr');
     await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText('run-gamma003');
+    await expect(rows.first()).toContainText('run-gamm');
   });
 
   test('reset filters restores all runs', async ({ page }) => {
@@ -184,6 +180,6 @@ test.describe('Dashboard filters', () => {
 
     const rows = page.locator('table tbody tr');
     await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText('run-alpha-0001');
+    await expect(rows.first()).toContainText('run-alph');
   });
 });

@@ -3,8 +3,7 @@ import { test, expect } from '@playwright/test';
 // Runs Table and Filtering E2E tests — verifies the RunsTable rendering,
 // column layout, filter pipeline (status, owner, search, reset, combined,
 // log filter tabs), and empty state with "Launch your first run" button.
-
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
+// Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
 
 const MOCK_RUNS_MIXED = [
   {
@@ -129,11 +128,8 @@ const MOCK_RUNS_MIXED = [
   },
 ];
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -162,14 +158,10 @@ async function mockRunsRoute(page: import('@playwright/test').Page, runsData: un
 }
 
 test.describe('Runs Table and Filtering', () => {
-
-  test.beforeEach(async ({ page }) => {
-  });
-
   // 1. Execution records table displays with correct columns
   test('Execution records table displays with correct columns', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Verify the table rendered with data rows.
@@ -205,7 +197,7 @@ test.describe('Runs Table and Filtering', () => {
   // 2. Filter by status shows only matching runs
   test('Filter by status shows only matching runs', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Initially all 6 runs should be visible (or filtered by logFilterTab="All").
@@ -230,7 +222,7 @@ test.describe('Runs Table and Filtering', () => {
   // 3. Filter by owner shows only matching runs
   test('Filter by owner shows only matching runs', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     const rows = page.locator('table tbody tr');
@@ -247,7 +239,7 @@ test.describe('Runs Table and Filtering', () => {
   // 4. Search by Run ID filters correctly
   test('Search by Run ID filters correctly', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     const rows = page.locator('table tbody tr');
@@ -269,7 +261,7 @@ test.describe('Runs Table and Filtering', () => {
   // 5. Reset filters restores all runs
   test('Reset filters restores all runs', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     const rows = page.locator('table tbody tr');
@@ -294,7 +286,7 @@ test.describe('Runs Table and Filtering', () => {
   // 6. Combined filters narrow results correctly
   test('Combined filters narrow results correctly', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     const rows = page.locator('table tbody tr');
@@ -316,7 +308,7 @@ test.describe('Runs Table and Filtering', () => {
   // 7. Log filter tab buttons filter by All / Manual / Scheduled
   test('Log filter tab buttons filter by All / Manual / Scheduled', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // MOCK_RUNS_MIXED has 4 manual runs (admin x2, alice, bob) and 2 scheduled (system:schedule x2).
@@ -349,7 +341,7 @@ test.describe('Runs Table and Filtering', () => {
   // 8. Empty table state shows placeholder with 'Launch First Run' button
   test('Empty table state shows placeholder with Launch First Run button', async ({ page }) => {
     await mockRunsRoute(page, []);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Verify the empty state placeholder text (no runs message).
@@ -380,7 +372,7 @@ test.describe('Runs Table and Filtering', () => {
     }));
 
     await mockRunsRoute(page, twelveRuns);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Should show 10 rows on page 1 with pagination controls visible.
@@ -397,7 +389,7 @@ test.describe('Runs Table and Filtering', () => {
   // ── 10. Search with no matching results ──────────────────────────────
   test('Search with no matching results', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
     await expect(page.locator('table tbody tr')).toHaveCount(6);
 
@@ -424,7 +416,7 @@ test.describe('Runs Table and Filtering', () => {
     });
 
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
     await expect(page.locator('table tbody tr')).toHaveCount(6);
 
@@ -442,7 +434,7 @@ test.describe('Runs Table and Filtering', () => {
   // ── 12. Refresh button re-fetches runs ───────────────────────────────
   test('Refresh button re-fetches runs', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
     await expect(page.locator('table tbody tr')).toHaveCount(6);
 
@@ -463,7 +455,7 @@ test.describe('Runs Table and Filtering', () => {
   // ── 13. Filter by "running" status ───────────────────────────────────
   test('Filter by "running" status', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
     await expect(page.locator('table tbody tr')).toHaveCount(6);
 
@@ -480,7 +472,7 @@ test.describe('Runs Table and Filtering', () => {
   // ── 14. Filter by "queued" status ────────────────────────────────────
   test('Filter by "queued" status', async ({ page }) => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
     await expect(page.locator('table tbody tr')).toHaveCount(6);
 
@@ -522,7 +514,7 @@ test.describe('Runs Table and Filtering', () => {
     ];
 
     await mockRunsRoute(page, runsWithTimeout);
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
     await expect(page.locator('table tbody tr')).toHaveCount(7);
 

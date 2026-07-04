@@ -8,8 +8,8 @@
 //   built from the same storageState  ->  CRUD round-trips.
 //
 // Rename caveat: any spec matching `*.authed-admin.spec.ts` runs under the
-// authed-admin project. This is the only such spec for now; the journey /
-// role-matrix / a11y plans will add more later on top of this infrastructure.
+// authed-admin project. Legacy specs should opt in only after replacing inline
+// UI login with storageState-compatible setup.
 
 import { test, expect } from '@playwright/test';
 import {
