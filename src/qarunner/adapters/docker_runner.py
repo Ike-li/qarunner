@@ -45,9 +45,7 @@ class DockerRunner:
         self._executor_image = executor_image
         self._playwright_executor_image = playwright_executor_image
         self._extra_readonly_roots = [
-            Path(root).expanduser().resolve()
-            for root in (extra_readonly_roots or [])
-            if root
+            Path(root).expanduser().resolve() for root in (extra_readonly_roots or []) if root
         ]
 
     def _get_client(self) -> DockerClient:
@@ -273,7 +271,6 @@ class DockerRunner:
                 log_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await log_task
-
 
             # 6. Gather logs
             def _get_logs():

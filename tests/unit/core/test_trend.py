@@ -20,8 +20,12 @@ def _run(
 ) -> Run:
     summary = (
         TestSummary(
-            total=total, passed=passed, failed=total - passed,
-            skipped=0, error=0, duration_ms=1,
+            total=total,
+            passed=passed,
+            failed=total - passed,
+            skipped=0,
+            error=0,
+            duration_ms=1,
         )
         if with_summary
         else None

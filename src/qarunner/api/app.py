@@ -88,4 +88,3 @@ def create_app(container: Container | None = None) -> FastAPI:
 
 
 app = create_app()
-

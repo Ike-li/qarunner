@@ -73,9 +73,7 @@ _DANGEROUS_PLAYWRIGHT_FLAGS = frozenset(
 
 
 # Directory entries never copied into the workspace jail.
-_JAIL_IGNORE_NAMES = frozenset(
-    {".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"}
-)
+_JAIL_IGNORE_NAMES = frozenset({".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"})
 
 
 def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") -> list[str]:
@@ -92,9 +90,7 @@ def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") 
         for token in list(req.args) + extra_tokens:
             flag = token.split("=", 1)[0]
             if flag in _DANGEROUS_PLAYWRIGHT_FLAGS:
-                raise UnsafeArguments(
-                    f"playwright flag {flag!r} is not allowed in run arguments"
-                )
+                raise UnsafeArguments(f"playwright flag {flag!r} is not allowed in run arguments")
         compiled: list[str] = list(req.args)
         compiled.extend(extra_tokens)
         for selected in req.selected_files:
@@ -269,9 +265,7 @@ class RunOrchestrator:
             # 2. Build command — results_dir must be absolute per plan
             from pathlib import Path
 
-            results_dir = str(
-                (Path(self._artifacts_root) / run.id / "results").resolve()
-            )
+            results_dir = str((Path(self._artifacts_root) / run.id / "results").resolve())
             tests_dir = safe_subpath(self._tests_root, run.tests_path)
 
             run_dir = Path(self._artifacts_root) / run.id
@@ -357,7 +351,6 @@ class RunOrchestrator:
             )
             run = _replace(run, exit_code=proc.exit_code)
 
-
             # 4. Collect results (always)
             collected: CollectResult | None = await asyncio.to_thread(
                 self._collector.collect, results_dir
@@ -437,9 +430,7 @@ class RunOrchestrator:
         finally:
             if "jail_created" in locals() and jail_created:
                 try:
-                    await asyncio.to_thread(
-                        shutil.rmtree, jail_dir, ignore_errors=True
-                    )
+                    await asyncio.to_thread(shutil.rmtree, jail_dir, ignore_errors=True)
                     logger.info("Workspace Jail cleaned up at %s", jail_dir)
                 except Exception as clean_exc:
                     logger.warning(

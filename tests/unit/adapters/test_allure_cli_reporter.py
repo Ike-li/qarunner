@@ -67,9 +67,7 @@ async def test_nonzero_exit_returns_ref(tmp_path: Path) -> None:
     allure_results.mkdir()
     (allure_results / "test-result.json").write_text("{}")
 
-    fake = _FakeProcess(
-        ProcessResult(exit_code=1, stdout="error", stderr="err", duration_ms=50)
-    )
+    fake = _FakeProcess(ProcessResult(exit_code=1, stdout="error", stderr="err", duration_ms=50))
     reporter = AllureCliReporter(fake)
     result = await reporter.generate(str(tmp_path), enabled=True)
 

@@ -16,7 +16,5 @@ def safe_subpath(root: str, relative: str) -> str:
     root_path = Path(root).resolve()
     resolved = (root_path / relative).resolve()
     if not resolved.is_relative_to(root_path):
-        raise UnsafePath(
-            f"{relative!r} resolves outside root {root!r}"
-        )
+        raise UnsafePath(f"{relative!r} resolves outside root {root!r}")
     return str(resolved)

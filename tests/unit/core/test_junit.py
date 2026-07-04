@@ -23,13 +23,13 @@ class TestParseJUnitXml:
         f = tmp_path / "evil.xml"
         f.write_text(
             '<?xml version="1.0"?>\n'
-            '<!DOCTYPE testsuite [\n'
+            "<!DOCTYPE testsuite [\n"
             '  <!ENTITY lol "lol">\n'
             '  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;">\n'
-            ']>\n'
+            "]>\n"
             '<testsuite name="s">\n'
             '  <testcase name="&lol2;" classname="s" time="0.1"/>\n'
-            '</testsuite>\n'
+            "</testsuite>\n"
         )
         assert parse_junit_xml(str(f)) is None
 
@@ -58,17 +58,17 @@ class TestParseJUnitXml:
         f = tmp_path / "junit.xml"
         f.write_text(
             '<?xml version="1.0"?>\n'
-            '<testsuites>\n'
+            "<testsuites>\n"
             '  <testsuite name="suite1" tests="3">\n'
             '    <testcase name="test_pass" classname="suite1" time="0.1"/>\n'
             '    <testcase name="test_fail" classname="suite1" time="0.2">\n'
             '      <failure message="bad">stacktrace</failure>\n'
-            '    </testcase>\n'
+            "    </testcase>\n"
             '    <testcase name="test_skip" classname="suite1" time="0.0">\n'
             '      <skipped message="not ready"/>\n'
-            '    </testcase>\n'
-            '  </testsuite>\n'
-            '</testsuites>\n'
+            "    </testcase>\n"
+            "  </testsuite>\n"
+            "</testsuites>\n"
         )
         result = parse_junit_xml(str(f))
         assert result is not None
@@ -86,7 +86,7 @@ class TestParseJUnitXml:
             '<?xml version="1.0"?>\n'
             '<testsuite name="s" tests="1">\n'
             '  <testcase name="ok" classname="s" time="0.5"/>\n'
-            '</testsuite>\n'
+            "</testsuite>\n"
         )
         result = parse_junit_xml(str(f))
         assert result is not None
@@ -101,8 +101,8 @@ class TestParseJUnitXml:
             '<testsuite name="s">\n'
             '  <testcase name="boom" classname="s" time="0.01">\n'
             '    <error type="RuntimeError">exploded</error>\n'
-            '  </testcase>\n'
-            '</testsuite>\n'
+            "  </testcase>\n"
+            "</testsuite>\n"
         )
         result = parse_junit_xml(str(f))
         assert result is not None
@@ -118,8 +118,8 @@ class TestParseJUnitXml:
             '<testsuite name="s">\n'
             '  <testcase name="bare_fail" classname="s" time="0.1">\n'
             '    <failure type="AssertionError"/>\n'
-            '  </testcase>\n'
-            '</testsuite>\n'
+            "  </testcase>\n"
+            "</testsuite>\n"
         )
         result = parse_junit_xml(str(f))
         assert result is not None
@@ -133,9 +133,9 @@ class TestParseJUnitXml:
             '<testsuite name="s">\n'
             '  <testcase name="a" classname="s" time="0.1"/>\n'
             '  <testcase name="b" classname="s" time="0.1">\n'
-            '    <failure>f</failure>\n'
-            '  </testcase>\n'
-            '</testsuite>\n'
+            "    <failure>f</failure>\n"
+            "  </testcase>\n"
+            "</testsuite>\n"
         )
         result = parse_junit_xml(str(f))
         assert result is not None
@@ -150,7 +150,7 @@ class TestParseJUnitXml:
             '<?xml version="1.0"?>\n'
             '<testsuite name="s" tests="1">\n'
             '  <testcase name="ok" classname="s" time="N/A"/>\n'
-            '</testsuite>\n'
+            "</testsuite>\n"
         )
         result = parse_junit_xml(str(f))
         assert result is not None

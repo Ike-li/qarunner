@@ -50,7 +50,6 @@ class _FakeStore:
         return None
 
 
-
 @dataclass
 class _FakeOrch:
     store: _FakeStore
@@ -78,6 +77,22 @@ def test_create_app_with_container_injects_it() -> None:
     )  # type: ignore[arg-type]
     app = create_app(container)
     assert app.state.container is container
+
+
+def test_create_app_adds_cors_when_origins_configured() -> None:
+    container = Container(
+        orchestrator=None,
+        store=None,
+        task_scheduler=None,
+        scheduler=None,
+        schedule_service=None,
+        profile_service=None,
+        login_throttle=None,
+        settings=Settings(cors_origins="http://localhost:5173, https://qa.example.com"),
+    )  # type: ignore[arg-type]
+    app = create_app(container)
+    cors = next(m for m in app.user_middleware if m.cls.__name__ == "CORSMiddleware")
+    assert cors.kwargs["allow_origins"] == ["http://localhost:5173", "https://qa.example.com"]
 
 
 def test_create_app_without_container() -> None:
@@ -212,6 +227,7 @@ def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
 
         async def seed() -> None:
             import socket
+
             store = SqliteStore(db_path)
             await store.initialize()
             await store.save(
@@ -369,4 +385,3 @@ async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
         sched._tasks.add(task)
     # Context exit ran shutdown: drain awaited the in-flight save, then closed.
     assert events == ["save", "close"]
-

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import resource
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from qarunner.adapters import subprocess_runner
 from qarunner.adapters.subprocess_runner import SubprocessRunner
 from qarunner.errors import RunnerError
 
@@ -55,6 +57,24 @@ async def test_executable_not_found(runner: SubprocessRunner) -> None:
         )
 
 
+async def test_executable_not_found_closes_open_log_files(
+    runner: SubprocessRunner, tmp_path: Path
+) -> None:
+    stdout_file = tmp_path / "logs" / "stdout.log"
+    stderr_file = tmp_path / "logs" / "stderr.log"
+
+    with pytest.raises(RunnerError):
+        await runner.run(
+            ["/nonexistent/binary"],
+            cwd=".",
+            stdout_file=str(stdout_file),
+            stderr_file=str(stderr_file),
+        )
+
+    assert stdout_file.exists()
+    assert stderr_file.exists()
+
+
 async def test_env_forwarded(runner: SubprocessRunner) -> None:
     result = await runner.run(
         [sys.executable, "-c", "import os; print(os.environ.get('QA_TEST_VAR', ''))"],
@@ -87,6 +107,30 @@ async def test_rlimit_applied_in_child(runner: SubprocessRunner) -> None:
     result = await runner.run([sys.executable, "-c", code], cwd=".")
     assert result.exit_code == 0
     assert "CPU_SOFT=3600" in result.stdout, f"Expected soft limit 3600, got: {result.stdout}"
+
+
+def test_best_effort_rlimit_treats_infinite_hard_limit_as_unbounded(monkeypatch) -> None:
+    calls: list[tuple[int, tuple[int, int]]] = []
+
+    monkeypatch.setattr(
+        resource, "getrlimit", lambda res: (resource.RLIM_INFINITY, resource.RLIM_INFINITY)
+    )
+    monkeypatch.setattr(resource, "setrlimit", lambda res, limits: calls.append((res, limits)))
+
+    subprocess_runner._best_effort_rlimit(resource.RLIMIT_CPU, 3600)
+
+    assert calls == [(resource.RLIMIT_CPU, (3600, resource.RLIM_INFINITY))]
+
+
+def test_best_effort_rlimit_keeps_lower_finite_hard_limit(monkeypatch) -> None:
+    calls: list[tuple[int, tuple[int, int]]] = []
+
+    monkeypatch.setattr(resource, "getrlimit", lambda res: (100, 120))
+    monkeypatch.setattr(resource, "setrlimit", lambda res, limits: calls.append((res, limits)))
+
+    subprocess_runner._best_effort_rlimit(resource.RLIMIT_CPU, 3600)
+
+    assert calls == [(resource.RLIMIT_CPU, (120, 120))]
 
 
 async def test_non_allowlisted_host_env_not_forwarded(
@@ -215,12 +259,14 @@ async def test_subprocess_escalation_mocked() -> None:
     mock_proc.send_signal.side_effect = AttributeError("No send_signal")
     mock_proc.wait = AsyncMock()
 
-    mock_proc.communicate = AsyncMock(side_effect=[
-        TimeoutError(),  # first wait_for (outer)
-        TimeoutError(),  # second wait_for (after SIGINT)
-        TimeoutError(),  # third wait_for (after SIGTERM)
-        (b"stdout final", b"stderr final")  # final communicate after kill
-    ])
+    mock_proc.communicate = AsyncMock(
+        side_effect=[
+            TimeoutError(),  # first wait_for (outer)
+            TimeoutError(),  # second wait_for (after SIGINT)
+            TimeoutError(),  # third wait_for (after SIGTERM)
+            (b"stdout final", b"stderr final"),  # final communicate after kill
+        ]
+    )
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         result = await runner.run(
@@ -243,12 +289,14 @@ async def test_subprocess_file_escalation_mocked(tmp_path: Path) -> None:
 
     mock_proc = MagicMock()
     mock_proc.returncode = -15
-    mock_proc.wait = AsyncMock(side_effect=[
-        TimeoutError(),  # first wait_for (outer)
-        TimeoutError(),  # second wait_for
-        TimeoutError(),  # third wait_for
-        0  # wait after kill
-    ])
+    mock_proc.wait = AsyncMock(
+        side_effect=[
+            TimeoutError(),  # first wait_for (outer)
+            TimeoutError(),  # second wait_for
+            TimeoutError(),  # third wait_for
+            0,  # wait after kill
+        ]
+    )
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         result = await runner.run(
@@ -295,5 +343,3 @@ async def test_run_kills_orphan_on_cancellation(tmp_path: Path) -> None:
             await task
 
     mock_proc.kill.assert_called_once()
-
-

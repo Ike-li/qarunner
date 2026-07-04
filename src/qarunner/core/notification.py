@@ -47,20 +47,19 @@ def build_run_card(run: Run, allure_url: str) -> dict[str, Any]:
     summary = run.summary
     total = summary.total if summary else 0
 
-    header_title = (
-        f"qarunner 测试报告 — {run.id[:8]}… "
-        f"通过率 {_pass_rate_text(run)}"
-    )
+    header_title = f"qarunner 测试报告 — {run.id[:8]}… 通过率 {_pass_rate_text(run)}"
 
     # Build the markdown statistics block.
     if summary is not None:
-        stats = "\n".join([
-            _stat_line("✅ 通过", summary.passed, total),
-            _stat_line("❌ 失败", summary.failed, total),
-            _stat_line("⏭️  跳过", summary.skipped, total),
-            _stat_line("⚠️  错误", summary.error, total),
-            f"⏱  耗时: {summary.duration_ms / 1000:.1f}s",
-        ])
+        stats = "\n".join(
+            [
+                _stat_line("✅ 通过", summary.passed, total),
+                _stat_line("❌ 失败", summary.failed, total),
+                _stat_line("⏭️  跳过", summary.skipped, total),
+                _stat_line("⚠️  错误", summary.error, total),
+                f"⏱  耗时: {summary.duration_ms / 1000:.1f}s",
+            ]
+        )
     else:
         stats = "结果摘要: N/A"
 
@@ -127,9 +126,7 @@ async def send_feishu_card(webhook_url: str, card: dict[str, Any]) -> bool:
             )
         if resp.is_success:
             return True
-        logger.warning(
-            "Feishu webhook returned %d: %s", resp.status_code, resp.text[:500]
-        )
+        logger.warning("Feishu webhook returned %d: %s", resp.status_code, resp.text[:500])
         return False
     except Exception:
         logger.exception("Failed to send Feishu card (webhook URL redacted)")

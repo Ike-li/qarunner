@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from collections.abc import Coroutine
-from typing import Any, Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,7 @@ class AsyncioScheduler:
         if self._running:
             return
         if self._run_fn is None:
-            raise RuntimeError(
-                "run_fn not set — call set_run_fn() before start()"
-            )
+            raise RuntimeError("run_fn not set — call set_run_fn() before start()")
         self._running = True
         self._poller_task = asyncio.create_task(self._poller_loop())
         logger.info(
@@ -62,10 +61,8 @@ class AsyncioScheduler:
         self._wake_event.set()
         if self._poller_task is not None:
             self._poller_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._poller_task
-            except asyncio.CancelledError:
-                pass
             self._poller_task = None
 
     def set_run_fn(self, run_fn: Callable[[str], Coroutine[Any, Any, None]]) -> None:
@@ -104,9 +101,7 @@ class AsyncioScheduler:
             return
         _, still_pending = await asyncio.wait(pending, timeout=timeout)
         if still_pending:
-            logger.warning(
-                "drain timed out; cancelling %d in-flight task(s)", len(still_pending)
-            )
+            logger.warning("drain timed out; cancelling %d in-flight task(s)", len(still_pending))
             for task in still_pending:
                 task.cancel()
             await asyncio.gather(*still_pending, return_exceptions=True)
@@ -139,12 +134,8 @@ class AsyncioScheduler:
     async def _sleep_or_wait(self) -> None:
         """Sleep until woken by enqueue() or poll_interval elapses."""
         self._wake_event.clear()
-        try:
-            await asyncio.wait_for(
-                self._wake_event.wait(), timeout=self._poll_interval
-            )
-        except asyncio.TimeoutError:
-            pass
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._wake_event.wait(), timeout=self._poll_interval)
 
     def _on_task_done(self, task: asyncio.Task[None]) -> None:
         """Cleanup: drop references and release the semaphore slot."""

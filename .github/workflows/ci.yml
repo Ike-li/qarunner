@@ -29,9 +29,12 @@ jobs:
         run: uv sync --frozen --all-extras
 
       - name: Ruff lint gate
-        run: uv run ruff check .
+        run: uv run ruff check src tests
 
   # ── Stage 2: Unit Tests ─────────────────────────────────────────────────
+  # CI runs unit jobs directly on the GitHub runner for speed. Local development
+  # and verification should still use the docker compose commands documented in
+  # AGENTS.md.
   backend-unit:
     name: Backend unit (pytest + 100% coverage)
     needs: lint
@@ -91,12 +94,82 @@ jobs:
           path: frontend/test-results/
           retention-days: 7
 
+  # ── Stage 3: A11y Smoke (axe-core) ──────────────────────────────────────
+  a11y:
+    name: A11y smoke (axe-core)
+    needs: [backend-unit, frontend-unit]
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Backend setup ──
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync backend dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Start backend server
+        run: |
+          mkdir -p tmp/e2e-tests tmp/e2e-artifacts
+          uv run uvicorn qarunner.api.app:app --port 8000 &
+        env:
+          QARUNNER_DB_PATH: /tmp/qarunner-a11y.db
+          QARUNNER_SECRET_KEY: ci-test-key-2026!
+          QARUNNER_ADMIN_PASSWORD: ci-test-pass-2026!
+          QARUNNER_TESTS_ROOT: ${{ github.workspace }}/tmp/e2e-tests
+          QARUNNER_ARTIFACTS_ROOT: ${{ github.workspace }}/tmp/e2e-artifacts
+          QARUNNER_CRASH_RECOVERY_ON_STARTUP: "false"
+
+      - name: Wait for backend
+        run: curl --retry 15 --retry-delay 2 --retry-all-errors http://localhost:8000/health
+
+      - name: Start frontend dev server
+        run: npx vite --port 5173 &
+        working-directory: frontend
+        env:
+          VITE_BACKEND_URL: http://localhost:8000
+
+      - name: Wait for frontend
+        run: curl --retry 10 --retry-delay 2 --retry-all-errors http://localhost:5173
+
+      - name: Playwright axe smoke
+        run: npx playwright test --project=chromium-authed-admin tests-e2e/a11y-axe.authed-admin.spec.ts
+        working-directory: frontend
+        env:
+          BASE_URL: http://localhost:5173
+          E2E_ADMIN_PASSWORD: ci-test-pass-2026!
+          PLAYWRIGHT_USE_BUNDLED_CHROMIUM: "true"
+          CI: "true"
+
+      - name: Upload a11y results
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: a11y-results
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 7
+
   # ── Stage 3: E2E Tests (PR only) ────────────────────────────────────────
   e2e:
     name: E2E (Playwright shard ${{ matrix.shard }}/2)
     if: github.event_name == 'pull_request'
-    needs: [backend-unit, frontend-unit]
+    needs: [backend-unit, frontend-unit, a11y]
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -116,22 +189,8 @@ jobs:
       - name: Sync backend dependencies
         run: uv sync --frozen --all-extras
 
-      # ── Frontend setup ──
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend dependencies
         run: npm ci
-        working-directory: frontend
-
-      # ── Playwright browser setup ──
-      # The project's playwright.config.ts uses channel: 'chrome' (system Chrome).
-      # Install OS-level deps for Chrome on ubuntu-latest.
-      - name: Install Playwright OS dependencies
-        run: npx playwright install-deps chrome
         working-directory: frontend
 
       # ── Start backend ──
@@ -167,6 +226,7 @@ jobs:
         env:
           BASE_URL: http://localhost:5173
           E2E_ADMIN_PASSWORD: ci-test-pass-2026!
+          PLAYWRIGHT_USE_BUNDLED_CHROMIUM: "true"
           CI: "true"
 
       # ── Artifacts ──

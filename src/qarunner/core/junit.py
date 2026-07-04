@@ -67,13 +67,15 @@ def parse_junit_xml(path: str) -> CollectResult | None:
                 status = "passed"
                 message = _text_or_none(None)
 
-            cases.append(TestCaseResult(
-                suite=suite_name,
-                name=tc_name,
-                status=status,
-                duration_ms=duration_ms,
-                message=message,
-            ))
+            cases.append(
+                TestCaseResult(
+                    suite=suite_name,
+                    name=tc_name,
+                    status=status,
+                    duration_ms=duration_ms,
+                    message=message,
+                )
+            )
 
     if not cases:
         return None

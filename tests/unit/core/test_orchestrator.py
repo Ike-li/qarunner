@@ -143,9 +143,11 @@ class TestCancel:
         assert result.finished_at is not None
         await task
 
-    @pytest.mark.skip(reason="CancelledError save-failure path is unreachable in new poller "
-                             "design — cancel now writes CANCELLED via the orchestrator "
-                             "directly, not through a CancelledError handler in execute()")
+    @pytest.mark.skip(
+        reason="CancelledError save-failure path is unreachable in new poller "
+        "design — cancel now writes CANCELLED via the orchestrator "
+        "directly, not through a CancelledError handler in execute()"
+    )
     async def test_execute_cancellation_save_failure_is_swallowed(self, tmp_path, monkeypatch):
         pass
 
@@ -407,11 +409,15 @@ class TestNotify:
         async def _fake_get_profile(profile_id):
             return fake_profile
 
-        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
-                          create=True), patch("qarunner.core.orchestrator.send_feishu_card",
-                   new_callable=AsyncMock) as mock_send:
+        with (
+            patch.object(orch._store, "get_profile", side_effect=_fake_get_profile, create=True),
+            patch(
+                "qarunner.core.orchestrator.send_feishu_card", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             run = await orch.create(
-                RunRequest(tests_path="sample"), profile_id="prof-1",
+                RunRequest(tests_path="sample"),
+                profile_id="prof-1",
             )
             await orch._notify(run)
 
@@ -423,13 +429,14 @@ class TestNotify:
     async def test_notify_skips_when_profile_not_found(self) -> None:
         """_notify returns when the profile no longer exists."""
         orch = _make_orchestrator(public_url="https://qa.example.com")
+
         async def _fake_get_profile(profile_id):
             return None
 
-        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
-                          create=True):
+        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile, create=True):
             run = await orch.create(
-                RunRequest(tests_path="sample"), profile_id="ghost-prof",
+                RunRequest(tests_path="sample"),
+                profile_id="ghost-prof",
             )
             await orch._notify(run)  # must not raise
 
@@ -447,14 +454,19 @@ class TestNotify:
             created_at=datetime(2026, 6, 30, tzinfo=UTC),
             webhook_url=None,
         )
+
         async def _fake_get_profile(profile_id):
             return fake_profile
 
-        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
-                          create=True), patch("qarunner.core.orchestrator.send_feishu_card",
-                   new_callable=AsyncMock) as mock_send:
+        with (
+            patch.object(orch._store, "get_profile", side_effect=_fake_get_profile, create=True),
+            patch(
+                "qarunner.core.orchestrator.send_feishu_card", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             run = await orch.create(
-                RunRequest(tests_path="sample"), profile_id="prof-2",
+                RunRequest(tests_path="sample"),
+                profile_id="prof-2",
             )
             await orch._notify(run)
             mock_send.assert_not_called()
@@ -473,14 +485,19 @@ class TestNotify:
             created_at=datetime(2026, 6, 30, tzinfo=UTC),
             webhook_url="https://open.feishu.cn/hook/test",
         )
+
         async def _fake_get_profile(profile_id):
             return fake_profile
 
-        with patch.object(orch._store, "get_profile", side_effect=_fake_get_profile,
-                          create=True), patch("qarunner.core.orchestrator.send_feishu_card",
-                   side_effect=RuntimeError("Boom")) as mock_send:
+        with (
+            patch.object(orch._store, "get_profile", side_effect=_fake_get_profile, create=True),
+            patch(
+                "qarunner.core.orchestrator.send_feishu_card", side_effect=RuntimeError("Boom")
+            ) as mock_send,
+        ):
             run = await orch.create(
-                RunRequest(tests_path="sample"), profile_id="prof-3",
+                RunRequest(tests_path="sample"),
+                profile_id="prof-3",
             )
             # Must not raise.
             await orch._notify(run)
@@ -526,9 +543,7 @@ class TestExecute:
 
     @pytest.mark.asyncio
     async def test_successful_run(self):
-        summary = TestSummary(
-            total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=200
-        )
+        summary = TestSummary(total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=200)
         orch = _make_orchestrator(
             collector_preset=CollectResult(summary=summary, cases=[]),
         )
@@ -545,6 +560,45 @@ class TestExecute:
         assert stored.finished_at is not None
 
     @pytest.mark.asyncio
+    async def test_execute_falls_back_when_artifact_run_dir_cannot_be_created(self):
+        summary = TestSummary(total=1, passed=1, failed=0, skipped=0, error=0, duration_ms=100)
+        orch = _make_orchestrator(
+            collector_preset=CollectResult(summary=summary, cases=[]),
+        )
+        run = await orch.create(RunRequest(tests_path="sample"))
+
+        with patch("pathlib.Path.mkdir", side_effect=[OSError("nope"), None]) as mkdir:
+            await orch.execute(run.id)
+
+        assert mkdir.call_count == 2
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_execute_cancelled_error_persists_cancelled_status(self, tmp_path):
+        (tmp_path / "suite").mkdir()
+
+        class _CancellingRunner:
+            async def run(
+                self, cmd, cwd, env=None, timeout=1800, stdout_file=None, stderr_file=None
+            ):
+                raise asyncio.CancelledError
+
+        orch = _make_orchestrator(
+            process=_CancellingRunner(),
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path / "artifacts"),
+        )
+        run = await orch.create(RunRequest(tests_path="suite"))
+
+        with pytest.raises(asyncio.CancelledError):
+            await orch.execute(run.id)
+
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.CANCELLED
+        assert stored.finished_at is not None
+
+    @pytest.mark.asyncio
     async def test_execute_persists_per_case_results(self):
         # Stage 0: the per-case results the collector parses must now be persisted
         # (previously only the summary was kept), so cross-run diff/flaky/history
@@ -555,9 +609,7 @@ class TestExecute:
                 suite="s", name="test_b", status="failed", duration_ms=20, message="boom"
             ),
         ]
-        summary = TestSummary(
-            total=2, passed=1, failed=1, skipped=0, error=0, duration_ms=30
-        )
+        summary = TestSummary(total=2, passed=1, failed=1, skipped=0, error=0, duration_ms=30)
         orch = _make_orchestrator(
             collector_preset=CollectResult(summary=summary, cases=cases),
         )
@@ -597,9 +649,7 @@ class TestExecute:
     @pytest.mark.asyncio
     async def test_execute_stores_exit_code(self):
         def handler(cmd, cwd, env, timeout):
-            return ProcessResult(
-                exit_code=1, stdout="", stderr="fail", duration_ms=50
-            )
+            return ProcessResult(exit_code=1, stdout="", stderr="fail", duration_ms=50)
 
         orch = _make_orchestrator(
             process_handler=handler,
@@ -623,9 +673,7 @@ class TestExecute:
 
         def handler(cmd, cwd, env, timeout):
             collected_args["cmd"] = cmd
-            return ProcessResult(
-                exit_code=0, stdout="", stderr="", duration_ms=10
-            )
+            return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=10)
 
         orch = _make_orchestrator(
             process_handler=handler,
@@ -649,9 +697,7 @@ class TestExecute:
 
         def handler(cmd, cwd, env, timeout):
             captured_timeout["t"] = timeout
-            return ProcessResult(
-                exit_code=0, stdout="", stderr="", duration_ms=10
-            )
+            return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=10)
 
         orch = _make_orchestrator(
             process_handler=handler,
@@ -674,9 +720,7 @@ class TestExecute:
 
         def handler(cmd, cwd, env, timeout):
             captured_timeout["t"] = timeout
-            return ProcessResult(
-                exit_code=0, stdout="", stderr="", duration_ms=10
-            )
+            return ProcessResult(exit_code=0, stdout="", stderr="", duration_ms=10)
 
         orch = _make_orchestrator(
             process_handler=handler,
@@ -860,16 +904,22 @@ class TestWorkspaceJail:
         registry.register(PytestRunner())
 
         captured_cwd = []
+
         def handler(cmd, cwd, env, timeout):
             captured_cwd.append(cwd)
             return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
 
         class NoopScheduler:
             enqueued = 0
+
             def enqueue(self, run_id):
                 self.enqueued += 1
-            async def start(self): pass
-            async def shutdown(self): pass
+
+            async def start(self):
+                pass
+
+            async def shutdown(self):
+                pass
 
         orch = RunOrchestrator(
             registry=registry,
@@ -914,16 +964,22 @@ class TestWorkspaceJail:
         registry.register(PytestRunner())
 
         captured_cwd = []
+
         def handler(cmd, cwd, env, timeout):
             captured_cwd.append(cwd)
             return ProcessResult(exit_code=0, stdout="ok", stderr="", duration_ms=10)
 
         class NoopScheduler:
             enqueued = 0
+
             def enqueue(self, run_id):
                 self.enqueued += 1
-            async def start(self): pass
-            async def shutdown(self): pass
+
+            async def start(self):
+                pass
+
+            async def shutdown(self):
+                pass
 
         orch = RunOrchestrator(
             registry=registry,
@@ -949,9 +1005,9 @@ class TestWorkspaceJail:
         # Should fall back cleanly and execute with the original tests_dir path
         assert len(captured_cwd) == 1
         from qarunner.core.paths import safe_subpath
+
         expected_fallback = safe_subpath(str(tests_root), "some_suite")
         assert captured_cwd[0] == expected_fallback
-
 
     @pytest.mark.asyncio
     async def test_create_with_all_compilations(self):
@@ -971,14 +1027,18 @@ class TestWorkspaceJail:
         assert "test_a.py" in run.args
         assert "test_b.py" in run.args
 
-
     @pytest.mark.asyncio
     async def test_all_runs_use_docker_executor(self):
         # All runs now use the (docker) executor — subprocess path removed.
         orch = _make_orchestrator(
             collector_preset=CollectResult(
                 summary=TestSummary(
-                    total=1, passed=1, failed=0, skipped=0, error=0, duration_ms=1,
+                    total=1,
+                    passed=1,
+                    failed=0,
+                    skipped=0,
+                    error=0,
+                    duration_ms=1,
                 ),
                 cases=[],
             ),
@@ -995,6 +1055,7 @@ class TestWorkspaceJail:
     async def test_workspace_jail_copytree_exception(self, tmp_path):
         # Covers lines 181-182
         from unittest.mock import patch
+
         tests_root = tmp_path / "tests_root"
         tests_root.mkdir()
         suite_dir = tests_root / "suite_abc"
@@ -1019,6 +1080,7 @@ class TestWorkspaceJail:
     async def test_workspace_jail_rmtree_exception(self, tmp_path):
         # Covers lines 266-267
         from unittest.mock import patch
+
         tests_root = tmp_path / "tests_root"
         tests_root.mkdir()
         suite_dir = tests_root / "suite_abc"
@@ -1120,8 +1182,12 @@ class TestWorkspaceJail:
         class NoopScheduler:
             def enqueue(self, run_id):
                 pass
-            async def start(self): pass
-            async def shutdown(self): pass
+
+            async def start(self):
+                pass
+
+            async def shutdown(self):
+                pass
 
         orch = RunOrchestrator(
             registry=registry,
@@ -1177,11 +1243,12 @@ class TestPlaywrightRunnerExecution:
     @pytest.mark.asyncio
     async def test_playwright_runner_compilation_and_execution(self):
         from qarunner.models import CollectResult, TestSummary
+
         preset = CollectResult(
             summary=TestSummary(
                 total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=100, pass_rate=100.0
             ),
-            cases=[]
+            cases=[],
         )
         orch = _make_orchestrator(collector_preset=preset)
         req = RunRequest(
@@ -1189,7 +1256,7 @@ class TestPlaywrightRunnerExecution:
             runner="playwright",
             executor_mode="subprocess",
             selected_files=["test_home.spec.ts"],
-            extra_args="--headed"
+            extra_args="--headed",
         )
         run = await orch.create(req)
         assert run.runner == "playwright"

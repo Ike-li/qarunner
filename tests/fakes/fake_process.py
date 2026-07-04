@@ -28,4 +28,3 @@ class FakeProcessRunner:
     ) -> ProcessResult:
         self.calls.append((cmd, cwd, env, timeout))
         return self.handler(cmd, cwd, env, timeout)
-

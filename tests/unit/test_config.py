@@ -7,12 +7,26 @@ from pydantic import ValidationError
 
 from qarunner.config import Settings
 
+_EXPLICIT_SECRET = "test-secret-" + "y" * 60
+_EXPLICIT_ADMIN_PASSWORD = "test-admin-password"
+_SETTINGS_ENV_KEYS = [
+    "QARUNNER_TESTS_ROOT",
+    "QARUNNER_ARTIFACTS_ROOT",
+    "QARUNNER_DB_PATH",
+    "QARUNNER_ALLURE_BIN",
+    "QARUNNER_EXECUTABLE",
+    "QARUNNER_DEFAULT_TIMEOUT_SECONDS",
+    "QARUNNER_MAX_CONCURRENCY",
+]
+
 
 class TestSettings:
     """Settings should provide sensible defaults."""
 
-    def test_defaults(self):
-        s = Settings()
+    def test_defaults(self, monkeypatch):
+        for key in _SETTINGS_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
+        s = Settings(secret_key=_EXPLICIT_SECRET, admin_password=_EXPLICIT_ADMIN_PASSWORD)
         assert s.tests_root == "./external_tests/"
         assert s.artifacts_root == "./artifacts"
         assert s.db_path == "./artifacts/qarunner.db"

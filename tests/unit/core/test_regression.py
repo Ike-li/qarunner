@@ -15,19 +15,28 @@ from qarunner.models import RegressionDiff, Run, RunStatus, TestCaseResult
 
 
 def _case(name, status, suite="suite", message=None):
-    return TestCaseResult(
-        suite=suite, name=name, status=status, duration_ms=0, message=message
-    )
+    return TestCaseResult(suite=suite, name=name, status=status, duration_ms=0, message=message)
 
 
 _T0 = datetime(2026, 6, 1, 12, 0, 0)
 
 
-def _run(run_id, *, status=RunStatus.COMPLETED, runner="pytest",
-         tests_path="suite", args=None, minutes=0):
+def _run(
+    run_id,
+    *,
+    status=RunStatus.COMPLETED,
+    runner="pytest",
+    tests_path="suite",
+    args=None,
+    minutes=0,
+):
     return Run(
-        id=run_id, status=status, runner=runner, created_by="u",
-        tests_path=tests_path, args=list(args or []),
+        id=run_id,
+        status=status,
+        runner=runner,
+        created_by="u",
+        tests_path=tests_path,
+        args=list(args or []),
         created_at=_T0 + timedelta(minutes=minutes),
     )
 

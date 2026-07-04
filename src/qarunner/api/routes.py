@@ -17,7 +17,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import Container, get_current_admin, get_current_user
-from qarunner.ports.store import Store
 from qarunner.api.schemas import (
     CaseHistoryResponse,
     CloneTestSuiteRequest,
@@ -73,6 +72,7 @@ from qarunner.models import (
     User,
     UserRole,
 )
+from qarunner.ports.store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +190,22 @@ async def _git_auth_env(secret: str | None) -> AsyncIterator[dict[str, str] | No
         # for ssh/config resolution, locale vars).  Do NOT pass the full host
         # environment — that leaks SSH_AUTH_SOCK, BASH_ENV, LD_*, etc. into
         # the git child process.  Pattern matches subprocess_runner._ENV_ALLOWLIST.
-        _GIT_ENV_WHITELIST = frozenset({
-            "PATH", "HOME", "USER", "LOGNAME",
-            "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
-            "TMPDIR", "TEMP", "TMP", "TZ",
-        })
+        _GIT_ENV_WHITELIST = frozenset(
+            {
+                "PATH",
+                "HOME",
+                "USER",
+                "LOGNAME",
+                "LANG",
+                "LANGUAGE",
+                "LC_ALL",
+                "LC_CTYPE",
+                "TMPDIR",
+                "TEMP",
+                "TMP",
+                "TZ",
+            }
+        )
         yield {
             **{k: v for k, v in os.environ.items() if k in _GIT_ENV_WHITELIST},
             "GIT_ASKPASS": path,
@@ -219,9 +230,7 @@ async def _resolve_credential_secret(
         return None
     cred = await store.get_credential(credential_ref)
     if cred is None:
-        raise HTTPException(
-            status_code=400, detail=f"Credential '{credential_ref}' not found"
-        )
+        raise HTTPException(status_code=400, detail=f"Credential '{credential_ref}' not found")
     _require_owner_access(cred.created_by, current_user)
     enc = await store.get_credential_secret(credential_ref)
     if enc is None:
@@ -350,9 +359,7 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
         )
 
     container.login_throttle.record_success(throttle_key)
-    token = create_access_token(
-        user_record["username"], user_record["role"], container.settings
-    )
+    token = create_access_token(user_record["username"], user_record["role"], container.settings)
     response.set_cookie(
         "token",
         token,
@@ -460,9 +467,7 @@ async def delete_user(
     invalidate the live token."""
     container = request.app.state.container
     if username == admin_user.username:
-        raise HTTPException(
-            status_code=400, detail="You cannot delete your own account."
-        )
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
     existing = await container.store.get_user(username)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
@@ -492,17 +497,11 @@ async def update_user(
     if existing is None:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
 
-    if (
-        req.role is not None
-        and existing["role"] == "admin"
-        and req.role.value != "admin"
-    ):
+    if req.role is not None and existing["role"] == "admin" and req.role.value != "admin":
         users = await container.store.list_users()
         admin_count = sum(1 for u in users if u["role"] == "admin")
         if admin_count <= 1:
-            raise HTTPException(
-                status_code=400, detail="Cannot demote the last remaining admin."
-            )
+            raise HTTPException(status_code=400, detail="Cannot demote the last remaining admin.")
 
     if req.password is not None:
         await container.store.update_password(username, hash_password(req.password))
@@ -564,9 +563,7 @@ async def list_credentials(
         for c in creds
         if current_user.role == UserRole.ADMIN or c.created_by == current_user.username
     ]
-    return CredentialListResponse(
-        credentials=[_credential_to_response(c) for c in visible]
-    )
+    return CredentialListResponse(credentials=[_credential_to_response(c) for c in visible])
 
 
 @router.delete("/credentials/{credential_id}")
@@ -579,9 +576,7 @@ async def delete_credential(
     container = request.app.state.container
     existing = await container.store.get_credential(credential_id)
     if existing is None:
-        raise HTTPException(
-            status_code=404, detail=f"Credential {credential_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Credential {credential_id} not found")
     _require_owner_access(existing.created_by, current_user)
     await container.store.delete_credential(credential_id)
     return {"status": "success", "message": f"Credential {credential_id} deleted"}
@@ -646,6 +641,7 @@ async def link_test_suite(
     """Create a symlink under tests_root pointing to the specified local directory path."""
     import os
     import shutil
+
     container = request.app.state.container
     cfg = container.settings
     tests_root = Path(cfg.tests_root).resolve()
@@ -916,9 +912,7 @@ async def prepare_test_suite(
     tests_root = Path(cfg.tests_root).resolve()
     suite_path = _safe_suite_path(tests_root, suite_name)
     if not suite_path.is_dir():
-        raise HTTPException(
-            status_code=404, detail=f"Suite '{suite_name}' directory not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Suite '{suite_name}' directory not found")
     if not (suite_path / "package.json").exists():
         return LinkTestSuiteResponse(
             success=True,
@@ -1009,6 +1003,7 @@ async def get_test_tree(
     """Recursively scan a test suite directory and return its file-tree structure."""
     cfg = request.app.state.container.settings
     from qarunner.core.paths import safe_subpath
+
     try:
         suite_path = safe_subpath(cfg.tests_root, suite_name)
     except UnsafePath as e:
@@ -1033,18 +1028,16 @@ async def get_test_tree(
                     children = walk_dir(entry, base_dir)
                     # Only include folders that (recursively) contain test files.
                     if children:
-                        nodes.append({
-                            "name": entry.name,
-                            "path": relative_path,
-                            "is_dir": True,
-                            "children": children
-                        })
+                        nodes.append(
+                            {
+                                "name": entry.name,
+                                "path": relative_path,
+                                "is_dir": True,
+                                "children": children,
+                            }
+                        )
                 elif entry.is_file() and _is_test_tree_file(entry.name):
-                    nodes.append({
-                        "name": entry.name,
-                        "path": relative_path,
-                        "is_dir": False
-                    })
+                    nodes.append({"name": entry.name, "path": relative_path, "is_dir": False})
         except OSError:
             logger.warning("Failed to scan test directory %s", current_path, exc_info=True)
         return nodes
@@ -1060,8 +1053,10 @@ async def get_test_markers(
 ) -> list[str]:
     """Statically parse pytest decorators under the suite using Python's AST."""
     import ast
+
     cfg = request.app.state.container.settings
     from qarunner.core.paths import safe_subpath
+
     try:
         suite_path = safe_subpath(cfg.tests_root, suite_name)
     except UnsafePath as e:
@@ -1171,7 +1166,9 @@ async def delete_profile(
 
 
 async def _create_run_guarded(
-    container: Container, req: RunRequest, current_user: User,
+    container: Container,
+    req: RunRequest,
+    current_user: User,
     profile_id: str | None = None,
 ) -> Run:
     """Shared run-creation chokepoint: per-user in-flight cap (P2-7) +
@@ -1192,7 +1189,9 @@ async def _create_run_guarded(
             )
     try:
         return await container.orchestrator.create(
-            req, created_by=current_user.username, profile_id=profile_id,
+            req,
+            created_by=current_user.username,
+            profile_id=profile_id,
         )
     except UnknownRunner as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1210,7 +1209,6 @@ async def create_run(
     container = request.app.state.container
     run = await _create_run_guarded(container, req, current_user)
     return run_to_response(run)
-
 
 
 @router.get("/runs", response_model=RunListResponse)
@@ -1268,7 +1266,8 @@ async def get_metrics(
 
     # ── 7-day window: completed runs with a summary ──
     completed_7d = [
-        r for r in runs
+        r
+        for r in runs
         if r.status == RunStatus.COMPLETED
         and r.finished_at is not None
         and r.finished_at >= since_7d
@@ -1281,7 +1280,9 @@ async def get_metrics(
         passed_count = sum(1 for r in with_summary if r.summary.pass_rate >= 1.0)  # type: ignore[union-attr]
         pass_rate_7d = passed_count / len(with_summary)
         durations = [
-            r.summary.duration_ms for r in with_summary if r.summary.duration_ms > 0  # type: ignore[union-attr]
+            r.summary.duration_ms
+            for r in with_summary
+            if r.summary.duration_ms > 0  # type: ignore[union-attr]
         ]
         avg_duration_ms_7d = sum(durations) / len(durations) if durations else 0.0
 
@@ -1305,13 +1306,15 @@ async def get_metrics(
             durs = [r.summary.duration_ms for r in sw_summary if r.summary.duration_ms > 0]  # type: ignore[union-attr]
             ad = sum(durs) / len(durs) if durs else 0.0
         last = max((r.finished_at for r in suite_runs if r.finished_at), default=None)
-        suites.append(SuiteMetrics(
-            tests_path=tp,
-            total_runs=len(sw),
-            pass_rate=round(sr, 4),
-            avg_duration_ms=round(ad, 1),
-            last_run_at=last,
-        ))
+        suites.append(
+            SuiteMetrics(
+                tests_path=tp,
+                total_runs=len(sw),
+                pass_rate=round(sr, 4),
+                avg_duration_ms=round(ad, 1),
+                last_run_at=last,
+            )
+        )
 
     return MetricsSummary(
         window_days=7,
@@ -1380,12 +1383,10 @@ async def get_run(
 
     stdout_content, stderr_content = await asyncio.to_thread(_read_logs, stdout_file, stderr_file)
 
-
     res = run_to_response(run)
     res.stdout = stdout_content
     res.stderr = stderr_content
     return res
-
 
 
 @router.get("/runs/{run_id}/diff", response_model=RunDiffResponse)
@@ -1558,9 +1559,7 @@ async def stream_run_logs(
         # Non-blocking IO + bounded lifetime: file ops run off the event loop so
         # a slow disk or huge file can't stall it, and we stop following once the
         # client disconnects or the max duration is reached (CONC-1).
-        f = await asyncio.to_thread(
-            open, stdout_file, "r", encoding="utf-8", errors="replace"
-        )
+        f = await asyncio.to_thread(open, stdout_file, "r", encoding="utf-8", errors="replace")
         try:
             while True:
                 if await request.is_disconnected():
@@ -1669,9 +1668,7 @@ async def delete_run(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(run, current_user)
     if run.locked:
-        raise HTTPException(
-            status_code=409, detail="Run is locked; unlock it before deleting."
-        )
+        raise HTTPException(status_code=409, detail="Run is locked; unlock it before deleting.")
     if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
         raise HTTPException(
             status_code=409, detail="Run is still active; cancel it before deleting."
@@ -1705,7 +1702,9 @@ async def rerun_run(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(original, current_user)
     new_run = await _create_run_guarded(
-        container, RunRequest.from_run(original), current_user,
+        container,
+        RunRequest.from_run(original),
+        current_user,
         profile_id=original.profile_id,
     )
     return run_to_response(new_run)
@@ -1858,9 +1857,7 @@ async def delete_schedule(
     return {"status": "success", "message": f"Schedule {schedule_id} deleted"}
 
 
-@router.post(
-    "/schedules/{schedule_id}/trigger", status_code=202, response_model=RunResponse
-)
+@router.post("/schedules/{schedule_id}/trigger", status_code=202, response_model=RunResponse)
 async def trigger_schedule(
     schedule_id: str,
     request: Request,
@@ -1877,9 +1874,7 @@ async def trigger_schedule(
     store = container.store
     schedule = await store.get_schedule(schedule_id)
     if schedule is None:
-        raise HTTPException(
-            status_code=404, detail=f"Schedule {schedule_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found")
     _require_owner_access(schedule.created_by, current_user)
     profile = await store.get_profile(schedule.profile_id)
     if profile is None:
@@ -1888,7 +1883,9 @@ async def trigger_schedule(
             detail=f"Schedule's profile '{schedule.profile_id}' no longer exists.",
         )
     run = await _create_run_guarded(
-        container, RunRequest.from_profile(profile), current_user,
+        container,
+        RunRequest.from_profile(profile),
+        current_user,
         profile_id=profile.id,
     )
     return run_to_response(run)

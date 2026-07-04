@@ -42,7 +42,12 @@ class InMemoryRunStore:
         return list(self._cases.get(run_id, []))
 
     async def get_case_history(
-        self, tests_path, suite, name, limit=20, created_by=None,
+        self,
+        tests_path,
+        suite,
+        name,
+        limit=20,
+        created_by=None,
     ):
         rows = []
         for run_id, cases in self._cases.items():
@@ -55,10 +60,7 @@ class InMemoryRunStore:
                 if c.suite == suite and c.name == name:
                     rows.append((run.created_at, c.status))
         rows.sort(key=lambda x: x[0], reverse=True)
-        return [
-            CaseHistoryPoint(created_at=ca, status=st)
-            for ca, st in reversed(rows[:limit])
-        ]
+        return [CaseHistoryPoint(created_at=ca, status=st) for ca, st in reversed(rows[:limit])]
 
     async def dequeue_next_queued(self) -> str | None:
         """Find the oldest QUEUED run and advance it to RUNNING."""
@@ -69,10 +71,12 @@ class InMemoryRunStore:
         if not queued:
             return None
         run = queued[0]
-        run = run.model_copy(update={
-            "status": RunStatus.RUNNING,
-            "started_at": datetime.now(UTC),
-        })
+        run = run.model_copy(
+            update={
+                "status": RunStatus.RUNNING,
+                "started_at": datetime.now(UTC),
+            }
+        )
         self._runs[run.id] = run
         return run.id
 

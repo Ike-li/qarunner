@@ -158,14 +158,17 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
     # v8: trace which profile triggered a run, for notification lookup at completion.
     (8, ("ALTER TABLE runs ADD COLUMN profile_id TEXT;",)),
     # v9: indexes on runs for hot query paths (dequeue, inflight count, list).
-    (9, (
-        "CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);",
-        "CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at);",
-        "CREATE INDEX IF NOT EXISTS idx_runs_owner_status ON runs(created_by, status);",
-        "CREATE INDEX IF NOT EXISTS idx_runs_locked_status ON runs(locked, status, finished_at);",
-    )),
+    (
+        9,
+        (
+            "CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_runs_owner_status ON runs(created_by, status);",
+            "CREATE INDEX IF NOT EXISTS idx_runs_locked_status "
+            "ON runs(locked, status, finished_at);",
+        ),
+    ),
 )
-
 
 
 class SqliteStore:
@@ -405,9 +408,7 @@ class SqliteStore:
 
     async def delete_user(self, username: str) -> bool:
         async with self._connect() as db:
-            cursor = await db.execute(
-                "DELETE FROM users WHERE username = ?", (username,)
-            )
+            cursor = await db.execute("DELETE FROM users WHERE username = ?", (username,))
             await db.commit()
             return cursor.rowcount > 0
 
@@ -599,10 +600,7 @@ class SqliteStore:
             rows = await cursor.fetchall()
         # DESC + LIMIT keeps the most recent window; reverse to oldest-first for
         # the timeline and the flaky flip-count.
-        return [
-            CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1])
-            for r in reversed(rows)
-        ]
+        return [CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1]) for r in reversed(rows)]
 
     async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
         """Count unique test cases with ≥2 pass/fail flips in the last *days*.
@@ -620,13 +618,14 @@ class SqliteStore:
         async with self._connect() as db:
             cursor = await db.execute(
                 "SELECT c.tests_path, c.suite, c.name, "
-                "  GROUP_CONCAT(CASE WHEN c.status IN ('failed','error') THEN 'F' ELSE 'P' END, '') "
+                "  GROUP_CONCAT(CASE WHEN c.status IN ('failed','error') "
+                "THEN 'F' ELSE 'P' END, '') "
                 "  AS seq "
                 "FROM run_test_cases c "
                 "JOIN runs r ON r.id = c.run_id "
                 "WHERE r.status = 'completed' AND c.created_at >= ? "
-                + owner_filter +
-                " GROUP BY c.tests_path, c.suite, c.name "
+                + owner_filter
+                + " GROUP BY c.tests_path, c.suite, c.name "
                 "ORDER BY c.tests_path, c.suite, c.name",
                 params,
             )
@@ -634,8 +633,6 @@ class SqliteStore:
         # Count sequences with ≥2 adjacent transitions (P→F or F→P).
         count = 0
         for _tp, _suite, _name, seq in rows:
-            if not seq:
-                continue
             flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
             if flips >= 2:
                 count += 1
@@ -768,9 +765,7 @@ class SqliteStore:
             await db.commit()
             return cursor.rowcount > 0
 
-    async def save_credential(
-        self, credential: Credential, encrypted_secret: str
-    ) -> None:
+    async def save_credential(self, credential: Credential, encrypted_secret: str) -> None:
         async with self._connect() as db:
             await db.execute(
                 "INSERT INTO credentials (id, name, type, enc_secret, created_by, "
@@ -789,8 +784,7 @@ class SqliteStore:
     async def get_credential(self, credential_id: str) -> Credential | None:
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, name, type, created_by, created_at FROM credentials "
-                "WHERE id = ?",
+                "SELECT id, name, type, created_by, created_at FROM credentials WHERE id = ?",
                 (credential_id,),
             )
             row = await cursor.fetchone()
@@ -832,9 +826,7 @@ class SqliteStore:
 
     async def delete_credential(self, credential_id: str) -> bool:
         async with self._connect() as db:
-            cursor = await db.execute(
-                "DELETE FROM credentials WHERE id = ?", (credential_id,)
-            )
+            cursor = await db.execute("DELETE FROM credentials WHERE id = ?", (credential_id,))
             await db.commit()
             return cursor.rowcount > 0
 
@@ -863,6 +855,7 @@ class SqliteStore:
 
     async def get_old_unlocked_runs(self, retention_days: int) -> list[Run]:
         from datetime import timedelta
+
         cutoff_iso = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
         async with self._connect() as db:
             cursor = await db.execute(
@@ -902,8 +895,7 @@ class SqliteStore:
                 )
             else:
                 cursor = await db.execute(
-                    "UPDATE runs SET status = ?, error = ?, finished_at = ? "
-                    "WHERE status = ?",
+                    "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE status = ?",
                     (
                         RunStatus.FAILED.value,
                         "interrupted by server restart",
@@ -913,7 +905,6 @@ class SqliteStore:
                 )
             await db.commit()
             return cursor.rowcount
-
 
     async def dequeue_next_queued(self) -> str | None:
         """Atomically claim and return the oldest QUEUED run id, marking it RUNNING.
@@ -1091,7 +1082,6 @@ def _row_to_run(row: aiosqlite.Row) -> Run:
         worker_node_id=worker_node_val,
         profile_id=profile_id_val,
     )
-
 
 
 def _row_to_profile(row: aiosqlite.Row) -> TestProfile:

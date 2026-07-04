@@ -13,13 +13,11 @@ from qarunner.errors import RunnerError
 
 
 class MockImage:
-
     def __init__(self, tag: str) -> None:
         self.tags = [tag]
 
 
 class MockContainer:
-
     def __init__(
         self,
         wait_status: int | str = 0,
@@ -71,9 +69,7 @@ class MockContainer:
         return self.logs_stderr
 
 
-
 class MockClient:
-
     def __init__(
         self,
         images_exist: bool = True,
@@ -138,7 +134,10 @@ async def test_docker_runner_success() -> None:
     assert result.timed_out is False
     assert mock_client.run_called is True
     assert mock_client.run_kwargs["command"] == [
-        "python", "-m", "pytest", "--junitxml=/tmp/res/junit.xml",
+        "python",
+        "-m",
+        "pytest",
+        "--junitxml=/tmp/res/junit.xml",
     ]
     assert mock_client.run_kwargs["volumes"] == {
         "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
@@ -191,7 +190,10 @@ async def test_docker_runner_alternate_args_and_mapping() -> None:
         ["python3", "-m", "pytest", "--alluredir=/tmp/allure/allure-results"], cwd="/tmp/tests"
     )
     assert mock_client.run_kwargs["command"] == [
-        "python", "-m", "pytest", "--alluredir=/tmp/allure/allure-results",
+        "python",
+        "-m",
+        "pytest",
+        "--alluredir=/tmp/allure/allure-results",
     ]
     assert mock_client.run_kwargs["volumes"] == {
         "/tmp/tests": {"bind": "/tmp/tests", "mode": "rw"},
@@ -283,8 +285,7 @@ async def test_docker_runner_playwright_image_not_found_builds_playwright_docker
     assert mock_client.build_called is True
     assert mock_client.images.build.call_args.kwargs["dockerfile"] == "Dockerfile.playwright"
     assert (
-        mock_client.images.build.call_args.kwargs["tag"]
-        == "qarunner-playwright-executor:latest"
+        mock_client.images.build.call_args.kwargs["tag"] == "qarunner-playwright-executor:latest"
     )
 
 
@@ -444,6 +445,7 @@ async def test_docker_runner_streamer_reload_exception() -> None:
     cmd = ["python", "-m", "pytest"]
 
     original_run_container = mock_client._run_container
+
     def reload_failing_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
         container.reload = MagicMock(side_effect=DockerException("Reload failed"))
@@ -466,6 +468,7 @@ async def test_docker_runner_streamer_logs_exception() -> None:
     cmd = ["python", "-m", "pytest"]
 
     original_run_container = mock_client._run_container
+
     def logs_failing_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
 
@@ -473,6 +476,7 @@ async def test_docker_runner_streamer_logs_exception() -> None:
         # handler runs once; later calls (final gather) succeed. reload() flips
         # status to "completed", so the loop exits after this single iteration.
         container_logs_called = 0
+
         def logs_side_effect(stdout=True, stderr=True, tail=None):
             nonlocal container_logs_called
             container_logs_called += 1
@@ -496,12 +500,14 @@ async def test_docker_runner_streamer_cancellation_and_sleep() -> None:
     # Test to hit await asyncio.sleep(1.0) and task cancellation error handling
     import asyncio
     import time
+
     mock_client = MockClient(images_exist=True, wait_status=0)
     runner = DockerRunner(client=mock_client)
 
     cmd = ["python", "-m", "pytest"]
 
     original_run_container = mock_client._run_container
+
     def sleeping_container(*args, **kwargs) -> MockContainer:
         container = original_run_container(*args, **kwargs)
 
@@ -513,12 +519,14 @@ async def test_docker_runner_streamer_cancellation_and_sleep() -> None:
         def mock_wait(timeout=None):
             time.sleep(0.05)
             return {"StatusCode": 0}
+
         container.wait = MagicMock(side_effect=mock_wait)
         return container
 
     mock_client.containers.run.side_effect = sleeping_container
 
     original_sleep = asyncio.sleep
+
     # Mock asyncio.sleep to yield control immediately (0.001 seconds sleep)
     async def mock_async_sleep(delay):
         await original_sleep(0.001)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -33,7 +32,6 @@ class User(BaseModel):
     username: str
     role: UserRole
     created_at: datetime
-
 
 
 # Upper bound for a run's timeout (seconds). Bounds untrusted input so a single
@@ -119,7 +117,6 @@ class TestProfile(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     # Feishu bot webhook URL for run-completion notifications.
     webhook_url: str | None = None
-
 
 
 class TestSuite(BaseModel):
@@ -315,5 +312,3 @@ class Run(BaseModel):
     worker_node_id: str | None = None
     # The profile that triggered this run (None for manual triggers).
     profile_id: str | None = None
-
-

@@ -47,9 +47,9 @@ _ENV_ALLOWLIST = frozenset(
 
 # SEC-3 H-4: POSIX resource limits applied via preexec_fn so untrusted test
 # code can't exhaust CPU, memory, or fork-bomb the platform host.
-_RLIMIT_CPU_HARD = 3600          # 1 hour
-_RLIMIT_AS_HARD = 2 * 1024**3   # 2 GiB address space
-_RLIMIT_NPROC_HARD = 128        # max child processes
+_RLIMIT_CPU_HARD = 3600  # 1 hour
+_RLIMIT_AS_HARD = 2 * 1024**3  # 2 GiB address space
+_RLIMIT_NPROC_HARD = 128  # max child processes
 _RLIMIT_FSIZE_HARD = 512 * 1024**2  # 512 MiB per file
 
 
@@ -79,12 +79,13 @@ def _set_subprocess_limits() -> None:  # pragma: no cover — runs in child proc
         pass
 
 
-def _best_effort_rlimit(res: int, target: int) -> None:  # pragma: no cover — runs in child process
+def _best_effort_rlimit(res: int, target: int) -> None:
     """Set the soft limit for *res* to *target*, bounded by the current hard
     limit (prevents escalation and avoids ``ValueError`` on the setrlimit call).
     """
     _soft, hard = resource.getrlimit(res)
-    resource.setrlimit(res, (min(target, hard), hard))
+    soft = target if hard == resource.RLIM_INFINITY else min(target, hard)
+    resource.setrlimit(res, (soft, hard))
 
 
 def _read_tail(path: str, limit: int) -> bytes:
@@ -135,15 +136,13 @@ class SubprocessRunner:
                 env=full_env,
                 stdout=f_out or asyncio.subprocess.PIPE,
                 stderr=f_err or asyncio.subprocess.PIPE,
-                **(
-                    {"preexec_fn": _set_subprocess_limits}
-                    if sys.platform != "win32"
-                    else {}
-                ),
+                **({"preexec_fn": _set_subprocess_limits} if sys.platform != "win32" else {}),
             )
         except OSError as exc:
-            if f_out: f_out.close()  # noqa: E701
-            if f_err: f_err.close()  # noqa: E701
+            if f_out:
+                f_out.close()  # noqa: E701
+            if f_err:
+                f_err.close()  # noqa: E701
             raise RunnerError(str(exc)) from exc
 
         stdout_bytes = b""
@@ -163,6 +162,7 @@ class SubprocessRunner:
         except TimeoutError:
             timed_out = True
             import signal
+
             try:
                 proc.send_signal(signal.SIGINT)
             except (AttributeError, ValueError, NotImplementedError):
@@ -223,4 +223,3 @@ class SubprocessRunner:
             duration_ms=elapsed_ms,
             timed_out=timed_out,
         )
-

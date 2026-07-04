@@ -24,12 +24,21 @@ def _make_run(status: RunStatus, summary: TestSummary | None = None) -> Run:
     )
 
 
-def _make_summary(passed: int = 8, failed: int = 2,
-                  skipped: int = 1, error: int = 0,
-                  total: int = 11, duration_ms: int = 5000) -> TestSummary:
+def _make_summary(
+    passed: int = 8,
+    failed: int = 2,
+    skipped: int = 1,
+    error: int = 0,
+    total: int = 11,
+    duration_ms: int = 5000,
+) -> TestSummary:
     return TestSummary(
-        total=total, passed=passed, failed=failed,
-        skipped=skipped, error=error, duration_ms=duration_ms,
+        total=total,
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        error=error,
+        duration_ms=duration_ms,
     )
 
 
@@ -86,9 +95,17 @@ def test_card_color_yellow_for_cancelled() -> None:
 
 
 def test_card_includes_statistics() -> None:
-    run = _make_run(RunStatus.COMPLETED, _make_summary(
-        passed=8, failed=2, skipped=1, error=0, total=11, duration_ms=5000,
-    ))
+    run = _make_run(
+        RunStatus.COMPLETED,
+        _make_summary(
+            passed=8,
+            failed=2,
+            skipped=1,
+            error=0,
+            total=11,
+            duration_ms=5000,
+        ),
+    )
     card = build_run_card(run, "https://qa.example.com/report")
 
     # Find the text content across all elements
@@ -116,9 +133,17 @@ def test_card_contains_allure_button_with_url() -> None:
 
 def test_card_with_zero_total_shows_na_rates() -> None:
     """When total==0, per-status lines show N/A instead of a percentage."""
-    run = _make_run(RunStatus.COMPLETED, _make_summary(
-        passed=0, failed=0, skipped=0, error=0, total=0, duration_ms=0,
-    ))
+    run = _make_run(
+        RunStatus.COMPLETED,
+        _make_summary(
+            passed=0,
+            failed=0,
+            skipped=0,
+            error=0,
+            total=0,
+            duration_ms=0,
+        ),
+    )
     card = build_run_card(run, "https://qa.example.com/report")
 
     all_text = str(card["card"]["elements"])
@@ -148,8 +173,10 @@ def _mock_response(status_code: int) -> AsyncMock:
 
 def _patch_post(resp: AsyncMock):
     """Patch httpx.AsyncClient.post to return *resp* when awaited."""
+
     async def _post_side_effect(*args, **kwargs):
         return resp
+
     return patch("httpx.AsyncClient.post", side_effect=_post_side_effect)
 
 
@@ -175,8 +202,10 @@ async def test_send_feishu_card_http_error() -> None:
 @pytest.mark.asyncio
 async def test_send_feishu_card_network_error() -> None:
     """Network/timeout error returns False (never raises)."""
+
     async def _raise(*args, **kwargs):
         raise Exception("Connection refused")
+
     with patch("httpx.AsyncClient.post", side_effect=_raise):
         ok = await send_feishu_card("https://example.com/hook", {})
     assert ok is False

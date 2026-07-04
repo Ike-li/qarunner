@@ -131,9 +131,7 @@ async def test_list_ordered_by_created_at_desc(store: SqliteStore) -> None:
 
 
 async def test_save_with_summary(store: SqliteStore) -> None:
-    summary = TestSummary(
-        total=10, passed=8, failed=1, skipped=1, error=0, duration_ms=5000
-    )
+    summary = TestSummary(total=10, passed=8, failed=1, skipped=1, error=0, duration_ms=5000)
     run = _make_run(summary=summary, status=RunStatus.COMPLETED)
     await store.save(run)
     retrieved = await store.get("run-001")
@@ -271,6 +269,7 @@ async def test_user_delete_and_update(store: SqliteStore) -> None:
 
 async def test_schema_migration_adds_created_by(tmp_path) -> None:
     import aiosqlite
+
     db_file = tmp_path / "legacy.db"
     db_path = str(db_file)
     async with aiosqlite.connect(db_path) as db:
@@ -452,6 +451,7 @@ async def test_updating_a_profile_keeps_its_schedules(store: SqliteStore) -> Non
 async def test_sqlite_store_migration_env_json(tmp_path) -> None:
     # 1. Create legacy database schema without 'env_json' column in test_profiles
     import aiosqlite
+
     db_path = tmp_path / "legacy.db"
 
     async with aiosqlite.connect(db_path) as db:
@@ -516,7 +516,6 @@ async def test_fresh_initialize_records_baseline_version(tmp_path) -> None:
     expected_version = max([_BASELINE_VERSION] + [ver for ver, _ in _MIGRATIONS])
     assert await _user_version(store) == expected_version
     await store.close()
-
 
 
 async def test_forward_migration_runs_once_and_records_version(tmp_path, monkeypatch) -> None:
@@ -691,6 +690,7 @@ async def test_save_does_not_clobber_concurrent_lock(store: SqliteStore) -> None
 
 async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
     from datetime import UTC, datetime, timedelta
+
     now = datetime.now(UTC)
 
     # 1. Finished, unlocked, 10 days old (should be returned)
@@ -805,7 +805,6 @@ async def test_mark_interrupted_runs_with_worker_node_id(store: SqliteStore) -> 
     # Verify node-b runs are unaffected
     assert (await store.get("q2")).status == RunStatus.QUEUED
     assert (await store.get("r2")).status == RunStatus.RUNNING
-
 
 
 async def test_claim_schedule_run_leader_election(store: SqliteStore) -> None:
@@ -987,22 +986,23 @@ async def test_concurrent_initialize_seeds_one_admin(tmp_path) -> None:
 
 def test_row_to_profile_legacy() -> None:
     from qarunner.adapters.sqlite_store import _row_to_profile
+
     # A fake 12-column row resembling a legacy database row:
     # id, name, description, tests_path, selected_files, selected_markers,
     # extra_args, executor_mode, timeout, created_by, created_at, env_json
     fake_row = (
-        "id-123",            # 0: id
-        "Legacy Profile",    # 1: name
-        "Desc",              # 2: description
-        "suite_a",           # 3: tests_path
-        '["f1.py"]',         # 4: selected_files
-        '["m1"]',            # 5: selected_markers
-        "--args",            # 6: extra_args
-        "subprocess",        # 7: executor_mode
-        100,                 # 8: timeout
-        "user1",             # 9: created_by
-        "2026-06-24T12:00:00Z", # 10: created_at
-        '{"ENV_VAR": "val"}' # 11: env_json
+        "id-123",  # 0: id
+        "Legacy Profile",  # 1: name
+        "Desc",  # 2: description
+        "suite_a",  # 3: tests_path
+        '["f1.py"]',  # 4: selected_files
+        '["m1"]',  # 5: selected_markers
+        "--args",  # 6: extra_args
+        "subprocess",  # 7: executor_mode
+        100,  # 8: timeout
+        "user1",  # 9: created_by
+        "2026-06-24T12:00:00Z",  # 10: created_at
+        '{"ENV_VAR": "val"}',  # 11: env_json
     )
     profile = _row_to_profile(fake_row)
     assert profile.id == "id-123"
@@ -1063,12 +1063,16 @@ async def test_save_cases_empty_list(store: SqliteStore) -> None:
 async def test_get_case_history_oldest_first(store: SqliteStore) -> None:
     for i, st in enumerate(["passed", "failed", "passed"]):
         run = _make_run(
-            id=f"h{i}", tests_path="suite_a", status=RunStatus.COMPLETED,
+            id=f"h{i}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
             created_at=datetime(2025, 1, i + 1, tzinfo=UTC),
         )
         await store.save(run)
         await store.save_cases(
-            f"h{i}", "suite_a", run.created_at,
+            f"h{i}",
+            "suite_a",
+            run.created_at,
             [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
         )
     hist = await store.get_case_history("suite_a", "s", "t")
@@ -1078,12 +1082,17 @@ async def test_get_case_history_oldest_first(store: SqliteStore) -> None:
 async def test_get_case_history_owner_scoped(store: SqliteStore) -> None:
     for rid, owner in [("ha", "alice"), ("hb", "bob")]:
         run = _make_run(
-            id=rid, tests_path="suite_a", created_by=owner,
-            status=RunStatus.COMPLETED, created_at=datetime(2025, 1, 1, tzinfo=UTC),
+            id=rid,
+            tests_path="suite_a",
+            created_by=owner,
+            status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         await store.save(run)
         await store.save_cases(
-            rid, "suite_a", run.created_at,
+            rid,
+            "suite_a",
+            run.created_at,
             [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
         )
     # admin (created_by=None) spans both owners; alice sees only her own run.
@@ -1112,12 +1121,16 @@ async def test_count_flaky_tests_detects_flips(store: SqliteStore) -> None:
     # 4 runs with alternating pass/fail for the same test case → flaky (3 flips).
     for i, st in enumerate(["passed", "failed", "passed", "failed"]):
         run = _make_run(
-            id=f"fl{i}", tests_path="suite_a", status=RunStatus.COMPLETED,
+            id=f"fl{i}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
             created_at=now - timedelta(hours=4 - i),
         )
         await store.save(run)
         await store.save_cases(
-            f"fl{i}", "suite_a", run.created_at,
+            f"fl{i}",
+            "suite_a",
+            run.created_at,
             [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
         )
     assert await store.count_flaky_tests(days=30) == 1
@@ -1127,12 +1140,16 @@ async def test_count_flaky_tests_ignores_stable(store: SqliteStore) -> None:
     now = datetime.now(UTC)
     for i, st in enumerate(["passed", "passed", "passed"]):
         run = _make_run(
-            id=f"st{i}", tests_path="suite_a", status=RunStatus.COMPLETED,
+            id=f"st{i}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
             created_at=now - timedelta(hours=3 - i),
         )
         await store.save(run)
         await store.save_cases(
-            f"st{i}", "suite_a", run.created_at,
+            f"st{i}",
+            "suite_a",
+            run.created_at,
             [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
         )
     assert await store.count_flaky_tests(days=30) == 0
@@ -1141,23 +1158,35 @@ async def test_count_flaky_tests_ignores_stable(store: SqliteStore) -> None:
 async def test_count_flaky_tests_owner_scoped(store: SqliteStore) -> None:
     now = datetime.now(UTC)
     # alice's test: flaky; bob's test: stable.
-    for i, (owner, st) in enumerate([("alice", "passed"), ("alice", "failed"), ("alice", "passed")]):
+    for i, (owner, st) in enumerate(
+        [("alice", "passed"), ("alice", "failed"), ("alice", "passed")]
+    ):
         run = _make_run(
-            id=f"own{i}", tests_path="suite_a", created_by=owner,
-            status=RunStatus.COMPLETED, created_at=now - timedelta(hours=3 - i),
+            id=f"own{i}",
+            tests_path="suite_a",
+            created_by=owner,
+            status=RunStatus.COMPLETED,
+            created_at=now - timedelta(hours=3 - i),
         )
         await store.save(run)
         await store.save_cases(
-            f"own{i}", "suite_a", run.created_at,
+            f"own{i}",
+            "suite_a",
+            run.created_at,
             [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
         )
     run_bob = _make_run(
-        id="bob0", tests_path="suite_a", created_by="bob",
-        status=RunStatus.COMPLETED, created_at=now - timedelta(hours=1),
+        id="bob0",
+        tests_path="suite_a",
+        created_by="bob",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(hours=1),
     )
     await store.save(run_bob)
     await store.save_cases(
-        "bob0", "suite_a", run_bob.created_at,
+        "bob0",
+        "suite_a",
+        run_bob.created_at,
         [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
     )
     # Admin sees all → 1 flaky (alice's).
@@ -1224,8 +1253,9 @@ async def test_dequeue_next_queued_returns_oldest_fifo(store: SqliteStore) -> No
     """Dequeue picks the oldest QUEUED run by created_at (FIFO)."""
     now = datetime.now(UTC)
     run_a = _make_run(id="a", status=RunStatus.QUEUED, created_at=now)
-    run_b = _make_run(id="b", status=RunStatus.QUEUED,
-                      created_at=now.replace(second=now.second + 1))
+    run_b = _make_run(
+        id="b", status=RunStatus.QUEUED, created_at=now.replace(second=now.second + 1)
+    )
     await store.save(run_a)
     await store.save(run_b)
 
@@ -1304,4 +1334,3 @@ async def test_mark_interrupted_runs_only_touches_running(store: SqliteStore) ->
 
     completed = await store.get("c")
     assert completed.status == RunStatus.COMPLETED, "COMPLETED must survive restart"
-

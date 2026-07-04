@@ -20,4 +20,3 @@ class ProcessRunner(Protocol):
         stdout_file: str | None = None,
         stderr_file: str | None = None,
     ) -> ProcessResult: ...
-

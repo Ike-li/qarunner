@@ -14,9 +14,7 @@ logger = logging.getLogger(__name__)
 class AllureCliReporter:
     """Generate Allure reports by invoking the allure CLI via ProcessRunner."""
 
-    def __init__(
-        self, process: ProcessRunner, allure_bin: str = "allure"
-    ) -> None:
+    def __init__(self, process: ProcessRunner, allure_bin: str = "allure") -> None:
         self._process = process
         self._allure_bin = allure_bin
 
@@ -34,9 +32,7 @@ class AllureCliReporter:
         try:
             proc = await self._process.run(cmd, cwd=".", timeout=300)
         except Exception:  # noqa: BLE001 — allure is best-effort; never fail the run
-            logger.warning(
-                "Allure report generation failed for %s", results_dir, exc_info=True
-            )
+            logger.warning("Allure report generation failed for %s", results_dir, exc_info=True)
             return ReportRef(allure_results_dir=results_dir)
 
         if proc.exit_code != 0:

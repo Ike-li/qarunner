@@ -320,6 +320,7 @@ def schedule_to_response(schedule: TestSchedule) -> TestScheduleResponse:
         created_at=schedule.created_at,
     )
 
+
 class LinkTestSuiteRequest(BaseModel):
     """Payload to link a local directory path as a test suite."""
 

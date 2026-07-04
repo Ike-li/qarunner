@@ -64,9 +64,7 @@ def create_container(settings: Settings | None = None) -> Container:
         allow_runtime_build=cfg.executor_autobuild,
         playwright_executor_image=cfg.playwright_executor_image,
         extra_readonly_roots=[
-            root
-            for root in cfg.executor_extra_readonly_roots.split(os.pathsep)
-            if root
+            root for root in cfg.executor_extra_readonly_roots.split(os.pathsep) if root
         ],
     )
     collector = JunitCollector()
@@ -161,6 +159,7 @@ async def get_current_user(request: Request, token: str | None = Depends(oauth2_
         )
 
     from datetime import datetime
+
     created_at_dt = (
         datetime.fromisoformat(user_record["created_at"])
         if user_record.get("created_at")

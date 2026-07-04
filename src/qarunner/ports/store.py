@@ -123,9 +123,7 @@ class CredentialStore(Protocol):
     """Persistence for git credentials (P0-1). Secret ciphertext is stored and
     read back only via the dedicated accessor — never on the metadata model."""
 
-    async def save_credential(
-        self, credential: Credential, encrypted_secret: str
-    ) -> None: ...
+    async def save_credential(self, credential: Credential, encrypted_secret: str) -> None: ...
 
     async def get_credential(self, credential_id: str) -> Credential | None: ...
 
@@ -198,4 +196,3 @@ class Store(
         Returns None if no QUEUED run is available.
         """
         ...
-

@@ -151,4 +151,3 @@ def test_eviction_falls_back_to_oldest_when_all_locked() -> None:
     assert "A" not in throttle._attempts
     assert "B" in throttle._attempts
     assert "C" in throttle._attempts
-

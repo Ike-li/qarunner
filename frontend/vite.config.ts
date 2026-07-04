@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       host: '0.0.0.0', // Allow external access (essential when running in Docker)
+      allowedHosts: ['localhost', '127.0.0.1', 'frontend'],
       watch: usePolling ? { usePolling: true, interval: 100 } : undefined,
       proxy: {
         '/runs': {
@@ -47,4 +48,3 @@ export default defineConfig(({ mode }) => {
     }
   }
 })
-

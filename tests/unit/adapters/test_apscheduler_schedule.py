@@ -188,8 +188,7 @@ async def test_trigger_dedups_across_concurrent_replicas(tmp_path: Any) -> None:
     )
 
     total_created = (
-        replica_a._orchestrator.create.call_count
-        + replica_b._orchestrator.create.call_count
+        replica_a._orchestrator.create.call_count + replica_b._orchestrator.create.call_count
     )
     assert total_created == 1
     await store.close()
@@ -392,9 +391,12 @@ async def test_trigger_runs_in_docker_regardless_of_profile_mode() -> None:
     executor_mode is 'subprocess'.  orchestrator.create() forces 'docker' now."""
     port, store, orch = _make_port()
     store.get_schedule = AsyncMock(return_value=_schedule(profile_id="prof-x"))
-    store.get_profile = AsyncMock(return_value=_profile(
-        id="prof-x", executor_mode="subprocess",
-    ))
+    store.get_profile = AsyncMock(
+        return_value=_profile(
+            id="prof-x",
+            executor_mode="subprocess",
+        )
+    )
     store.save_schedule = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()

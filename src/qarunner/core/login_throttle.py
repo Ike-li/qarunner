@@ -97,11 +97,8 @@ class LoginThrottle:
         currently locked — so a flood of fresh keys can't evict an active lockout
         (lock bypass). Falls back to the oldest only if every identity is locked."""
         now = self.clock.now().timestamp()
-        victim = next(
-            (k for k, a in self._attempts.items() if a.locked_until <= now), None
-        )
+        victim = next((k for k, a in self._attempts.items() if a.locked_until <= now), None)
         if victim is None:
             self._attempts.popitem(last=False)
         else:
             del self._attempts[victim]
-

@@ -1,5 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const useBundledChromium = process.env.PLAYWRIGHT_USE_BUNDLED_CHROMIUM === 'true';
+const desktopChrome = {
+  ...devices['Desktop Chrome'],
+  ...(useBundledChromium ? {} : { channel: 'chrome' as const }),
+};
+
 /**
  * See https://playwright.dev/docs/test-configuration.
  *
@@ -48,17 +54,13 @@ export default defineConfig({
       name: 'chromium',
       testMatch: /.*\.spec\.ts/,
       testIgnore: /.*\.authed-(admin|user)\.spec\.ts/,
-      use: {
-        ...devices['Desktop Chrome'],
-        channel: 'chrome', // Use the host system's Google Chrome installation
-      },
+      use: desktopChrome,
     },
     {
       name: 'chromium-authed-admin',
       testMatch: /.*\.authed-admin\.spec\.ts/,
       use: {
-        ...devices['Desktop Chrome'],
-        channel: 'chrome',
+        ...desktopChrome,
         storageState: './tests-e2e/.auth/admin.json',
       },
     },
@@ -66,8 +68,7 @@ export default defineConfig({
       name: 'chromium-authed-user',
       testMatch: /.*\.authed-user\.spec\.ts/,
       use: {
-        ...devices['Desktop Chrome'],
-        channel: 'chrome',
+        ...desktopChrome,
         storageState: './tests-e2e/.auth/user.json',
       },
     },

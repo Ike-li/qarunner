@@ -78,11 +78,12 @@ class FakeStore:
         self._users = {}
         self._credentials = {}
         from qarunner.core.auth import hash_password
+
         self._users["test_user"] = {
             "username": "test_user",
             "password_hash": hash_password("test_pass"),
             "role": "admin",
-            "created_at": "2026-06-20T16:00:00Z"
+            "created_at": "2026-06-20T16:00:00Z",
         }
 
     async def get_user(self, username: str) -> dict | None:
@@ -90,20 +91,17 @@ class FakeStore:
 
     async def create_user(self, username: str, password_hash: str, role: str) -> None:
         from datetime import UTC, datetime
+
         self._users[username] = {
             "username": username,
             "password_hash": password_hash,
             "role": role,
-            "created_at": datetime.now(UTC).isoformat()
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     async def list_users(self) -> list[dict]:
         return [
-            {
-                "username": u["username"],
-                "role": u["role"],
-                "created_at": u["created_at"]
-            }
+            {"username": u["username"], "role": u["role"], "created_at": u["created_at"]}
             for u in sorted(self._users.values(), key=lambda x: x["username"])
         ]
 
@@ -122,9 +120,7 @@ class FakeStore:
         self._users[username]["role"] = role
         return True
 
-    async def save_credential(
-        self, credential: object, encrypted_secret: str
-    ) -> None:
+    async def save_credential(self, credential: object, encrypted_secret: str) -> None:
         self._credentials[credential.id] = (credential, encrypted_secret)  # type: ignore[attr-defined]
 
     async def get_credential(self, credential_id: str) -> object | None:
@@ -160,7 +156,12 @@ class FakeStore:
         return list(self._cases.get(run_id, []))
 
     async def get_case_history(
-        self, tests_path, suite, name, limit=20, created_by=None,
+        self,
+        tests_path,
+        suite,
+        name,
+        limit=20,
+        created_by=None,
     ) -> list:
         rows = []
         for run_id, cases in self._cases.items():
@@ -173,13 +174,11 @@ class FakeStore:
                 if c.suite == suite and c.name == name:
                     rows.append((run.created_at, c.status))
         rows.sort(key=lambda x: x[0], reverse=True)
-        return [
-            CaseHistoryPoint(created_at=ca, status=st)
-            for ca, st in reversed(rows[:limit])
-        ]
+        return [CaseHistoryPoint(created_at=ca, status=st) for ca, st in reversed(rows[:limit])]
 
     async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
         from datetime import timedelta
+
         since = datetime.now(UTC) - timedelta(days=days)
         grouped: dict[tuple[str, str, str], list[str]] = {}
         for run_id, cases in self._cases.items():
@@ -213,12 +212,12 @@ class FakeStore:
         return sum(
             1
             for r in self._runs.values()
-            if r.created_by == created_by
-            and r.status in (RunStatus.QUEUED, RunStatus.RUNNING)
+            if r.created_by == created_by and r.status in (RunStatus.QUEUED, RunStatus.RUNNING)
         )
 
     async def get_old_unlocked_runs(self, retention_days: int) -> list[Run]:
         from datetime import timedelta
+
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         res = []
         for r in self._runs.values():
@@ -338,9 +337,7 @@ class FakeOrchestrator:
     async def cancel(self, run_id: str) -> Run:
         run = await self.store.get(run_id)
         if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
-            run = run.model_copy(
-                update={"status": RunStatus.CANCELLED, "finished_at": NOW}
-            )
+            run = run.model_copy(update={"status": RunStatus.CANCELLED, "finished_at": NOW})
             await self.store.save(run)
         return run
 
@@ -537,7 +534,6 @@ def test_create_run_inflight_cap_disabled_when_zero() -> None:
     assert resp.status_code == 202
 
 
-
 # ── GET /runs ──────────────────────────────────────────────────────────
 
 
@@ -729,21 +725,35 @@ def _seed_cases(store: FakeStore, run_id: str, cases: list[TestCaseResult]) -> N
 def test_run_diff_with_baseline_classifies_cases() -> None:
     container = _make_container()
     _make_run_in_store(
-        container.store, id="base", created_by="alice",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="base",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
     _make_run_in_store(
-        container.store, id="head", created_by="alice",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5),
+        container.store,
+        id="head",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=5),
     )
-    _seed_cases(container.store, "base", [
-        TestCaseResult(suite="s", name="keeps", status="passed", duration_ms=0),
-        TestCaseResult(suite="s", name="regressed", status="passed", duration_ms=0),
-    ])
-    _seed_cases(container.store, "head", [
-        TestCaseResult(suite="s", name="keeps", status="passed", duration_ms=0),
-        TestCaseResult(suite="s", name="regressed", status="failed", duration_ms=0),
-    ])
+    _seed_cases(
+        container.store,
+        "base",
+        [
+            TestCaseResult(suite="s", name="keeps", status="passed", duration_ms=0),
+            TestCaseResult(suite="s", name="regressed", status="passed", duration_ms=0),
+        ],
+    )
+    _seed_cases(
+        container.store,
+        "head",
+        [
+            TestCaseResult(suite="s", name="keeps", status="passed", duration_ms=0),
+            TestCaseResult(suite="s", name="regressed", status="failed", duration_ms=0),
+        ],
+    )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -757,12 +767,19 @@ def test_run_diff_with_baseline_classifies_cases() -> None:
 def test_run_diff_no_baseline_returns_null_and_empty() -> None:
     container = _make_container()
     _make_run_in_store(
-        container.store, id="solo", created_by="alice",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="solo",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
-    _seed_cases(container.store, "solo", [
-        TestCaseResult(suite="s", name="t", status="failed", duration_ms=0),
-    ])
+    _seed_cases(
+        container.store,
+        "solo",
+        [
+            TestCaseResult(suite="s", name="t", status="failed", duration_ms=0),
+        ],
+    )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -790,19 +807,33 @@ def test_run_diff_baseline_excludes_other_owners_run() -> None:
     container = _make_container()
     # bob's earlier, same-scope COMPLETED run — must stay invisible to alice.
     _make_run_in_store(
-        container.store, id="bob-base", created_by="bob",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="bob-base",
+        created_by="bob",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
     _make_run_in_store(
-        container.store, id="head", created_by="alice",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5),
+        container.store,
+        id="head",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=5),
     )
-    _seed_cases(container.store, "bob-base", [
-        TestCaseResult(suite="s", name="secret", status="failed", duration_ms=0),
-    ])
-    _seed_cases(container.store, "head", [
-        TestCaseResult(suite="s", name="secret", status="passed", duration_ms=0),
-    ])
+    _seed_cases(
+        container.store,
+        "bob-base",
+        [
+            TestCaseResult(suite="s", name="secret", status="failed", duration_ms=0),
+        ],
+    )
+    _seed_cases(
+        container.store,
+        "head",
+        [
+            TestCaseResult(suite="s", name="secret", status="passed", duration_ms=0),
+        ],
+    )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -821,19 +852,33 @@ def test_run_diff_baseline_spans_owners_for_admin() -> None:
     not by the head run's owner."""
     container = _make_container()
     _make_run_in_store(
-        container.store, id="bob-base", created_by="bob",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="bob-base",
+        created_by="bob",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
     _make_run_in_store(
-        container.store, id="head", created_by="alice",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5),
+        container.store,
+        id="head",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=5),
     )
-    _seed_cases(container.store, "bob-base", [
-        TestCaseResult(suite="s", name="t", status="passed", duration_ms=0),
-    ])
-    _seed_cases(container.store, "head", [
-        TestCaseResult(suite="s", name="t", status="passed", duration_ms=0),
-    ])
+    _seed_cases(
+        container.store,
+        "bob-base",
+        [
+            TestCaseResult(suite="s", name="t", status="passed", duration_ms=0),
+        ],
+    )
+    _seed_cases(
+        container.store,
+        "head",
+        [
+            TestCaseResult(suite="s", name="t", status="passed", duration_ms=0),
+        ],
+    )
     app = create_app(container)
     _override_user(app, "carol", UserRole.ADMIN)
     with TestClient(app) as client:
@@ -849,21 +894,40 @@ def test_runs_trend_ascending_points_filtered_by_suite() -> None:
     container = _make_container()
     summ = TestSummary(total=10, passed=7, failed=3, skipped=0, error=0, duration_ms=1)
     _make_run_in_store(
-        container.store, id="r2", created_by="alice", tests_path="suite_a",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=5), summary=summ,
+        container.store,
+        id="r2",
+        created_by="alice",
+        tests_path="suite_a",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=5),
+        summary=summ,
     )
     _make_run_in_store(
-        container.store, id="r1", created_by="alice", tests_path="suite_a",
-        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+        container.store,
+        id="r1",
+        created_by="alice",
+        tests_path="suite_a",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
+        summary=summ,
     )
     # excluded: other suite, and a non-COMPLETED run of suite_a
     _make_run_in_store(
-        container.store, id="other", created_by="alice", tests_path="suite_b",
-        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+        container.store,
+        id="other",
+        created_by="alice",
+        tests_path="suite_b",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
+        summary=summ,
     )
     _make_run_in_store(
-        container.store, id="failed", created_by="alice", tests_path="suite_a",
-        status=RunStatus.FAILED, created_at=NOW + timedelta(minutes=9),
+        container.store,
+        id="failed",
+        created_by="alice",
+        tests_path="suite_a",
+        status=RunStatus.FAILED,
+        created_at=NOW + timedelta(minutes=9),
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -880,12 +944,22 @@ def test_runs_trend_owner_scoped_for_non_admin() -> None:
     container = _make_container()
     summ = TestSummary(total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=1)
     _make_run_in_store(
-        container.store, id="mine", created_by="alice", tests_path="s",
-        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+        container.store,
+        id="mine",
+        created_by="alice",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
+        summary=summ,
     )
     _make_run_in_store(
-        container.store, id="theirs", created_by="bob", tests_path="s",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1), summary=summ,
+        container.store,
+        id="theirs",
+        created_by="bob",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=1),
+        summary=summ,
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -898,12 +972,22 @@ def test_runs_trend_admin_sees_all_owners() -> None:
     container = _make_container()
     summ = TestSummary(total=1, passed=1, failed=0, skipped=0, error=0, duration_ms=1)
     _make_run_in_store(
-        container.store, id="a", created_by="alice", tests_path="s",
-        status=RunStatus.COMPLETED, created_at=NOW, summary=summ,
+        container.store,
+        id="a",
+        created_by="alice",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
+        summary=summ,
     )
     _make_run_in_store(
-        container.store, id="b", created_by="bob", tests_path="s",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1), summary=summ,
+        container.store,
+        id="b",
+        created_by="bob",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=1),
+        summary=summ,
     )
     app = create_app(container)
     _override_user(app, "admin", UserRole.ADMIN)
@@ -947,16 +1031,28 @@ def test_metrics_computes_pass_rate_and_duration() -> None:
     recent = datetime.now(UTC) - timedelta(hours=1)
     # 2 completed runs: one passed, one failed
     _make_run_in_store(
-        container.store, id="r1", created_by="alice", tests_path="suite/",
-        status=RunStatus.COMPLETED, created_at=recent,
+        container.store,
+        id="r1",
+        created_by="alice",
+        tests_path="suite/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
         finished_at=recent + timedelta(seconds=10),
-        summary=TestSummary(total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=1000, pass_rate=1.0),
+        summary=TestSummary(
+            total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=1000, pass_rate=1.0
+        ),
     )
     _make_run_in_store(
-        container.store, id="r2", created_by="alice", tests_path="suite/",
-        status=RunStatus.COMPLETED, created_at=recent + timedelta(minutes=1),
+        container.store,
+        id="r2",
+        created_by="alice",
+        tests_path="suite/",
+        status=RunStatus.COMPLETED,
+        created_at=recent + timedelta(minutes=1),
         finished_at=recent + timedelta(minutes=1, seconds=20),
-        summary=TestSummary(total=5, passed=3, failed=2, skipped=0, error=0, duration_ms=2000, pass_rate=0.6),
+        summary=TestSummary(
+            total=5, passed=3, failed=2, skipped=0, error=0, duration_ms=2000, pass_rate=0.6
+        ),
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -975,12 +1071,20 @@ def test_metrics_computes_pass_rate_and_duration() -> None:
 def test_metrics_excludes_non_completed_runs() -> None:
     container = _make_container()
     _make_run_in_store(
-        container.store, id="r1", created_by="alice", tests_path="suite/",
-        status=RunStatus.QUEUED, created_at=NOW,
+        container.store,
+        id="r1",
+        created_by="alice",
+        tests_path="suite/",
+        status=RunStatus.QUEUED,
+        created_at=NOW,
     )
     _make_run_in_store(
-        container.store, id="r2", created_by="alice", tests_path="suite/",
-        status=RunStatus.RUNNING, created_at=NOW + timedelta(minutes=1),
+        container.store,
+        id="r2",
+        created_by="alice",
+        tests_path="suite/",
+        status=RunStatus.RUNNING,
+        created_at=NOW + timedelta(minutes=1),
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -996,14 +1100,28 @@ def test_metrics_owner_scoped_for_non_admin() -> None:
     container = _make_container()
     recent = datetime.now(UTC) - timedelta(hours=1)
     _make_run_in_store(
-        container.store, id="r-alice", created_by="alice", tests_path="suite/",
-        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
-        summary=TestSummary(total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=100, pass_rate=1.0),
+        container.store,
+        id="r-alice",
+        created_by="alice",
+        tests_path="suite/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
+        finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(
+            total=2, passed=2, failed=0, skipped=0, error=0, duration_ms=100, pass_rate=1.0
+        ),
     )
     _make_run_in_store(
-        container.store, id="r-bob", created_by="bob", tests_path="suite/",
-        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
-        summary=TestSummary(total=2, passed=0, failed=2, skipped=0, error=0, duration_ms=100, pass_rate=0.0),
+        container.store,
+        id="r-bob",
+        created_by="bob",
+        tests_path="suite/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
+        finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(
+            total=2, passed=0, failed=2, skipped=0, error=0, duration_ms=100, pass_rate=0.0
+        ),
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -1018,14 +1136,28 @@ def test_metrics_per_suite_breakdown() -> None:
     container = _make_container()
     recent = datetime.now(UTC) - timedelta(hours=1)
     _make_run_in_store(
-        container.store, id="r1", created_by="alice", tests_path="suite_a/",
-        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
-        summary=TestSummary(total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=500, pass_rate=1.0),
+        container.store,
+        id="r1",
+        created_by="alice",
+        tests_path="suite_a/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
+        finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(
+            total=5, passed=5, failed=0, skipped=0, error=0, duration_ms=500, pass_rate=1.0
+        ),
     )
     _make_run_in_store(
-        container.store, id="r2", created_by="alice", tests_path="suite_b/",
-        status=RunStatus.COMPLETED, created_at=recent, finished_at=recent + timedelta(seconds=5),
-        summary=TestSummary(total=3, passed=1, failed=2, skipped=0, error=0, duration_ms=300, pass_rate=0.33),
+        container.store,
+        id="r2",
+        created_by="alice",
+        tests_path="suite_b/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
+        finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(
+            total=3, passed=1, failed=2, skipped=0, error=0, duration_ms=300, pass_rate=0.33
+        ),
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -1038,6 +1170,81 @@ def test_metrics_per_suite_breakdown() -> None:
     assert by_path["suite_b/"]["pass_rate"] == 0.0  # 0 of 1 passed
 
 
+def test_metrics_admin_sees_all_owners_and_zero_duration_suites() -> None:
+    container = _make_container()
+    recent = datetime.now(UTC) - timedelta(hours=1)
+    _make_run_in_store(
+        container.store,
+        id="r-alice",
+        created_by="alice",
+        tests_path="suite_a/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
+        finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(
+            total=1,
+            passed=1,
+            failed=0,
+            skipped=0,
+            error=0,
+            duration_ms=0,
+            pass_rate=1.0,
+        ),
+    )
+    _make_run_in_store(
+        container.store,
+        id="r-bob",
+        created_by="bob",
+        tests_path="suite_b/",
+        status=RunStatus.COMPLETED,
+        created_at=recent,
+        finished_at=recent + timedelta(seconds=5),
+        summary=TestSummary(
+            total=1,
+            passed=0,
+            failed=1,
+            skipped=0,
+            error=0,
+            duration_ms=0,
+            pass_rate=0.0,
+        ),
+    )
+    app = create_app(container)
+    _override_user(app, "admin", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    body = resp.json()
+    assert body["total_runs"] == 2
+    assert body["avg_duration_ms_7d"] == 0.0
+    assert {s["tests_path"] for s in body["suites"]} == {"suite_a/", "suite_b/"}
+    assert all(s["avg_duration_ms"] == 0.0 for s in body["suites"])
+
+
+def test_metrics_includes_completed_suite_with_no_recent_summary() -> None:
+    container = _make_container()
+    old = datetime.now(UTC) - timedelta(days=10)
+    _make_run_in_store(
+        container.store,
+        id="old-completed",
+        created_by="alice",
+        tests_path="old_suite/",
+        status=RunStatus.COMPLETED,
+        created_at=old,
+        finished_at=old + timedelta(seconds=5),
+        summary=None,
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    suite = resp.json()["suites"][0]
+    assert suite["tests_path"] == "old_suite/"
+    assert suite["total_runs"] == 0
+    assert suite["pass_rate"] == 0.0
+    assert suite["avg_duration_ms"] == 0.0
+    assert suite["last_run_at"] is not None
+
+
 # ── GET /cases/history (cross-run stage 3) ──────────────────────────────
 
 
@@ -1045,12 +1252,20 @@ def test_case_history_oldest_first_with_flaky_verdict() -> None:
     container = _make_container()
     for i, st in enumerate(["passed", "failed", "passed", "failed"]):
         _make_run_in_store(
-            container.store, id=f"h{i}", created_by="alice", tests_path="suite_a",
-            status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=i),
+            container.store,
+            id=f"h{i}",
+            created_by="alice",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=NOW + timedelta(minutes=i),
         )
-        _seed_cases(container.store, f"h{i}", [
-            TestCaseResult(suite="s", name="t", status=st, duration_ms=0),
-        ])
+        _seed_cases(
+            container.store,
+            f"h{i}",
+            [
+                TestCaseResult(suite="s", name="t", status=st, duration_ms=0),
+            ],
+        )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -1065,17 +1280,31 @@ def test_case_history_oldest_first_with_flaky_verdict() -> None:
 def test_case_history_owner_scoped_for_non_admin() -> None:
     container = _make_container()
     _make_run_in_store(
-        container.store, id="mine", created_by="alice", tests_path="s2",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="mine",
+        created_by="alice",
+        tests_path="s2",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
-    _seed_cases(container.store, "mine", [
-        TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)])
+    _seed_cases(
+        container.store,
+        "mine",
+        [TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)],
+    )
     _make_run_in_store(
-        container.store, id="theirs", created_by="bob", tests_path="s2",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1),
+        container.store,
+        id="theirs",
+        created_by="bob",
+        tests_path="s2",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=1),
     )
-    _seed_cases(container.store, "theirs", [
-        TestCaseResult(suite="x", name="t", status="failed", duration_ms=0)])
+    _seed_cases(
+        container.store,
+        "theirs",
+        [TestCaseResult(suite="x", name="t", status="failed", duration_ms=0)],
+    )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -1086,17 +1315,31 @@ def test_case_history_owner_scoped_for_non_admin() -> None:
 def test_case_history_admin_sees_all_owners() -> None:
     container = _make_container()
     _make_run_in_store(
-        container.store, id="ca", created_by="alice", tests_path="s3",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="ca",
+        created_by="alice",
+        tests_path="s3",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
-    _seed_cases(container.store, "ca", [
-        TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)])
+    _seed_cases(
+        container.store,
+        "ca",
+        [TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)],
+    )
     _make_run_in_store(
-        container.store, id="cb", created_by="bob", tests_path="s3",
-        status=RunStatus.COMPLETED, created_at=NOW + timedelta(minutes=1),
+        container.store,
+        id="cb",
+        created_by="bob",
+        tests_path="s3",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=1),
     )
-    _seed_cases(container.store, "cb", [
-        TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)])
+    _seed_cases(
+        container.store,
+        "cb",
+        [TestCaseResult(suite="x", name="t", status="passed", duration_ms=0)],
+    )
     app = create_app(container)
     _override_user(app, "admin", UserRole.ADMIN)
     with TestClient(app) as client:
@@ -1117,8 +1360,11 @@ def test_case_history_empty_for_unknown_case() -> None:
 def test_run_diff_forbidden_for_non_owner() -> None:
     container = _make_container()
     _make_run_in_store(
-        container.store, id="r", created_by="bob",
-        status=RunStatus.COMPLETED, created_at=NOW,
+        container.store,
+        id="r",
+        created_by="bob",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
     )
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
@@ -1145,9 +1391,7 @@ def test_cancel_run_owner_marks_cancelled() -> None:
 
 def test_cancel_run_forbidden_for_non_owner() -> None:
     container = _make_container()
-    _make_run_in_store(
-        container.store, id="r-cancel", created_by="bob", status=RunStatus.RUNNING
-    )
+    _make_run_in_store(container.store, id="r-cancel", created_by="bob", status=RunStatus.RUNNING)
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -1186,9 +1430,7 @@ def test_delete_run_owner_removes_row_and_artifacts(
     artifact directory."""
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
     container = _make_container()
-    _make_run_in_store(
-        container.store, id="r-del", created_by="alice", status=RunStatus.COMPLETED
-    )
+    _make_run_in_store(container.store, id="r-del", created_by="alice", status=RunStatus.COMPLETED)
     run_dir = tmp_path / "r-del"
     run_dir.mkdir()
     (run_dir / "stdout.log").write_text("log")
@@ -1211,9 +1453,7 @@ def test_delete_run_without_artifact_dir_still_deletes_row(
     (covers the ``run_dir`` absent branch)."""
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
     container = _make_container()
-    _make_run_in_store(
-        container.store, id="r-bare", created_by="alice", status=RunStatus.FAILED
-    )
+    _make_run_in_store(container.store, id="r-bare", created_by="alice", status=RunStatus.FAILED)
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
 
@@ -1226,9 +1466,7 @@ def test_delete_run_without_artifact_dir_still_deletes_row(
 
 def test_delete_run_forbidden_for_non_owner() -> None:
     container = _make_container()
-    _make_run_in_store(
-        container.store, id="r-del", created_by="bob", status=RunStatus.COMPLETED
-    )
+    _make_run_in_store(container.store, id="r-del", created_by="bob", status=RunStatus.COMPLETED)
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -1265,9 +1503,7 @@ def test_delete_run_locked_returns_409() -> None:
 
 def test_delete_run_active_returns_409() -> None:
     container = _make_container()
-    _make_run_in_store(
-        container.store, id="r-run", created_by="alice", status=RunStatus.RUNNING
-    )
+    _make_run_in_store(container.store, id="r-run", created_by="alice", status=RunStatus.RUNNING)
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -1333,9 +1569,7 @@ def test_rerun_creates_new_run_owned_by_caller() -> None:
 
 def test_rerun_forbidden_for_non_owner() -> None:
     container = _make_container()
-    _make_run_in_store(
-        container.store, id="orig", created_by="bob", status=RunStatus.COMPLETED
-    )
+    _make_run_in_store(container.store, id="orig", created_by="bob", status=RunStatus.COMPLETED)
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
@@ -1419,9 +1653,7 @@ def test_list_tests_missing_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resp.json() == []
 
 
-def test_list_suites_detailed_left_join(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_list_suites_detailed_left_join(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """GET /suites = filesystem entities left-joined with metadata (R5).
 
     Registered dirs carry their recorded source/repo_url/ref; unregistered dirs
@@ -1484,6 +1716,7 @@ def test_schedule_crud_and_preview_endpoints() -> None:
     )
 
     import asyncio
+
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save_profile(profile))
     loop.close()
@@ -1513,7 +1746,7 @@ def test_schedule_crud_and_preview_endpoints() -> None:
             "profile_id": "profile-abc",
             "cron_expression": "0 2 * * *",
             "enabled": True,
-            "timezone": "America/New_York"
+            "timezone": "America/New_York",
         }
         resp_create = client.post("/schedules", json=sched_payload)
         assert resp_create.status_code == 201
@@ -1540,7 +1773,7 @@ def test_schedule_crud_and_preview_endpoints() -> None:
             "profile_id": "profile-abc",
             "cron_expression": "0 3 * * *",
             "enabled": False,
-            "timezone": "America/Los_Angeles"
+            "timezone": "America/Los_Angeles",
         }
         resp_update = client.put(f"/schedules/{sched_id}", json=update_payload)
         assert resp_update.status_code == 200
@@ -1575,6 +1808,7 @@ def test_lock_run() -> None:
         locked=False,
     )
     import asyncio
+
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save(run))
     loop.close()
@@ -1635,6 +1869,7 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     container = _make_container()
 
     from datetime import UTC, timedelta
+
     old_date = datetime.now(UTC) - timedelta(days=40)
 
     # 1. Old unlocked run (should be physically deleted)
@@ -1676,6 +1911,7 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (dir_locked / "stdout.log").write_text("locked logs")
 
     import asyncio
+
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save(run_old))
     loop.run_until_complete(container.store.save(run_old_locked))
@@ -1718,6 +1954,7 @@ def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     (run_dir / "stdout.log").write_text("line1\nline2\n", encoding="utf-8")
 
     import asyncio
+
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save(run))
     loop.close()
@@ -1741,11 +1978,7 @@ def test_user_registration_and_login() -> None:
 
     with TestClient(app) as client:
         # A. Register user successfully
-        payload = {
-            "username": "new_guy",
-            "password": "secret_password",
-            "role": "user"
-        }
+        payload = {"username": "new_guy", "password": "secret_password", "role": "user"}
         resp = client.post("/users", json=payload)
         assert resp.status_code == 201
         assert resp.json()["username"] == "new_guy"
@@ -1949,9 +2182,7 @@ def test_update_user_requires_admin() -> None:
 # ── Credentials: create / list / delete (P0-1) ───────────────────────────
 
 
-def _seed_credential(
-    container: Container, *, cred_id: str, owner: str, name: str = "c"
-) -> None:
+def _seed_credential(container: Container, *, cred_id: str, owner: str, name: str = "c") -> None:
     import asyncio
 
     loop = asyncio.new_event_loop()
@@ -1994,10 +2225,7 @@ def test_create_credential_encrypts_secret_and_never_echoes_it() -> None:
     enc = container.store._credentials[cred_id][1]  # type: ignore[attr-defined]
     # At rest it's ciphertext, but it decrypts back to the original.
     assert "ghp_supersecret" not in enc
-    assert (
-        CredentialCipher(container.settings.secret_key).decrypt(enc)
-        == "ghp_supersecret"
-    )
+    assert CredentialCipher(container.settings.secret_key).decrypt(enc) == "ghp_supersecret"
 
 
 def test_create_credential_rejects_unknown_type() -> None:
@@ -2165,7 +2393,8 @@ def test_test_tree_and_markers_detailed(tmp_path: Path, monkeypatch: pytest.Monk
     suite_dir.mkdir()
 
     # Create directories and files
-    (suite_dir / "test_active.py").write_text("""
+    (suite_dir / "test_active.py").write_text(
+        """
 import pytest
 
 @pytest.mark.foo
@@ -2177,7 +2406,9 @@ class TestClass:
     @pytest.mark.nested
     def test_two(self):
         pass
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Create empty folders and internal pycache/hidden files to verify filtering
     (suite_dir / ".hidden_folder").mkdir()
@@ -2192,17 +2423,21 @@ class TestClass:
     # Subdirectory with Python file
     sub_dir = suite_dir / "sub_folder"
     sub_dir.mkdir()
-    (sub_dir / "test_sub.py").write_text("""
+    (sub_dir / "test_sub.py").write_text(
+        """
 import pytest
 @pytest.mark.sub_marker
 def test_three():
     pass
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Valid subdirectory with python file and various decorators to cover AST branch branches
     valid_sub = suite_dir / "valid_sub_folder"
     valid_sub.mkdir()
-    (valid_sub / "test_another.py").write_text("""
+    (valid_sub / "test_another.py").write_text(
+        """
 import pytest
 
 def simple_decorator(f):
@@ -2215,19 +2450,26 @@ def simple_decorator(f):
 @pytest.mark.another_marker
 def test_four():
     pass
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Syntax error file to trigger AST exception
-    (suite_dir / "test_bad.py").write_text("""
+    (suite_dir / "test_bad.py").write_text(
+        """
 def parse_error_here(
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Mock Path.iterdir to throw an exception for sub_folder to cover except Exception in walk_dir
     original_iterdir = Path.iterdir
+
     def mock_iterdir(self: Path):
         if self.name == "sub_folder":
             raise OSError("Access Denied")
         return original_iterdir(self)
+
     monkeypatch.setattr(Path, "iterdir", mock_iterdir)
 
     container = _make_container()
@@ -2250,8 +2492,10 @@ def parse_error_here(
 
         # B. GET test tree unsafe path (via safe_subpath monkeypatch)
         from qarunner.errors import UnsafePath
+
         def mock_unsafe_subpath(root, relative):
             raise UnsafePath("Unsafe path detected")
+
         monkeypatch.setattr("qarunner.core.paths.safe_subpath", mock_unsafe_subpath)
 
         resp_unsafe = client.get("/tests/any_suite/tree")
@@ -2451,6 +2695,7 @@ def test_get_run_detailed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
             assert resp_fall.json()["stderr"] == "fallback stderr"
     finally:
         import shutil
+
         shutil.rmtree("./artifacts", ignore_errors=True)
 
     # 3. Log reading that fails returns None instead of propagating. The log
@@ -2499,8 +2744,10 @@ def test_stream_run_logs_missing_and_exception(
 
     # Mock asyncio.sleep to return immediately so tests finish instantly
     import asyncio
+
     async def mock_sleep(delay):
         return
+
     monkeypatch.setattr(asyncio, "sleep", mock_sleep)
 
     # A. Stream missing run from HTTP level (before starting generator)
@@ -2532,6 +2779,7 @@ def test_stream_run_logs_missing_and_exception(
     # no longer breaks if the route polls store.get a different number of times.
     statuses = iter([RunStatus.RUNNING, RunStatus.RUNNING, RunStatus.COMPLETED])
     original_get = container.store.get
+
     async def mock_get(run_id: str):
         run_obj = await original_get(run_id)
         if run_id != "run_flush":
@@ -2556,6 +2804,7 @@ def test_stream_run_logs_missing_and_exception(
     (loop_exc_dir / "stdout.log").write_text("line1\n", encoding="utf-8")
 
     call_get_count = 0
+
     async def mock_get_exc(run_id: str):
         nonlocal call_get_count
         if run_id == "run_loop_exc":
@@ -2583,6 +2832,7 @@ def test_stream_run_logs_missing_and_exception(
     _make_run_in_store(container.store, id="run_not_found_loop", status=RunStatus.RUNNING)
     original_get_fn = container.store.get
     get_count = 0
+
     async def mock_get_not_found(run_id: str):
         nonlocal get_count
         if run_id == "run_not_found_loop":
@@ -2590,6 +2840,7 @@ def test_stream_run_logs_missing_and_exception(
             if get_count > 1:
                 raise RunNotFound(run_id)
         return await original_get_fn(run_id)
+
     monkeypatch.setattr(container.store, "get", mock_get_not_found)
 
     with TestClient(app) as client:
@@ -2606,9 +2857,7 @@ def test_stream_disconnect_initial(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     container = _make_container()
     _make_run_in_store(container.store, id="run_disc_init", status=RunStatus.RUNNING)
     # No log file exists; without the disconnect check the initial loop would spin.
-    monkeypatch.setattr(
-        "starlette.requests.Request.is_disconnected", AsyncMock(return_value=True)
-    )
+    monkeypatch.setattr("starlette.requests.Request.is_disconnected", AsyncMock(return_value=True))
     app = create_app(container)
     with TestClient(app) as client:
         resp = client.get("/runs/run_disc_init/stream")
@@ -2716,6 +2965,7 @@ def test_cleanup_runs_rmtree_exception(tmp_path: Path, monkeypatch: pytest.Monke
     container = _make_container()
 
     from datetime import UTC, timedelta
+
     old_date = datetime.now(UTC) - timedelta(days=40)
 
     # 1. Old unlocked run that we'll attempt to delete, which raises exception
@@ -2748,6 +2998,7 @@ def test_cleanup_runs_rmtree_exception(tmp_path: Path, monkeypatch: pytest.Monke
     (dir_old / "stdout.log").write_text("logs")
 
     import asyncio
+
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save(run_old))
     loop.run_until_complete(container.store.save(run_no_dir))
@@ -2755,6 +3006,7 @@ def test_cleanup_runs_rmtree_exception(tmp_path: Path, monkeypatch: pytest.Monke
 
     # Mock shutil.rmtree to raise an exception
     import shutil
+
     def mock_rmtree(path, *args, **kwargs):
         raise OSError("Permission denied")
 
@@ -2796,9 +3048,7 @@ def test_preview_schedule_applies_dst_timezone() -> None:
     container = _make_container()
     app = create_app(container)
     with TestClient(app) as client:
-        resp = client.get(
-            "/schedules/preview?expression=*/5 * * * *&timezone=America/New_York"
-        )
+        resp = client.get("/schedules/preview?expression=*/5 * * * *&timezone=America/New_York")
         assert resp.status_code == 200
         times = [datetime.fromisoformat(t) for t in resp.json()["next_runs"]]
         assert len(times) == 5
@@ -2951,18 +3201,22 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
         created_at=NOW,
     )
     import asyncio
+
     loop = asyncio.new_event_loop()
     loop.run_until_complete(container.store.save_profile(profile))
     loop.close()
 
     # Mock croniter preview calculation to throw exception on specific cron expression "0 9 * * *"
     from croniter import croniter
+
     original_init = croniter.__init__
+
     def mock_init(self, expr, *args, **kwargs):
-        self._is_mock_exc = (expr == "0 9 * * *")
+        self._is_mock_exc = expr == "0 9 * * *"
         original_init(self, expr, *args, **kwargs)
 
     original_get_next = croniter.get_next
+
     def mock_get_next(self, *args, **kwargs):
         if getattr(self, "_is_mock_exc", False):
             raise ValueError("Simulated error")
@@ -2979,7 +3233,7 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
             "profile_id": "profile-ghost",
             "cron_expression": "0 2 * * *",
             "enabled": True,
-            "timezone": "UTC"
+            "timezone": "UTC",
         }
         resp = client.post("/schedules", json=payload)
         assert resp.status_code == 400
@@ -3026,7 +3280,7 @@ def test_schedule_exceptions_and_edge_cases(monkeypatch: pytest.MonkeyPatch) -> 
             "profile_id": "profile-valid",
             "cron_expression": "0 3 * * *",
             "enabled": True,
-            "timezone": "UTC"
+            "timezone": "UTC",
         }
         resp = client.put("/schedules/ghost-sched-id", json=update_payload)
         assert resp.status_code == 404
@@ -3120,8 +3374,10 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         # 5. tests_root.mkdir exception
         # Make is_dir return False for tests_root, and mock mkdir to raise exception
         monkeypatch.setattr(Path, "is_dir", lambda self: self != tests_root)
+
         def mock_mkdir_err(*args, **kwargs):
             raise OSError("mkdir failed")
+
         monkeypatch.setattr(Path, "mkdir", mock_mkdir_err)
         resp_mkdir = client.post("/tests/link", json={"path": str(local_project)})
         assert resp_mkdir.status_code == 500
@@ -3132,6 +3388,7 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         # 6. Failed to clear existing (unlink error)
         def mock_unlink_err(*args, **kwargs):
             raise OSError("unlink failed")
+
         monkeypatch.setattr(Path, "unlink", mock_unlink_err)
         # Force is_symlink to return True for my-local-project to trigger unlink
         original_is_symlink = Path.is_symlink
@@ -3150,8 +3407,10 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         # Create a real folder under tests_root where symlink should go
         fake_dir = tests_root / "fake_dir"
         fake_dir.mkdir(exist_ok=True)
+
         def mock_rmtree_err(*args, **kwargs):
             raise OSError("rmtree failed")
+
         monkeypatch.setattr("shutil.rmtree", mock_rmtree_err)
         resp_rmtree = client.post("/tests/link", json={"path": "/some/path/fake_dir"})
         assert resp_rmtree.status_code == 500
@@ -3162,6 +3421,7 @@ def test_link_test_suite_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         # 8. Failed to create symlink (os.symlink error)
         def mock_symlink_err(*args, **kwargs):
             raise OSError("symlink failed")
+
         monkeypatch.setattr("os.symlink", mock_symlink_err)
         resp_symlink = client.post("/tests/link", json={"path": str(local_project)})
         assert resp_symlink.status_code == 500
@@ -3252,9 +3512,7 @@ def test_link_overwrite_unregistered_dir_non_admin_forbidden(
 # ── External test suites: git clone / pull / delete (stage 2) ────────────
 
 
-def _git_proc(
-    returncode: int = 0, stdout: bytes = b"", stderr: bytes = b""
-) -> MagicMock:
+def _git_proc(returncode: int = 0, stdout: bytes = b"", stderr: bytes = b"") -> MagicMock:
     """Build a fake asyncio subprocess for git (communicate/wait/kill mocked)."""
     proc = MagicMock()
     proc.returncode = returncode
@@ -3298,16 +3556,12 @@ def _save_suite_in_store(store: object, **overrides: object) -> TestSuite:
     return suite
 
 
-def test_clone_success_records_git_suite(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_success_records_git_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
-    _seed_encrypted_credential(
-        container, cred_id="cred-1", owner="test_user", secret="ghp_x"
-    )
+    _seed_encrypted_credential(container, cred_id="cred-1", owner="test_user", secret="ghp_x")
     app = create_app(container)
     mock = _patch_git(monkeypatch, _git_proc(0))
 
@@ -3456,9 +3710,7 @@ def test_clone_credential_deleted_midflight_degrades_to_no_auth(
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
-    _seed_encrypted_credential(
-        container, cred_id="cred-1", owner="test_user", secret="ghp_x"
-    )
+    _seed_encrypted_credential(container, cred_id="cred-1", owner="test_user", secret="ghp_x")
 
     async def _gone(_credential_id: str) -> None:
         return None
@@ -3509,9 +3761,7 @@ def test_clone_with_others_credential_forbidden(
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
-    _seed_encrypted_credential(
-        container, cred_id="cred-bob", owner="bob", secret="ghp_bob"
-    )
+    _seed_encrypted_credential(container, cred_id="cred-bob", owner="bob", secret="ghp_bob")
     app = create_app(container)
     _override_user(app, "alice", UserRole.USER)
     _forbid_git(monkeypatch)
@@ -3582,9 +3832,7 @@ def test_pull_with_deleted_credential_falls_back_unauthenticated(
     assert mock.call_args_list[0].kwargs.get("env") is None
 
 
-def test_clone_records_default_branch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_records_default_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3593,9 +3841,7 @@ def test_clone_records_default_branch(
     mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0, stdout=b"main\n"))
 
     with TestClient(app) as client:
-        resp = client.post(
-            "/tests/clone", json={"url": "https://example.com/org/myrepo.git"}
-        )
+        resp = client.post("/tests/clone", json={"url": "https://example.com/org/myrepo.git"})
 
     assert resp.status_code == 200
     assert resp.json()["suite_name"] == "myrepo"
@@ -3619,9 +3865,7 @@ def test_clone_default_branch_empty_records_none(
     _patch_git(monkeypatch, _git_proc(0), _git_proc(0, stdout=b"   \n"))
 
     with TestClient(app) as client:
-        resp = client.post(
-            "/tests/clone", json={"url": "https://example.com/org/blank.git"}
-        )
+        resp = client.post("/tests/clone", json={"url": "https://example.com/org/blank.git"})
 
     assert resp.status_code == 200
     suite = container.store._suites["blank"]  # type: ignore[attr-defined]
@@ -3639,18 +3883,14 @@ def test_clone_default_branch_revparse_failure_records_none(
     _patch_git(monkeypatch, _git_proc(0), _git_proc(1, stderr=b"boom"))
 
     with TestClient(app) as client:
-        resp = client.post(
-            "/tests/clone", json={"url": "https://example.com/org/detached.git"}
-        )
+        resp = client.post("/tests/clone", json={"url": "https://example.com/org/detached.git"})
 
     assert resp.status_code == 200
     suite = container.store._suites["detached"]  # type: ignore[attr-defined]
     assert suite.ref is None
 
 
-def test_clone_accepts_ssh_url(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_accepts_ssh_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3671,9 +3911,7 @@ def test_clone_accepts_ssh_url(
     assert suite.ref == "dev"
 
 
-def test_clone_name_without_git_suffix(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_name_without_git_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3730,9 +3968,7 @@ def test_clone_rejects_unsafe_name(
     assert resp.status_code == 400
 
 
-def test_clone_conflict_existing_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_conflict_existing_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "dup").mkdir()
@@ -3750,9 +3986,7 @@ def test_clone_conflict_existing_dir(
     assert resp.status_code == 409
 
 
-def test_clone_conflict_existing_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_conflict_existing_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3770,9 +4004,7 @@ def test_clone_conflict_existing_record(
     assert resp.status_code == 409
 
 
-def test_clone_git_failure_returns_502(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_git_failure_returns_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3791,9 +4023,7 @@ def test_clone_git_failure_returns_502(
     assert "x" not in container.store._suites  # type: ignore[attr-defined]
 
 
-def test_clone_failure_scrubs_server_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_failure_scrubs_server_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # git stderr must not leak the absolute suites-root path into the API detail.
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
@@ -3814,9 +4044,7 @@ def test_clone_failure_scrubs_server_path(
     assert "<suite>" in resp.json()["detail"]
 
 
-def test_clone_timeout_returns_502(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_clone_timeout_returns_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3824,9 +4052,7 @@ def test_clone_timeout_returns_502(
     app = create_app(container)
     proc = _git_proc(0)
     proc.communicate = AsyncMock(side_effect=TimeoutError)
-    monkeypatch.setattr(
-        "asyncio.create_subprocess_exec", AsyncMock(return_value=proc)
-    )
+    monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=proc))
 
     with TestClient(app) as client:
         resp = client.post(
@@ -3862,9 +4088,7 @@ def test_pull_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "FETCH_HEAD" in second.args
 
 
-def test_pull_uses_head_when_ref_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pull_uses_head_when_ref_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "repo").mkdir()
@@ -3895,9 +4119,7 @@ def test_pull_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     assert resp.status_code == 404
 
 
-def test_pull_forbidden_non_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pull_forbidden_non_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "repo").mkdir()
@@ -3914,16 +4136,12 @@ def test_pull_forbidden_non_owner(
     assert resp.status_code == 403
 
 
-def test_pull_local_suite_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pull_local_suite_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
-    _save_suite_in_store(
-        container.store, name="repo", source="local", repo_url=None, ref=None
-    )
+    _save_suite_in_store(container.store, name="repo", source="local", repo_url=None, ref=None)
     app = create_app(container)
     _forbid_git(monkeypatch)
 
@@ -3934,9 +4152,7 @@ def test_pull_local_suite_rejected(
     assert "Only git suites" in resp.json()["detail"]
 
 
-def test_pull_fetch_failure_502(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pull_fetch_failure_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "repo").mkdir()
@@ -3953,9 +4169,7 @@ def test_pull_fetch_failure_502(
     assert "git fetch failed" in resp.json()["detail"]
 
 
-def test_pull_reset_failure_502(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pull_reset_failure_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "repo").mkdir()
@@ -3972,9 +4186,7 @@ def test_pull_reset_failure_502(
     assert "git reset failed" in resp.json()["detail"]
 
 
-def test_delete_git_suite_rmtree(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_git_suite_rmtree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -3993,16 +4205,12 @@ def test_delete_git_suite_rmtree(
     assert "repo" not in container.store._suites  # type: ignore[attr-defined]
 
 
-def test_delete_local_suite_unlink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_local_suite_unlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
-    _save_suite_in_store(
-        container.store, name="proj", source="local", repo_url=None, ref=None
-    )
+    _save_suite_in_store(container.store, name="proj", source="local", repo_url=None, ref=None)
     target = tmp_path / "proj-target"
     target.mkdir()
     link = tests_root / "proj"
@@ -4018,9 +4226,7 @@ def test_delete_local_suite_unlink(
     assert "proj" not in container.store._suites  # type: ignore[attr-defined]
 
 
-def test_delete_forbidden_non_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_forbidden_non_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -4038,9 +4244,7 @@ def test_delete_forbidden_non_owner(
     assert suite_dir.exists()
 
 
-def test_delete_unregistered_dir_admin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_unregistered_dir_admin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -4088,9 +4292,7 @@ def test_delete_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert resp.status_code == 404
 
 
-def test_delete_orphan_record_no_fs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_orphan_record_no_fs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -4122,9 +4324,7 @@ def test_prepare_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert resp.status_code == 404
 
 
-def test_prepare_forbidden_non_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prepare_forbidden_non_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -4140,16 +4340,12 @@ def test_prepare_forbidden_non_owner(
     assert resp.status_code == 403
 
 
-def test_prepare_local_suite_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prepare_local_suite_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
     container = _make_container()
-    _save_suite_in_store(
-        container.store, name="repo", source="local", repo_url=None, ref=None
-    )
+    _save_suite_in_store(container.store, name="repo", source="local", repo_url=None, ref=None)
     app = create_app(container)
     _forbid_git(monkeypatch)  # local suites reuse host deps; npm must not run
 
@@ -4175,9 +4371,7 @@ def test_prepare_git_no_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert resp.status_code == 404
 
 
-def test_prepare_git_no_package_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prepare_git_no_package_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "repo").mkdir()
@@ -4194,9 +4388,7 @@ def test_prepare_git_no_package_json(
     assert "nothing to prepare" in resp.json()["message"]
 
 
-def test_prepare_git_npm_ci_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prepare_git_npm_ci_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     suite_dir = tests_root / "repo"
@@ -4221,9 +4413,7 @@ def test_prepare_git_npm_ci_success(
     assert mock.call_args.kwargs["cwd"] == str(suite_dir)
 
 
-def test_prepare_git_npm_ci_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prepare_git_npm_ci_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     suite_dir = tests_root / "repo"

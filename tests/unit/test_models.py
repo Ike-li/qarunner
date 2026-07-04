@@ -216,4 +216,3 @@ class TestRunRequestValidation:
         from qarunner.models import RunRequest
 
         assert RunRequest(tests_path="t").executor_mode == "docker"
-

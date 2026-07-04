@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 
 import pytest
 
 from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
-
 
 # ── minimal fake store for poller tests ──────────────────────────────────────
 
@@ -50,11 +50,17 @@ async def test_start_and_shutdown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shutdown_before_start_is_noop() -> None:
+    store = _FakeStore()
+    scheduler = AsyncioScheduler(store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1)
+    await scheduler.shutdown()
+    assert scheduler._poller_task is None
+
+
+@pytest.mark.asyncio
 async def test_start_is_idempotent() -> None:
     store = _FakeStore()
-    scheduler = AsyncioScheduler(
-        store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1
-    )
+    scheduler = AsyncioScheduler(store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1)
     await scheduler.start()
     await scheduler.start()  # second call is a no-op
     assert scheduler._running
@@ -63,7 +69,6 @@ async def test_start_is_idempotent() -> None:
 
 @pytest.mark.asyncio
 async def test_start_raises_when_run_fn_not_set() -> None:
-    scheduler = AsyncioScheduler(store=_FakeStore(), max_concurrency=1)
     # _run_fn is None because we used the no-store constructor path
     # — we need to simulate the case where set_run_fn was never called.
     # Construct without run_fn and verify start() raises.
@@ -169,9 +174,7 @@ async def test_poller_sleeps_when_queue_empty() -> None:
     async def run_fn(run_id: str) -> None:
         executed.append(run_id)
 
-    scheduler = AsyncioScheduler(
-        store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05
-    )
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05)
     await scheduler.start()
     # No enqueued runs — poller should sleep, not crash
     await asyncio.sleep(0.1)
@@ -184,6 +187,15 @@ async def test_poller_sleeps_when_queue_empty() -> None:
     assert "run-late" in executed
 
     await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_poller_loop_exits_when_not_running() -> None:
+    scheduler = AsyncioScheduler(
+        store=_FakeStore(), run_fn=lambda _: asyncio.sleep(0), max_concurrency=1
+    )
+    scheduler._running = False
+    await scheduler._poller_loop()
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────
@@ -227,9 +239,7 @@ async def test_cancel_unknown_key_returns_false() -> None:
 async def test_cancel_queued_not_running_returns_false() -> None:
     """cancel() is for in-flight tasks only; QUEUED runs are cancelled via DB."""
     store = _FakeStore(_queued=["run-1"])
-    scheduler = AsyncioScheduler(
-        store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1
-    )
+    scheduler = AsyncioScheduler(store=store, run_fn=lambda _: asyncio.sleep(0), max_concurrency=1)
     # Before the poller picks up run-1, cancel() should return False
     # (no live task to cancel — orchestrator handles DB update)
     assert scheduler.cancel("run-1") is False
@@ -331,10 +341,8 @@ async def test_failing_task_logs_exception(caplog: pytest.LogCaptureFixture) -> 
         raise RuntimeError("boom")
 
     task: asyncio.Task[None] = asyncio.create_task(_boom())
-    try:
+    with contextlib.suppress(RuntimeError):
         await task
-    except RuntimeError:
-        pass
 
     with caplog.at_level("ERROR", logger="qarunner.adapters.asyncio_scheduler"):
         scheduler._on_task_done(task)
@@ -365,9 +373,7 @@ async def test_poller_handles_dequeue_exception() -> None:
         executed_event.set()
 
     executed_event = asyncio.Event()
-    scheduler = AsyncioScheduler(
-        store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05
-    )
+    scheduler = AsyncioScheduler(store=store, run_fn=run_fn, max_concurrency=2, poll_interval=0.05)
     await scheduler.start()
     scheduler.enqueue("any")
     await executed_event.wait()  # poller recovers and picks up run-after-error

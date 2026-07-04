@@ -95,15 +95,13 @@ class Settings(BaseSettings):
     login_throttle_base_seconds: float = 60.0
     login_throttle_max_seconds: float = 900.0
 
-
-
     @field_validator("secret_key")
     @classmethod
     def _reject_placeholder_secret_key(cls, value: str) -> str:
         if not value.strip() or value in _PLACEHOLDER_SECRET_KEYS:
             raise ValueError(
                 "QARUNNER_SECRET_KEY is unset, blank, or a known placeholder — set a "
-                'strong random value, e.g. '
+                "strong random value, e.g. "
                 '`python -c "import secrets; print(secrets.token_urlsafe(64))"`'
             )
         return value
