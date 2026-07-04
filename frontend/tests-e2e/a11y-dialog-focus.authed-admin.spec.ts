@@ -204,14 +204,71 @@ test.describe('A1.2 AddSuiteModal 焦点管理', () => {
   });
 });
 
-// ── A1.3  ScheduleModal (已接 useDialogA11y) ───────────────────────────────
+// ── A1.3  ScheduleModal (用 API 创建 profile 后验证) ───────────────────────
 
-test.describe.fixme('A1.3 ScheduleModal 焦点管理', () => {
-  test('F1-F4 需要已存在的 profile 和 schedule 才能打开', async ({ page }) => {
-    // ScheduleModal requires a profile with schedule button visible in sidebar.
-    // This needs API setup (create profile + schedule) which is complex for a
-    // pure a11y test. Deferred until schedule E2E infra is available.
-    await page.goto('/');
+test.describe('A1.3 ScheduleModal 焦点管理', () => {
+  test('dialog 语义正确 + input 有 aria-label', async ({ page }) => {
+    // Create a profile via API so the sidebar shows it
+    const { loginAndGetContext, createProfile, deleteProfile } = await import('./helpers/api');
+    const adminCtx = await loginAndGetContext('admin');
+    let profileId: string | null = null;
+    try {
+      profileId = await createProfile(adminCtx, {
+        name: 'a11y-schedule-test',
+        tests_path: 'sample_tests',
+        runner: 'pytest',
+      });
+    } finally {
+      await adminCtx.dispose();
+    }
+
+    if (!profileId) {
+      test.skip(true, 'Could not create profile');
+      return;
+    }
+
+    try {
+      await page.goto('/');
+      await expect(page.getByTestId('stat-total')).toBeVisible();
+
+      // Find the schedule button for the profile in the sidebar
+      const schedBtn = page.getByTestId('open-schedule-button');
+      const hasBtn = await schedBtn.isVisible({ timeout: 5_000 }).catch(() => false);
+
+      if (!hasBtn) {
+        test.skip(true, 'Schedule button not visible in sidebar');
+        return;
+      }
+
+      await schedBtn.click();
+      await page.waitForTimeout(500);
+
+      // Semi Modal portal — use evaluate to check dialog semantics
+      const dialogInfo = await page.evaluate(() => {
+        const modal = document.querySelector('.semi-modal-content');
+        return {
+          hasDialog: modal?.getAttribute('role') === 'dialog',
+          nameInput: document.querySelector('[data-testid="schedule-name-input"]')?.getAttribute('aria-label'),
+          cronInput: document.querySelector('[data-testid="schedule-cron-input"]')?.getAttribute('aria-label'),
+          tzSelect: document.querySelector('[data-testid="schedule-timezone-select"]')?.getAttribute('aria-label'),
+        };
+      });
+
+      expect(dialogInfo.hasDialog).toBe(true);
+      expect(dialogInfo.nameInput).toBeTruthy();
+      expect(dialogInfo.cronInput).toBeTruthy();
+      expect(dialogInfo.tzSelect).toBeTruthy();
+    } finally {
+      // Cleanup
+      if (profileId) {
+        const cleanupCtx = await loginAndGetContext('admin');
+        try {
+          await deleteProfile(cleanupCtx, profileId);
+        } finally {
+          await cleanupCtx.dispose();
+        }
+      }
+    }
   });
 });
 

@@ -4064,4 +4064,16 @@
   transform: translateY(0);
 }
 
+/* ── Global focus-visible indicator (a11y) ──────────────────────────── */
+/* Provides a visible focus ring for keyboard navigation (Tab/Shift+Tab).
+   Mouse clicks do NOT show the ring (:focus-visible vs :focus). */
+*:focus-visible {
+  outline: 2px solid var(--semi-color-primary, #5637cd);
+  outline-offset: 2px;
+}
+
+/* Suppress focus ring for mouse-initiated focus on interactive elements */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
 
