@@ -2,7 +2,6 @@ import { Plus, RotateCw, Trash2, Users } from 'lucide-react'
 import { Modal, Banner, Table, Tag, Input, Select, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
-import { useDialogA11y } from '../hooks/useDialogA11y'
 
 const formatDate = (iso: string) => new Date(iso).toLocaleString()
 
@@ -115,6 +114,7 @@ export function UserManagementModal() {
                           type="danger"
                           icon={<Trash2 size={13} />}
                           data-testid="user-delete"
+                          aria-label={d.lang === 'zh' ? `删除用户 ${record.username}` : `Delete user ${record.username}`}
                           onClick={() => {
                             if (
                               window.confirm(
@@ -149,6 +149,7 @@ export function UserManagementModal() {
                   value={u.newUsername}
                   onChange={u.setNewUsername}
                   data-testid="user-new-username"
+                  aria-label={d.lang === 'zh' ? '新用户名' : 'New username'}
                 />
               </Col>
               <Col span={9}>
@@ -158,6 +159,7 @@ export function UserManagementModal() {
                   value={u.newPassword}
                   onChange={u.setNewPassword}
                   data-testid="user-new-password"
+                  aria-label={d.lang === 'zh' ? '新密码' : 'New password'}
                 />
               </Col>
               <Col span={6}>
@@ -165,6 +167,7 @@ export function UserManagementModal() {
                   value={u.newUserRole}
                   onChange={(v) => u.setNewUserRole(v as 'admin' | 'user')}
                   style={{ width: '100%' }}
+                  aria-label={d.lang === 'zh' ? '用户角色' : 'User role'}
                 >
                   <Select.Option value="user">User</Select.Option>
                   <Select.Option value="admin">Admin</Select.Option>
@@ -192,6 +195,7 @@ export function UserManagementModal() {
                 value={String(u.retentionDays)}
                 onChange={(v) => u.setRetentionDays(Number(v))}
                 addonAfter={d.lang === 'zh' ? '天' : 'days'}
+                aria-label={d.lang === 'zh' ? '保留天数' : 'Retention days'}
               />
             </Col>
             <Col span={6}>

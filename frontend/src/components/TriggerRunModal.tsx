@@ -171,6 +171,7 @@ export function TriggerRunModal() {
                   theme="light"
                   icon={<X size={16} />}
                   title={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
+                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
                   onClick={(e) => onDeleteProfile(d.form.selectedProfileId, e as any)}
                   style={{ flexShrink: 0 }}
                 />
@@ -258,6 +259,7 @@ export function TriggerRunModal() {
                       updated[idx].key = val
                       d.form.setEnvVars(updated)
                     }}
+                    aria-label={d.lang === 'zh' ? `环境变量名 ${idx + 1}` : `Environment variable name ${idx + 1}`}
                   />
                 </Col>
                 <Col span={11}>
@@ -269,6 +271,7 @@ export function TriggerRunModal() {
                       updated[idx].value = val
                       d.form.setEnvVars(updated)
                     }}
+                    aria-label={d.lang === 'zh' ? `环境变量值 ${idx + 1}` : `Environment variable value ${idx + 1}`}
                   />
                 </Col>
                 <Col span={2} style={{ display: 'flex', justifyContent: 'center' }}>
@@ -276,6 +279,7 @@ export function TriggerRunModal() {
                     type="danger"
                     theme="borderless"
                     icon={<X size={16} />}
+                    aria-label={d.lang === 'zh' ? '删除环境变量' : 'Remove environment variable'}
                     onClick={() => {
                       d.form.setEnvVars(d.form.envVars.filter((_, i) => i !== idx))
                     }}
@@ -346,6 +350,7 @@ export function TriggerRunModal() {
                     value={d.form.profileName}
                     onChange={(val) => d.form.setProfileName(val)}
                     required
+                    aria-label={d.lang === 'zh' ? '方案名称' : 'Profile name'}
                   />
                 </Col>
                 <Col span={12}>
@@ -353,6 +358,7 @@ export function TriggerRunModal() {
                     placeholder={d.t('profileDescPlaceholder')}
                     value={d.form.profileDesc}
                     onChange={(val) => d.form.setProfileDesc(val)}
+                    aria-label={d.lang === 'zh' ? '方案描述' : 'Profile description'}
                   />
                 </Col>
               </Row>
@@ -381,6 +387,7 @@ export function TriggerRunModal() {
                     value={d.form.profileName}
                     onChange={(val) => d.form.setProfileName(val)}
                     required={d.form.isSavingProfile}
+                    aria-label={d.lang === 'zh' ? '方案名称' : 'Profile name'}
                   />
                 </Col>
                 <Col span={12}>
@@ -388,6 +395,7 @@ export function TriggerRunModal() {
                     placeholder={d.t('profileDescPlaceholder')}
                     value={d.form.profileDesc}
                     onChange={(val) => d.form.setProfileDesc(val)}
+                    aria-label={d.lang === 'zh' ? '方案描述' : 'Profile description'}
                   />
                 </Col>
               </Row>

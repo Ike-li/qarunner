@@ -129,6 +129,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
               onChange={setPath}
               prefix={<FolderPlus size={14} />}
               data-testid="link-path-input"
+              aria-label={isZh ? '本地项目目录路径' : 'Local project directory path'}
             />
             {feedback && (
               <Banner
@@ -151,6 +152,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
               onChange={setGitUrl}
               prefix={<GitBranch size={14} />}
               data-testid="clone-url-input"
+              aria-label={isZh ? 'Git 仓库 URL' : 'Git repository URL'}
             />
             <Input
               placeholder={isZh ? '分支/标签 (可选)' : 'Branch / tag (optional)'}
@@ -158,6 +160,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
               onChange={setGitRef}
               prefix={<Settings size={14} />}
               data-testid="clone-ref-input"
+              aria-label={isZh ? 'Git 分支或标签' : 'Git branch or tag'}
             />
             <Select
               placeholder={isZh ? '凭证 (私有仓库, 可选)' : 'Credential (private repos, optional)'}
@@ -166,6 +169,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
               style={{ width: '100%' }}
               prefix={<KeyRound size={14} />}
               data-testid="clone-cred-select"
+              aria-label={isZh ? 'Git 凭证' : 'Git credential'}
             >
               <Select.Option value="">{isZh ? '— 无 (公开仓库) —' : '— None (public repo) —'}</Select.Option>
               {d.credentials.credentials.map((c) => (
@@ -181,6 +185,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
                 value={newCredName}
                 onChange={setNewCredName}
                 data-testid="clone-newcred-name"
+                aria-label={isZh ? '新凭证名' : 'New credential name'}
               />
               <Input
                 size="small"
@@ -189,6 +194,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
                 value={newCredSecret}
                 onChange={setNewCredSecret}
                 data-testid="clone-newcred-secret"
+                aria-label={isZh ? 'HTTPS token' : 'HTTPS token'}
               />
               <Button
                 size="small"

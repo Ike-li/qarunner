@@ -43,6 +43,7 @@ export function Header() {
             <Button theme="borderless"
               onClick={() => d.setTheme(d.theme === 'dark' ? 'light' : 'dark')}
               icon={d.theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
+              aria-label={d.theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               style={{ color: 'var(--semi-color-text-1)' }} />
           </Tooltip>
 
@@ -58,7 +59,7 @@ export function Header() {
 
           <Tooltip content={d.t('signOut')}>
             <Button theme="borderless" onClick={d.handleLogout}
-              icon={<LogOut size={16} />} style={{ color: 'var(--semi-color-text-1)' }} />
+              icon={<LogOut size={16} />} aria-label={d.t('signOut')} style={{ color: 'var(--semi-color-text-1)' }} />
           </Tooltip>
         </Space>
       </div>

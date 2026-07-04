@@ -46,6 +46,7 @@ export function ScheduleModal() {
               value={s.schedName}
               onChange={s.setSchedName}
               data-testid="schedule-name-input"
+              aria-label={d.lang === 'zh' ? '调度名称' : 'Schedule name'}
             />
           </Col>
           <Col span={6}>
@@ -63,6 +64,7 @@ export function ScheduleModal() {
               onChange={s.setSchedExpression}
               prefix={<Clock size={14} />}
               data-testid="schedule-cron-input"
+              aria-label={d.lang === 'zh' ? 'Cron 表达式' : 'Cron expression'}
             />
           </Col>
           <Col span={8}>
@@ -71,6 +73,7 @@ export function ScheduleModal() {
               onChange={(v) => s.setSchedTimezone(v as string)}
               style={{ width: '100%' }}
               data-testid="schedule-timezone-select"
+              aria-label={d.lang === 'zh' ? '时区' : 'Timezone'}
             >
               <Select.Option value="UTC">UTC</Select.Option>
               <Select.Option value="Asia/Shanghai">Asia/Shanghai</Select.Option>

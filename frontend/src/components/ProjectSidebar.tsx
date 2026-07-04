@@ -38,6 +38,7 @@ export function ProjectSidebar() {
             shape="circle"
             data-testid="open-add-suite-button"
             icon={<IconPlus style={{ fontSize: '12px' }} />}
+            aria-label={d.lang === 'zh' ? '添加测试套件 / 绑定项目' : 'Add Test Suite / Link Project'}
             onClick={(e) => {
               e.stopPropagation()
               d.setIsAddSuiteModalOpen(true)
@@ -131,6 +132,7 @@ export function ProjectSidebar() {
                         type="primary"
                         shape="circle"
                         icon={<IconPlay style={{ fontSize: '10px' }} />}
+                        aria-label={d.t('quickTrigger')}
                         onClick={() => {
                           d.form.setTestsPath(suite)
                           d.setIsTriggerModalOpen(true)
@@ -154,6 +156,7 @@ export function ProjectSidebar() {
                           type="tertiary"
                           data-testid={`suite-update-${suite}`}
                           icon={<IconRefresh style={{ fontSize: '10px' }} />}
+                          aria-label={d.lang === 'zh' ? '更新 (git pull)' : 'Update (git pull)'}
                           onClick={() => d.suites.handlePullSuite(suite)}
                           style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                         />
@@ -167,6 +170,7 @@ export function ProjectSidebar() {
                           type="tertiary"
                           data-testid={`suite-prepare-${suite}`}
                           icon={<IconDownload style={{ fontSize: '10px' }} />}
+                          aria-label={d.lang === 'zh' ? '准备依赖 (npm ci)' : 'Prepare deps (npm ci)'}
                           onClick={() => d.suites.handlePrepareSuite(suite)}
                           style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                         />
@@ -179,6 +183,7 @@ export function ProjectSidebar() {
                         type="danger"
                         data-testid={`suite-remove-${suite}`}
                         icon={<IconDelete style={{ fontSize: '10px' }} />}
+                        aria-label={d.lang === 'zh' ? '移除套件' : 'Remove suite'}
                         onClick={() => d.suites.handleDeleteSuite(suite, () => { if (d.selectedSuiteFilter===suite) d.setSelectedSuiteFilter(null) })}
                         style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                       />
@@ -285,6 +290,7 @@ export function ProjectSidebar() {
                                   theme="borderless"
                                   type="tertiary"
                                   icon={<IconPlay style={{ fontSize: '10px' }} />}
+                                  aria-label={d.lang === 'zh' ? '立即执行' : 'Instant Run'}
                                   onClick={() => d.profiles.handleTriggerProfile(profile, (runId) => { d.runs.fetchRuns(); d.runs.setSelectedRunId(runId) })}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
@@ -295,6 +301,7 @@ export function ProjectSidebar() {
                                   theme="borderless"
                                   type="tertiary"
                                   icon={<IconEdit style={{ fontSize: '10px' }} />}
+                                  aria-label={d.lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
                                   onClick={() => { d.form.openEditProfile(profile); d.setSelectedFiles(profile.selected_files||[]); d.setSelectedMarkers(profile.selected_markers||[]); d.setIsTriggerModalOpen(true) }}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
@@ -305,6 +312,7 @@ export function ProjectSidebar() {
                                   theme="borderless"
                                   type={isSchedActive ? "primary" : "tertiary"}
                                   icon={<IconClock style={{ fontSize: '10px' }} />}
+                                  aria-label={d.lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
                                   onClick={() => d.schedules.handleOpenScheduleModal(profile)}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                   data-testid="open-schedule-button"
@@ -316,6 +324,7 @@ export function ProjectSidebar() {
                                   theme="borderless"
                                   type="danger"
                                   icon={<IconDelete style={{ fontSize: '10px' }} />}
+                                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
                                   onClick={(e) => { d.profiles.handleDeleteProfile(profile.id, e); if (d.form.selectedProfileId===profile.id) d.form.setSelectedProfileId('') }}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
