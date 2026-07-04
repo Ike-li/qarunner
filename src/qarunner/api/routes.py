@@ -1287,7 +1287,16 @@ async def get_metrics(
         avg_duration_ms_7d = sum(durations) / len(durations) if durations else 0.0
 
     # ── Flaky count (30-day window) ──
-    flaky_count = await container.store.count_flaky_tests(days=30, created_by=owner)
+    flaky_policy = flaky.FlakyPolicy(
+        min_observations=container.settings.flaky_min_observations,
+        flip_threshold=container.settings.flaky_flip_threshold,
+    )
+    flaky_count = await container.store.count_flaky_tests(
+        days=30,
+        created_by=owner,
+        min_observations=flaky_policy.min_observations,
+        flip_threshold=flaky_policy.flip_threshold,
+    )
 
     # ── Per-suite breakdown (all completed runs, not just 7-day) ──
     suite_map: dict[str, list[Run]] = {}
@@ -1449,7 +1458,11 @@ async def get_case_history(
     container = request.app.state.container
     created_by = None if current_user.role == UserRole.ADMIN else current_user.username
     points = await container.store.get_case_history(tests_path, suite, name, limit, created_by)
-    is_flaky, flips = flaky.flakiness([p.status for p in points])
+    policy = flaky.FlakyPolicy(
+        min_observations=container.settings.flaky_min_observations,
+        flip_threshold=container.settings.flaky_flip_threshold,
+    )
+    is_flaky, flips = flaky.flakiness([p.status for p in points], policy=policy)
     return CaseHistoryResponse(points=points, flaky=is_flaky, flip_count=flips)
 
 

@@ -186,8 +186,15 @@ class Store(
         """
         ...
 
-    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
-        """Count unique test cases with ≥2 pass/fail flips in the last *days*."""
+    async def count_flaky_tests(
+        self,
+        days: int = 30,
+        created_by: str | None = None,
+        *,
+        min_observations: int = 4,
+        flip_threshold: int = 3,
+    ) -> int:
+        """Count unique test cases matching the configured flaky policy."""
         ...
 
     async def dequeue_next_queued(self) -> str | None:

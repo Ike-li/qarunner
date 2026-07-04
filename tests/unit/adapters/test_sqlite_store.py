@@ -1136,6 +1136,27 @@ async def test_count_flaky_tests_detects_flips(store: SqliteStore) -> None:
     assert await store.count_flaky_tests(days=30) == 1
 
 
+async def test_count_flaky_tests_ignores_two_flip_regression_fix(
+    store: SqliteStore,
+) -> None:
+    now = datetime.now(UTC)
+    for i, st in enumerate(["passed", "failed", "passed"]):
+        run = _make_run(
+            id=f"tw{i}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=now - timedelta(hours=3 - i),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"tw{i}",
+            "suite_a",
+            run.created_at,
+            [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
+        )
+    assert await store.count_flaky_tests(days=30) == 0
+
+
 async def test_count_flaky_tests_ignores_stable(store: SqliteStore) -> None:
     now = datetime.now(UTC)
     for i, st in enumerate(["passed", "passed", "passed"]):
@@ -1159,7 +1180,12 @@ async def test_count_flaky_tests_owner_scoped(store: SqliteStore) -> None:
     now = datetime.now(UTC)
     # alice's test: flaky; bob's test: stable.
     for i, (owner, st) in enumerate(
-        [("alice", "passed"), ("alice", "failed"), ("alice", "passed")]
+        [
+            ("alice", "passed"),
+            ("alice", "failed"),
+            ("alice", "passed"),
+            ("alice", "failed"),
+        ]
     ):
         run = _make_run(
             id=f"own{i}",

@@ -17,6 +17,8 @@ _SETTINGS_ENV_KEYS = [
     "QARUNNER_EXECUTABLE",
     "QARUNNER_DEFAULT_TIMEOUT_SECONDS",
     "QARUNNER_MAX_CONCURRENCY",
+    "QARUNNER_FLAKY_MIN_OBSERVATIONS",
+    "QARUNNER_FLAKY_FLIP_THRESHOLD",
 ]
 
 
@@ -34,13 +36,19 @@ class TestSettings:
         assert s.executable == ""
         assert s.default_timeout_seconds == 1800
         assert s.max_concurrency == 4
+        assert s.flaky_min_observations == 4
+        assert s.flaky_flip_threshold == 3
 
     def test_override(self, monkeypatch):
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", "/custom/tests")
         monkeypatch.setenv("QARUNNER_MAX_CONCURRENCY", "8")
+        monkeypatch.setenv("QARUNNER_FLAKY_MIN_OBSERVATIONS", "6")
+        monkeypatch.setenv("QARUNNER_FLAKY_FLIP_THRESHOLD", "4")
         s = Settings()
         assert s.tests_root == "/custom/tests"
         assert s.max_concurrency == 8
+        assert s.flaky_min_observations == 6
+        assert s.flaky_flip_threshold == 4
 
 
 @pytest.mark.parametrize(

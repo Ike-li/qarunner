@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     login_throttle_threshold: int = 5
     login_throttle_base_seconds: float = 60.0
     login_throttle_max_seconds: float = 900.0
+    # Flaky detection (P2-1). Defaults require a continuing oscillation
+    # (pass→fail→pass→fail) rather than a one-off regression + fix.
+    flaky_min_observations: int = Field(default=4, ge=1)
+    flaky_flip_threshold: int = Field(default=3, ge=1)
 
     @field_validator("secret_key")
     @classmethod

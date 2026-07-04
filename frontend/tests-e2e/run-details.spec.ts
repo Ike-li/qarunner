@@ -106,9 +106,10 @@ const FLAKY_HISTORY = {
     { created_at: '2026-06-01T10:00:00Z', status: 'passed' },
     { created_at: '2026-06-02T10:00:00Z', status: 'failed' },
     { created_at: '2026-06-03T10:00:00Z', status: 'passed' },
+    { created_at: '2026-06-04T10:00:00Z', status: 'failed' },
   ],
   flaky: true,
-  flip_count: 2,
+  flip_count: 3,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────

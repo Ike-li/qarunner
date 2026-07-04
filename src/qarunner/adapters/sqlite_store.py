@@ -12,6 +12,7 @@ from pathlib import Path
 
 import aiosqlite
 
+from qarunner.core.flaky import FlakyPolicy, flakiness
 from qarunner.errors import RunNotFound
 from qarunner.models import (
     CaseHistoryPoint,
@@ -602,12 +603,20 @@ class SqliteStore:
         # the timeline and the flaky flip-count.
         return [CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1]) for r in reversed(rows)]
 
-    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
-        """Count unique test cases with ≥2 pass/fail flips in the last *days*.
+    async def count_flaky_tests(
+        self,
+        days: int = 30,
+        created_by: str | None = None,
+        *,
+        min_observations: int = 4,
+        flip_threshold: int = 3,
+    ) -> int:
+        """Count unique test cases matching the configured flaky policy.
 
         A "flip" is an adjacent pair of runs where the case passed in one and
-        failed (or errored) in the next.  Groups by (tests_path, suite, name)
-        across all completed runs in the window.
+        failed (or errored) in the next. Groups by (tests_path, suite, name)
+        across all completed runs in the window, then delegates verdicts to
+        ``core.flaky`` so metrics and case history use the same rule.
         """
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         owner_filter = ""
@@ -617,26 +626,23 @@ class SqliteStore:
             params.append(created_by)
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT c.tests_path, c.suite, c.name, "
-                "  GROUP_CONCAT(CASE WHEN c.status IN ('failed','error') "
-                "THEN 'F' ELSE 'P' END, '') "
-                "  AS seq "
+                "SELECT c.tests_path, c.suite, c.name, c.status "
                 "FROM run_test_cases c "
                 "JOIN runs r ON r.id = c.run_id "
                 "WHERE r.status = 'completed' AND c.created_at >= ? "
                 + owner_filter
-                + " GROUP BY c.tests_path, c.suite, c.name "
-                "ORDER BY c.tests_path, c.suite, c.name",
+                + " ORDER BY c.tests_path, c.suite, c.name, c.created_at",
                 params,
             )
             rows = await cursor.fetchall()
-        # Count sequences with ≥2 adjacent transitions (P→F or F→P).
-        count = 0
-        for _tp, _suite, _name, seq in rows:
-            flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
-            if flips >= 2:
-                count += 1
-        return count
+        grouped: dict[tuple[str, str, str], list[str]] = {}
+        for tests_path, suite, name, status in rows:
+            grouped.setdefault((tests_path, suite, name), []).append(status)
+        policy = FlakyPolicy(
+            min_observations=min_observations,
+            flip_threshold=flip_threshold,
+        )
+        return sum(1 for statuses in grouped.values() if flakiness(statuses, policy)[0])
 
     async def save_profile(self, profile: TestProfile) -> None:
         # Row-preserving upsert (create + update). A plain INSERT OR REPLACE

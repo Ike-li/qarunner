@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qarunner.core.flaky import flakiness
+from qarunner.core.flaky import FlakyPolicy, flakiness
 
 
 def test_oscillating_history_is_flaky() -> None:
@@ -22,6 +22,17 @@ def test_stable_passes_are_not_flaky() -> None:
 def test_single_transition_is_not_flaky() -> None:
     # A one-off fix (fail→pass) flips once — below the threshold.
     assert flakiness(["failed", "passed"]) == (False, 1)
+
+
+def test_two_flips_with_only_three_observations_is_not_flaky_by_default() -> None:
+    # pass→fail→pass can be a regression + fix; calibrated default waits for
+    # another alternating observation before calling the case flaky.
+    assert flakiness(["passed", "failed", "passed"]) == (False, 2)
+
+
+def test_policy_can_be_tuned_for_smaller_local_datasets() -> None:
+    policy = FlakyPolicy(min_observations=3, flip_threshold=2)
+    assert flakiness(["passed", "failed", "passed"], policy=policy) == (True, 2)
 
 
 def test_error_is_failure_and_skipped_is_not() -> None:

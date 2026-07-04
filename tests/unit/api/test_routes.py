@@ -70,6 +70,7 @@ class FakeStore:
     _users: dict[str, dict] = field(default_factory=dict)
     _credentials: dict[str, tuple] = field(default_factory=dict)
     _cases: dict[str, list] = field(default_factory=dict)
+    count_flaky_calls: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._profiles = {}
@@ -176,9 +177,24 @@ class FakeStore:
         rows.sort(key=lambda x: x[0], reverse=True)
         return [CaseHistoryPoint(created_at=ca, status=st) for ca, st in reversed(rows[:limit])]
 
-    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
+    async def count_flaky_tests(
+        self,
+        days: int = 30,
+        created_by: str | None = None,
+        *,
+        min_observations: int = 4,
+        flip_threshold: int = 3,
+    ) -> int:
         from datetime import timedelta
 
+        self.count_flaky_calls.append(
+            {
+                "days": days,
+                "created_by": created_by,
+                "min_observations": min_observations,
+                "flip_threshold": flip_threshold,
+            }
+        )
         since = datetime.now(UTC) - timedelta(days=days)
         grouped: dict[tuple[str, str, str], list[str]] = {}
         for run_id, cases in self._cases.items():
@@ -196,7 +212,7 @@ class FakeStore:
         for statuses in grouped.values():
             seq = "".join("F" if s in ("failed", "error") else "P" for s in statuses)
             flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
-            if flips >= 2:
+            if len(statuses) >= min_observations and flips >= flip_threshold:
                 count += 1
         return count
 
@@ -342,7 +358,12 @@ class FakeOrchestrator:
         return run
 
 
-def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> Container:
+def _make_container(
+    *,
+    login_throttle: object = None,
+    settings: Settings | None = None,
+    **orch_kwargs: object,
+) -> Container:
     store = FakeStore()
     orchestrator = FakeOrchestrator(store=store, **orch_kwargs)  # type: ignore[arg-type]
     scheduler = FakeSchedulePort()
@@ -354,7 +375,7 @@ def _make_container(*, login_throttle: object = None, **orch_kwargs: object) -> 
         schedule_service=ScheduleService(store=store, scheduler=scheduler),  # type: ignore[arg-type]
         profile_service=ProfileService(store=store),  # type: ignore[arg-type]
         login_throttle=login_throttle or LoginThrottle(clock=FakeClock()),  # type: ignore[arg-type]
-        settings=Settings(),
+        settings=settings or Settings(),
     )
 
 
@@ -1245,6 +1266,22 @@ def test_metrics_includes_completed_suite_with_no_recent_summary() -> None:
     assert suite["last_run_at"] is not None
 
 
+def test_metrics_passes_configured_flaky_policy_to_store() -> None:
+    settings = Settings(flaky_min_observations=6, flaky_flip_threshold=4)
+    container = _make_container(settings=settings)
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert container.store.count_flaky_calls[-1] == {
+        "days": 30,
+        "created_by": "alice",
+        "min_observations": 6,
+        "flip_threshold": 4,
+    }
+
+
 # ── GET /cases/history (cross-run stage 3) ──────────────────────────────
 
 
@@ -1275,6 +1312,31 @@ def test_case_history_oldest_first_with_flaky_verdict() -> None:
     assert [p["status"] for p in body["points"]] == ["passed", "failed", "passed", "failed"]
     assert body["flaky"] is True
     assert body["flip_count"] == 3
+
+
+def test_case_history_two_flips_below_calibrated_threshold() -> None:
+    container = _make_container()
+    for i, st in enumerate(["passed", "failed", "passed"]):
+        _make_run_in_store(
+            container.store,
+            id=f"h2-{i}",
+            created_by="alice",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=NOW + timedelta(minutes=i),
+        )
+        _seed_cases(
+            container.store,
+            f"h2-{i}",
+            [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
+        )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=suite_a&suite=s&name=t")
+    assert resp.status_code == 200
+    assert resp.json()["flaky"] is False
+    assert resp.json()["flip_count"] == 2
 
 
 def test_case_history_owner_scoped_for_non_admin() -> None:

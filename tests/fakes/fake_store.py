@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from qarunner.core.flaky import FlakyPolicy, flakiness
 from qarunner.errors import RunNotFound
 from qarunner.models import CaseHistoryPoint, Run, RunStatus, TestCaseResult
 
@@ -80,8 +81,15 @@ class InMemoryRunStore:
         self._runs[run.id] = run
         return run.id
 
-    async def count_flaky_tests(self, days: int = 30, created_by: str | None = None) -> int:
-        """Count unique test cases with ≥2 pass/fail flips (in-memory impl)."""
+    async def count_flaky_tests(
+        self,
+        days: int = 30,
+        created_by: str | None = None,
+        *,
+        min_observations: int = 4,
+        flip_threshold: int = 3,
+    ) -> int:
+        """Count unique test cases matching the configured flaky policy."""
         from datetime import timedelta
 
         since = datetime.now(UTC) - timedelta(days=days)
@@ -98,10 +106,8 @@ class InMemoryRunStore:
             for c in cases:
                 key = (run.tests_path, c.suite, c.name)
                 grouped.setdefault(key, []).append(c.status)
-        count = 0
-        for statuses in grouped.values():
-            seq = "".join("F" if s in ("failed", "error") else "P" for s in statuses)
-            flips = sum(1 for i in range(len(seq) - 1) if seq[i] != seq[i + 1])
-            if flips >= 2:
-                count += 1
-        return count
+        policy = FlakyPolicy(
+            min_observations=min_observations,
+            flip_threshold=flip_threshold,
+        )
+        return sum(1 for statuses in grouped.values() if flakiness(statuses, policy)[0])

@@ -46,15 +46,16 @@ const DIFF_NO_BASELINE = {
   diff: { new_failures: [], still_failing: [], fixed: [], new_cases: [], removed_cases: [] },
 };
 
-// pass→fail→pass: two flips → server reports flaky (stage 3).
+// Default calibrated policy requires four observations and three flips.
 const FLAKY_HISTORY = {
   points: [
     { created_at: '2026-06-01T10:00:00Z', status: 'passed' },
     { created_at: '2026-06-02T10:00:00Z', status: 'failed' },
     { created_at: '2026-06-03T10:00:00Z', status: 'passed' },
+    { created_at: '2026-06-04T10:00:00Z', status: 'failed' },
   ],
   flaky: true,
-  flip_count: 2,
+  flip_count: 3,
 };
 
 async function login(page: import('@playwright/test').Page) {
