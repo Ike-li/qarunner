@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     # to build absolute links in Feishu notification cards. Leave empty to skip
     # notifications entirely (dev / no-webhook deployments).
     public_url: str = ""
+    # Login brute-force throttle (SEC-5) tunables. Defaults keep the locked-down
+    # production behaviour; dev can widen these via env so exploratory curl probes
+    # don't trip the 5-strike lockout (which otherwise blocks admin login and the
+    # storageState bootstrap). 0 threshold disables lockout entirely.
+    login_throttle_threshold: int = 5
+    login_throttle_base_seconds: float = 60.0
+    login_throttle_max_seconds: float = 900.0
 
 
 

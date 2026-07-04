@@ -50,6 +50,8 @@ artifacts/
 test-results/
 playwright-report/
 smoke-results/
+# E2E auth storageState (HttpOnly cookies produced by global-setup) — never commit
+frontend/tests-e2e/.auth/
 
 # T14 dogfooding 导入状态（本地）
 .qap-import-state.json

@@ -82,7 +82,7 @@ class LoginThrottle:
             self._attempts.move_to_end(key)
 
         attempt.failures += 1
-        if attempt.failures >= self.threshold:
+        if self.threshold > 0 and attempt.failures >= self.threshold:
             window = min(self.base_seconds * (2**attempt.lockouts), self.max_seconds)
             attempt.locked_until = self.clock.now().timestamp() + window
             attempt.lockouts += 1

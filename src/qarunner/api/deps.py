@@ -100,7 +100,12 @@ def create_container(settings: Settings | None = None) -> Container:
     schedule_port = ApschedulerSchedulePort(store=store, orchestrator=orchestrator)
     schedule_service = ScheduleService(store=store, scheduler=schedule_port)
     profile_service = ProfileService(store=store)
-    login_throttle = LoginThrottle(clock=clock)
+    login_throttle = LoginThrottle(
+        clock=clock,
+        threshold=cfg.login_throttle_threshold,
+        base_seconds=cfg.login_throttle_base_seconds,
+        max_seconds=cfg.login_throttle_max_seconds,
+    )
 
     return Container(
         orchestrator=orchestrator,

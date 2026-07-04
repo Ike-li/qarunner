@@ -25,6 +25,10 @@ services:
       # to use the in-process subprocess executor for convenience. Prod defaults to
       # false (docker-only for non-admins).
       - QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true
+      # Dev-only: disable login brute-force lockout (SEC-5) so exploratory curl
+      # probes against :8000 don't trip the 5-strike lockout and block the
+      # storageState bootstrap. Production keeps the default threshold=5.
+      - QARUNNER_LOGIN_THROTTLE_THRESHOLD=0
       # Allow explicit env paths such as APP_REPO_PATH under the linked projects
       # root to be mounted read-only into docker executor containers.
       - QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS=${QARUNNER_PROJECTS_ROOT:-${HOME}/code}
