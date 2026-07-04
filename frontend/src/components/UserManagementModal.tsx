@@ -2,6 +2,7 @@ import { Plus, RotateCw, Trash2, Users } from 'lucide-react'
 import { Modal, Banner, Table, Tag, Input, Select, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 
 const formatDate = (iso: string) => new Date(iso).toLocaleString()
 
