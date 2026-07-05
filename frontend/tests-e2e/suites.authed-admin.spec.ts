@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 // External test suites — stage 5 frontend (git tab + source-aware actions).
 // Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
-// Selectors target stable data-testid hooks (same convention as ui.spec.ts).
+// Selectors target stable data-testid hooks (same convention as login-smoke.spec.ts).
 // Network-dependent paths (a successful clone hits real git) are intentionally
 // NOT asserted here; we cover the UI structure and the URL-allowlist rejection,
 // which the backend answers with 400 *before* any git subprocess runs.
