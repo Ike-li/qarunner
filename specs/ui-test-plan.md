@@ -463,7 +463,19 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: Segment bar chart should show proportional segments
     - expect: If report exists: report-fullscreen-button and report-new-window-link should be visible
 
-#### 5.4. Diff tab shows cross-run comparison buckets
+#### 5.4. Report tab shows downloadable runner artifacts
+
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
+
+**Steps:**
+  1. Open run details drawer for a run with Playwright artifacts
+    - expect: Drawer is open
+  2. Click drawer-tab-report
+    - expect: run-artifacts section should be visible
+    - expect: trace / screenshot / video artifact links should show relative paths and sizes
+    - expect: each artifact link should download from `/runs/{run_id}/artifacts/{path}`
+
+#### 5.5. Diff tab shows cross-run comparison buckets
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
@@ -475,7 +487,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: If no baseline: diff-empty-baseline should be visible
     - expect: Each bucket shows the case count and colored header
 
-#### 5.5. Expanding a diff case shows cross-run history
+#### 5.6. Expanding a diff case shows cross-run history
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
@@ -486,7 +498,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: case-history section should appear showing colored history dots
     - expect: If flaky: flaky-badge should be visible
 
-#### 5.6. Re-run button is visible for completed runs
+#### 5.7. Re-run button is visible for completed runs
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
@@ -497,7 +509,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: 'Re-run' button should be visible
     - expect: 'Delete Run' button should be visible (unless run is locked)
 
-#### 5.7. Cancel button is visible for running/queued runs
+#### 5.8. Cancel button is visible for running/queued runs
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
@@ -507,7 +519,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
   2. Check the drawer header
     - expect: 'Cancel Run' button should be visible instead of Re-run/Delete buttons
 
-#### 5.8. Fullscreen terminal overlay opens and closes
+#### 5.9. Fullscreen terminal overlay opens and closes
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
@@ -520,7 +532,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: Fullscreen overlay should close
     - expect: Drawer should still be visible
 
-#### 5.9. Fullscreen report overlay opens and closes
+#### 5.10. Fullscreen report overlay opens and closes
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
@@ -533,7 +545,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
   3. Click fullscreen-report-close or press Escape
     - expect: Fullscreen overlay should close
 
-#### 5.10. No logs state shows placeholder message
+#### 5.11. No logs state shows placeholder message
 
 **File:** `tests-e2e/run-details.authed-admin.spec.ts`
 

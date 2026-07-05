@@ -122,6 +122,13 @@ const FLAKY_HISTORY = {
   flip_count: 3,
 };
 
+const RUN_ARTIFACTS = {
+  artifacts: [
+    { path: 'failed-case/trace.zip', size_bytes: 1024 },
+    { path: 'failed-case/screenshot.png', size_bytes: 2048 },
+  ],
+};
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function openDashboard(page: import('@playwright/test').Page) {
@@ -157,6 +164,16 @@ async function mockRunDetailRoute(page: import('@playwright/test').Page, runId: 
     } else {
       await route.fallback();
     }
+  });
+}
+
+async function mockRunArtifactsRoute(page: import('@playwright/test').Page, runId: string) {
+  await page.route(`**/runs/${runId}/artifacts`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(RUN_ARTIFACTS),
+    });
   });
 }
 
@@ -250,6 +267,26 @@ test.describe('Run Details Drawer', () => {
     await expect(page.getByTestId('run-case-result-0')).toContainText(
       'suite_integration/test_auth.py::test_login',
     );
+  });
+
+  test('Report tab shows downloadable runner artifacts', async ({ page }) => {
+    await mockRunArtifactsRoute(page, RUN_WITH_LOGS_AND_REPORT.id);
+
+    await openDrawer(page);
+    await page.getByTestId('drawer-tab-report').click();
+
+    await expect(page.getByTestId('run-artifacts')).toBeVisible({ timeout: 5000 });
+    const traceLink = page.getByTestId('run-artifact-link-0');
+    await expect(traceLink).toContainText('failed-case/trace.zip');
+    await expect(traceLink).toContainText('1 KB');
+    await expect(traceLink).toHaveAttribute(
+      'href',
+      '/runs/run-full-0001/artifacts/failed-case%2Ftrace.zip',
+    );
+
+    const screenshotLink = page.getByTestId('run-artifact-link-1');
+    await expect(screenshotLink).toContainText('failed-case/screenshot.png');
+    await expect(screenshotLink).toContainText('2 KB');
   });
 
   // 4. Diff tab shows cross-run comparison buckets
