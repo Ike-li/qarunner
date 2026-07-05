@@ -12,23 +12,24 @@
 
 ### 0.1 已落地的 a11y 改造（FE-5）
 - `a11y.ts`：`activateOnKey(action)` — 让非按钮元素（div/span 带 onClick）在 Enter/Space 时 `preventDefault` 并触发，使键盘可达。用于 `RunsTable`、`ProjectSidebar`。
-- `hooks/useDialogA11y.ts`：`useDialogA11y({ isOpen, onClose })` — 开启时聚焦容器内首个可聚焦元素、Tab 陷阱、Esc 关闭、关闭后还原焦点；keydown 监听绑容器（非 document），堆叠 dialog 不双重响应。**目前仅 2 个全屏 overlay 接入**。
-- 单元测试：`a11y.test.ts`（4 处）、`useDialogA11y.test.ts`。
+- `hooks/useDialogA11y.ts`：`useDialogA11y({ isOpen, onClose })` — 开启时聚焦容器内首个可聚焦元素、Tab 陷阱、Esc 关闭、关闭后还原焦点；keydown 监听绑容器（非 document），堆叠 dialog 不双重响应。当前 TriggerRunModal、AddSuiteModal、ScheduleModal、RunDetailsDrawer、FullscreenTerminalOverlay、FullscreenReportOverlay 已接入；UserManagementModal 仍依赖 Semi Modal portal 自带语义与 Esc 行为。
+- 单元测试：`a11y.test.ts`、`useDialogA11y.test.ts`。
+- E2E 测试：`a11y-axe.authed-admin.spec.ts`、`a11y-dialog-focus.authed-admin.spec.ts`、`a11y-keyboard-journey.authed-admin.spec.ts`、`a11y-form-semantics.authed-admin.spec.ts`。
 
 ### 0.2 关键缺口（来自调研）
-**4 个 Semi `<Modal>` + 1 个 `<SideSheet>` 未接入 `useDialogA11y`**，焦点管理依赖 Semi 内部实现，一致性未知：
+早期计划中 4 个 Semi `<Modal>` + 1 个 `<SideSheet>` 未接入 `useDialogA11y`。当前状态如下：
 
 | 组件 | Semi 组件 | useDialogA11y | a11y 测试现状 |
 |------|----------|---------------|---------------|
-| AddSuiteModal | `<Modal>` | ❌ | 无 |
-| ScheduleModal | `<Modal>` | ❌ | 无 |
-| TriggerRunModal | `<Modal>` | ❌ | 无 |
-| UserManagementModal | `<Modal>` | ❌ | 无 |
-| RunDetailsDrawer | `<SideSheet>` | ❌ | 无 |
-| FullscreenTerminalOverlay | 自绘 div | ✅ | 无专项 E2E |
-| FullscreenReportOverlay | 自绘 div | ✅ | 无专项 E2E |
+| AddSuiteModal | `<Modal>` | ✅ | `a11y-dialog-focus.authed-admin.spec.ts` |
+| ScheduleModal | `<Modal>` | ✅ | `a11y-dialog-focus.authed-admin.spec.ts` |
+| TriggerRunModal | `<Modal>` | ✅ | `a11y-dialog-focus.authed-admin.spec.ts` |
+| UserManagementModal | `<Modal>` | ❌（依赖 Semi portal） | `a11y-dialog-focus.authed-admin.spec.ts` 只验 dialog 语义 + Esc |
+| RunDetailsDrawer | `<SideSheet>` | ✅ | `a11y-dialog-focus.authed-admin.spec.ts` |
+| FullscreenTerminalOverlay | 自绘 div | ✅ | `a11y-dialog-focus.authed-admin.spec.ts` |
+| FullscreenReportOverlay | 自绘 div | ✅ | `a11y-dialog-focus.authed-admin.spec.ts` |
 
-**结论**：现有 a11y 测试**全是单测**（vitest），**无一条 E2E 验证真实浏览器的键盘/焦点行为**。本计划补 E2E 层。
+**结论**：a11y E2E 层已建立，后续重点不是从零补测试，而是继续收紧 UserManagementModal 焦点契约、减少 Semi UI 噪声白名单，并把键盘旅程纳入稳定的日常回归。
 
 ### 0.3 FE-5 验收目标回顾
 > "键盘可完整操作主流程"（FE5_A11Y_PLAN §4 验证：Tab/Enter/Esc 完整走登录→触发 modal→用户 modal→抽屉/终端，无鼠标）
@@ -54,7 +55,7 @@
 
 ### 阶段 0 — axe-core 自动扫描（基线）
 
-**File:** `tests-e2e/a11y-axe.spec.ts`
+**File:** `tests-e2e/a11y-axe.authed-admin.spec.ts`
 **库：** `@axe-core/playwright`（**引入需向用户确认**——属新增依赖，见项目宪法 §4 ⚠️ 边界）
 
 #### A0.1 登录页无 axe 违规
@@ -76,7 +77,7 @@
 
 ### 阶段 1 — Modal/Drawer 焦点管理专项
 
-**File:** `tests-e2e/a11y-dialog-focus.spec.ts`
+**File:** `tests-e2e/a11y-dialog-focus.authed-admin.spec.ts`
 **覆盖对象：** 5 个 Modal + 1 SideSheet + 2 全屏 Overlay
 
 每个对话框测以下 4 个不变量（`useDialogA11y` 契约）：
@@ -106,13 +107,13 @@
 #### A1.6 FullscreenTerminalOverlay 四不变量（已接 hook，验证 hook 真生效）
 #### A1.7 FullscreenReportOverlay 四不变量
 
-> ⚠️ A1.1–A1.5 的失败暴露"4 个 Modal/SideSheet 未接 hook"现状。**计划本体只写测试，不接 hook**——若这些测试红，接 hook 属另一改动（FE-5 Stage D 收尾），本计划标注为"已知预期红，见 §5 依赖"。
+> 当前 A1.1–A1.3、A1.5–A1.7 已覆盖已接 `useDialogA11y` 的对象；A1.4 UserManagementModal 仍是 Semi portal 语义验证，尚未收紧到完整 F1/F2/F4 焦点契约。
 
 ---
 
 ### 阶段 2 — 键盘可达主流程（FE-5 验收旅程）
 
-**File:** `tests-e2e/a11y-keyboard-journey.spec.ts`
+**File:** `tests-e2e/a11y-keyboard-journey.authed-admin.spec.ts`
 **约束：** 全程仅 `page.keyboard`，不 `page.click` / `page.fill`（用 `page.focus`+type 例外见下）
 
 #### A2.1 无鼠标完成登录
@@ -148,7 +149,7 @@
 
 ### 阶段 3 — 表单语义 + 焦点指示器
 
-**File:** `tests-e2e/a11y-form-semantics.spec.ts`
+**File:** `tests-e2e/a11y-form-semantics.authed-admin.spec.ts`
 
 #### A3.1 每个 input 有可访问 label 关联
 对每个表单（Login / TriggerRun / AddSuite / Schedule / UserMgmt）：
@@ -186,7 +187,7 @@
 ## 4. 完成定义 (Definition of Done)
 
 - [ ] 阶段 0：若允许引入 axe，A0.1–A0.3 绿（含 Semi UI 噪声白名单）；若不允许，标 skip 并记录
-- [ ] 阶段 1：A1.1–A1.7 中，**A1.6/A1.7（已接 hook 的 2 overlay）必须绿**；A1.1–A1.5 暂红属预期（见 §5），以 `test.fixme` 标注并附 FE-5 Stage D 收尾 issue
+- [ ] 阶段 1：A1.1–A1.7 跑在 `chromium-authed-admin`；已接 hook 的对象验证焦点进入/Esc/焦点还原，UserManagementModal 当前只验 Semi dialog 语义 + Esc
 - [ ] 阶段 2：A2.1–A2.4 绿（此为 FE-5 验收核心）
 - [ ] 阶段 3：A3.1–A3.4 绿；A3.5 视 axe 决定
 - [ ] 所有 a11y spec **不依赖新生产代码改动即可绿的部分为交付**，依赖改动的标 fixme
@@ -197,7 +198,7 @@
 
 > 本计划只写测试。以下改动**不属于本计划**，但决定哪些测试当下能绿、哪些预期红：
 
-1. **4 个 Semi `<Modal>` + 1 SideSheet 接入 `useDialogA11y`**（FE-5 Stage D 未完工项）— A1.1–A1.5 依赖此，否则 F1/F2/F4 会失败（F3 Esc 可能由 Semi 默认提供，需逐个验）。这些 spec 写为 `test.fixme`，附 issue："FE-5 Stage D：5 个对话框接入 useDialogA11y"。
+1. **UserManagementModal 接入 `useDialogA11y` 或补等价焦点契约** — 当前只验 Semi portal 的 dialog 语义 + Esc；若要完整覆盖 F1/F2/F4，需要把它纳入同一 hook 契约或在测试中明确 Semi 行为边界。
 2. **表单 htmlFor 关联、aria-label**（FE-5 Stage A/B）— A3.1/A3.4 验收，若改造已完整则绿，否则 fixme。
 3. **`@axe-core/playwright` 依赖**（阶段 0）— ⚠️ 新增依赖，需向用户确认（项目宪法 §4 边界）。
 

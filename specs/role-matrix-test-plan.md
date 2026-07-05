@@ -17,7 +17,7 @@
 | admin | `UserProfile.role === 'admin'` | 全功能 + 用户管理 + cleanup |
 | user | `UserProfile.role === 'user'` | 自身资源 CRUD，看不到他人资源 |
 
-现有权限测试仅 `user-mgmt.spec.ts`（10 条，覆盖 admin gate + 管理按钮）和 `user-management.spec.ts`（6 条，重叠）。**明显缺口**：匿名重定向、非 admin 越权 API 行为、owner-scope 静默过滤、最后 admin 保护、登录限流——全部未测。
+早期权限测试主要集中在 `user-mgmt.authed-admin.spec.ts`（10 条，覆盖 admin gate + 管理按钮）和 `user-management.authed-admin.spec.ts`（6 条，重叠）。角色矩阵专项已拆到 `role-anonymous.spec.ts`、`role-user-gate.authed-user.spec.ts`、`role-api-scoping.authed-admin.spec.ts`、`role-user-ops.authed-admin.spec.ts`。原始明显缺口包括：匿名重定向、非 admin 越权 API 行为、owner-scope 静默过滤、最后 admin 保护、登录限流。
 
 本计划分两层：
 - **A. UI 层**：组件 × 角色 × 可见/可操作 交叉矩阵
@@ -30,7 +30,7 @@
 ### 1.1 Admin-only 前端 gate
 | 位置 | 行为 | 已测? |
 |------|------|------|
-| `Header.tsx:34` | `role === 'admin'` 才渲染 `open-users-button` | ✅ user-mgmt |
+| `Header.tsx:34` | `role === 'admin'` 才渲染 `open-users-button` | ✅ user-mgmt.authed-admin |
 | `DashboardLayout.tsx:55` | `role === 'admin'` 才挂 `UserManagementModal` | ❌ |
 | `useUsers.ts:25-28` | `isAdmin=false` 时 `fetchUsers` 直接 return 不发请求 | ❌ |
 | `UserManagementModal.tsx:89,110` | toggle-role / delete 操作 | 部分（按钮可见性测，**真生效未测**） |
@@ -68,7 +68,7 @@
 
 #### R-UI-2 非管理员头部不显示用户管理入口
 
-**File:** `tests-e2e/role-user-gate.spec.ts`（需新建非管理员用户）
+**File:** `tests-e2e/role-user-gate.authed-user.spec.ts`（使用 `chromium-authed-user` storageState）
 
 **R-UI-2.1 user 角色登录后头部按钮集合**
   1. 以非 admin user 登录
@@ -102,7 +102,7 @@
 
 #### R-API-1 静默过滤（列表端点）
 
-**File:** `tests-e2e/role-api-scoping.spec.ts`
+**File:** `tests-e2e/role-api-scoping.authed-admin.spec.ts`
 
 **R-API-1.1 `GET /runs` 非 admin 只见自己的**
   1. admin 造一条 run（admin_scoped_run）
@@ -178,7 +178,7 @@
 **File:** `tests-e2e/role-anonymous.spec.ts`
 
 **R-API-5.1 不带 token 访问受保护端点 → 401**
-  1. `page.request.get('/api/runs')` 不带 Authorization
+  1. `page.request.get('/runs')` 不带 Authorization
      - expect: 401
   2. 同验 `/profiles`、`/schedules`、`/auth/me`
      - expect: 全 401
@@ -199,9 +199,9 @@
   2. （清理）等待 lockout 过期或以其他方式重置——**注意**：此条会污染后续 admin 登录，**必须放最末且带长 retry 间隔或 test.skip**
   > 标注为 `test.skip`，附 issue：需提供测试专用限流旁路（如 `TESTING=1` 跳过限流），否则 CI 风险大。
 
-#### R-API-7 角色/密码操作真生效（补 user-mgmt 缺口）
+#### R-API-7 角色/密码操作真生效（补 `user-mgmt.authed-admin` 缺口）
 
-**File:** `tests-e2e/role-user-ops.spec.ts`
+**File:** `tests-e2e/role-user-ops.authed-admin.spec.ts`
 
 **R-API-7.1 toggle-role 后下次该用户登录 role 真变化**
   1. admin 建用户 X 为 `user`
@@ -217,7 +217,7 @@
   4. 用 P1 登录
      - expect: 200 + token
 
-> 这两条补 `user-management.spec.ts` "只点按钮不验证后端真生效" 的缺口。
+> 这两条补 `user-management.authed-admin.spec.ts` "只点按钮不验证后端真生效" 的缺口。
 
 ---
 

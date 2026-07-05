@@ -8,7 +8,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 1. Login and Authentication
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 1.1. Login form renders correctly for unauthenticated users
 
@@ -125,11 +125,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 2. Dashboard Layout and Header
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 2.1. Dashboard renders all four stat cards with correct labels
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -142,7 +142,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 2.2. Header displays user info and control buttons for admin
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -158,7 +158,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 2.3. Sidebar shows 'All Suites' with add-suite button
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -170,7 +170,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 2.4. Language toggle in header switches UI language
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -182,7 +182,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 2.5. Theme toggle in header switches between dark and light
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -195,7 +195,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 2.6. Suite trend sparkline appears when a suite is selected from sidebar
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked /tests returning a suite name
@@ -210,7 +210,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 2.7. Suite trend shows insufficient-data hint with fewer than 2 runs
 
-**File:** `tests-e2e/dashboard.spec.ts`
+**File:** `tests-e2e/dashboard.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and select a suite with only 1 data point
@@ -221,11 +221,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 3. Runs Table and Filtering
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 3.1. Execution records table displays with correct columns
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked run data
@@ -239,7 +239,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.2. Filter by status shows only matching runs
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked runs of mixed statuses
@@ -253,7 +253,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.3. Filter by owner shows only matching runs
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked runs from multiple owners
@@ -265,7 +265,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.4. Search by Run ID filters correctly
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -275,7 +275,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.5. Reset filters restores all runs
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -288,7 +288,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.6. Combined filters narrow results correctly
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -300,7 +300,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.7. Log filter tab buttons filter by All / Manual / Scheduled
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked runs of different trigger types
@@ -314,7 +314,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 3.8. Empty table state shows placeholder with 'Launch First Run' button
 
-**File:** `tests-e2e/runs-table.spec.ts`
+**File:** `tests-e2e/runs-table.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with empty /runs response
@@ -326,11 +326,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 4. Trigger Run Modal
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 4.1. Trigger run modal opens and closes via header button
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -347,7 +347,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 4.2. Runner select has pytest and playwright options
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open the trigger modal
@@ -358,7 +358,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 4.3. Fill args and timeout fields and verify values persist
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open the trigger modal
@@ -370,7 +370,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 4.4. Submit trigger run with valid data sends POST and closes modal
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked /tests returning a suite
@@ -384,7 +384,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 4.5. Trigger modal shows error banner on backend error
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked /runs POST returning 400
@@ -395,7 +395,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 4.6. Save as profile creates a new profile
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open trigger modal
@@ -410,7 +410,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 4.7. Profile select loads saved profile settings
 
-**File:** `tests-e2e/trigger-modal.spec.ts`
+**File:** `tests-e2e/trigger-modal.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with a mocked profile available
@@ -423,11 +423,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 5. Run Details Drawer
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 5.1. Clicking a run row opens the details drawer
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with at least one run in the table
@@ -440,7 +440,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.2. Logs tab shows console output when available
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open run details drawer for a completed run with stdout
@@ -453,7 +453,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.3. Report tab shows summary bar and report buttons
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open run details drawer for a run with report
@@ -465,7 +465,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.4. Diff tab shows cross-run comparison buckets
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open run details drawer for a completed run
@@ -477,7 +477,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.5. Expanding a diff case shows cross-run history
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open diff tab for a run with diff data
@@ -488,7 +488,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.6. Re-run button is visible for completed runs
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open drawer for a completed run
@@ -499,7 +499,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.7. Cancel button is visible for running/queued runs
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open drawer for a running or queued run
@@ -509,7 +509,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.8. Fullscreen terminal overlay opens and closes
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open drawer for a run with logs
@@ -522,7 +522,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.9. Fullscreen report overlay opens and closes
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open drawer for a run with report and click report tab
@@ -535,7 +535,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 5.10. No logs state shows placeholder message
 
-**File:** `tests-e2e/run-details.spec.ts`
+**File:** `tests-e2e/run-details.authed-admin.spec.ts`
 
 **Steps:**
   1. Open drawer for a run with no stdout or stderr
@@ -545,11 +545,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 6. Suite Management (Add Suite Modal)
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 6.1. Add suite modal opens from sidebar button
 
-**File:** `tests-e2e/suite-management.spec.ts`
+**File:** `tests-e2e/suite-management.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -560,7 +560,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 6.2. Local tab shows path input and link button
 
-**File:** `tests-e2e/suite-management.spec.ts`
+**File:** `tests-e2e/suite-management.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open add-suite-modal
@@ -571,7 +571,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 6.3. Git tab shows clone URL, ref, credential fields
 
-**File:** `tests-e2e/suite-management.spec.ts`
+**File:** `tests-e2e/suite-management.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open add-suite-modal
@@ -584,7 +584,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 6.4. In-credential creation UI is present on Git tab
 
-**File:** `tests-e2e/suite-management.spec.ts`
+**File:** `tests-e2e/suite-management.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open add-suite-modal
@@ -598,7 +598,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 6.5. Non-allowlisted URL is rejected without spawning git
 
-**File:** `tests-e2e/suite-management.spec.ts`
+**File:** `tests-e2e/suite-management.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open add-suite-modal
@@ -610,11 +610,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 7. Schedule Management
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 7.1. Schedule modal opens from profile row in sidebar
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with at least one profile present
@@ -628,7 +628,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 7.2. Valid cron expression shows preview of next 5 fire times
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open schedule modal
@@ -640,7 +640,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 7.3. Invalid cron expression shows error
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open schedule modal
@@ -651,7 +651,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 7.4. Save schedule creates a new schedule and closes modal
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open schedule modal
@@ -664,7 +664,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 7.5. Delete existing schedule removes it
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with an existing schedule
@@ -677,7 +677,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 7.6. Trigger schedule immediately creates a run
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with an existing schedule
@@ -689,7 +689,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 7.7. Timezone selector changes preview timestamps
 
-**File:** `tests-e2e/schedule-mgmt.spec.ts`
+**File:** `tests-e2e/schedule-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open schedule modal
@@ -701,11 +701,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 8. User Management (Admin Only)
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 8.1. User management modal opens from header
 
-**File:** `tests-e2e/user-mgmt.spec.ts`
+**File:** `tests-e2e/user-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin
@@ -719,7 +719,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 8.2. Non-admin user cannot see the users button
 
-**File:** `tests-e2e/user-mgmt.spec.ts`
+**File:** `tests-e2e/user-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as a non-admin user
@@ -729,7 +729,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 8.3. Create a new user
 
-**File:** `tests-e2e/user-mgmt.spec.ts`
+**File:** `tests-e2e/user-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open user modal
@@ -743,7 +743,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 8.4. Close user management modal
 
-**File:** `tests-e2e/user-mgmt.spec.ts`
+**File:** `tests-e2e/user-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open user modal
@@ -753,7 +753,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 8.5. User list shows users with row actions
 
-**File:** `tests-e2e/user-mgmt.spec.ts`
+**File:** `tests-e2e/user-mgmt.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin and open user modal
@@ -764,11 +764,11 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 ### 9. Sidebar Suite Navigation
 
-**Seed:** `frontend/tests-e2e/seed.spec.ts`
+**Seed:** `frontend/tests-e2e/seed.authed-admin.spec.ts`
 
 #### 9.1. Clicking a suite in sidebar filters the runs table
 
-**File:** `tests-e2e/sidebar.spec.ts`
+**File:** `tests-e2e/sidebar.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with mocked suites and runs
@@ -782,7 +782,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 9.2. Suite update and prepare buttons visible for git suites
 
-**File:** `tests-e2e/sidebar.spec.ts`
+**File:** `tests-e2e/sidebar.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with a git-sourced suite
@@ -796,7 +796,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 9.3. Profile row shows pass rate and history dots
 
-**File:** `tests-e2e/sidebar.spec.ts`
+**File:** `tests-e2e/sidebar.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with profiles and runs
@@ -809,7 +809,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 9.4. Profile instant run button triggers a run
 
-**File:** `tests-e2e/sidebar.spec.ts`
+**File:** `tests-e2e/sidebar.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with a profile that has runs
@@ -820,7 +820,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
 
 #### 9.5. Delete profile removes it from sidebar
 
-**File:** `tests-e2e/sidebar.spec.ts`
+**File:** `tests-e2e/sidebar.authed-admin.spec.ts`
 
 **Steps:**
   1. Login as admin with a profile present

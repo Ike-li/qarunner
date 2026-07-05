@@ -22,11 +22,10 @@
 ### 系统当前已知的不闭环点（来自项目记忆）
 - **schedule 验证**：7/7 现有 schedule spec 跳过需 profile 依赖的部分，未真跑通。
 - **非 admin 身份触发 run / 建 profile**：现无 spec 以非 admin 身份操作 profile/run。
-- **默认密码不一致**：14 个 spec 默认 `'admin123'`、4 个 `'Demo-Qarunner-2026!'`；后端 SEC-2 拒弱密码，CI 中 `admin123` 会被拒。旅程测试必须统一走 `E2E_ADMIN_PASSWORD` 环境变量。
-- **无共享 fixture**：21 个 spec 各自内联 `login()` + `ADMIN_PASSWORD`，无 `globalSetup` / `storageState` / per-role `projects`。
+- **默认密码/共享 fixture 已收敛**：旅程 spec 统一通过 `E2E_ADMIN_PASSWORD` + `globalSetup` 生成 storageState，并跑在 `chromium-authed-admin` / `chromium-authed-user` 项目下。
 
 ### 端到端跑测需活的前后端
-- `docker compose -f docker-compose.dev.yml up -d`（后端 :8001 / 前端 :5173）
+- `docker compose -f docker-compose.dev.yml up -d`（后端 :8000 / 前端 :5173）
 - `E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!'` 与后端 `QARUNNER_ADMIN_PASSWORD` 同值
 
 ---
@@ -49,7 +48,7 @@
 
 ### Journey 1 — 新用户接入全链路
 
-**File:** `tests-e2e/journey-onboarding.spec.ts`
+**File:** `tests-e2e/journey-onboarding.authed-admin.spec.ts`
 **角色切换：** admin → 登出 → 新建 user → 以新 user 登录
 **前置：** admin 已登录（共享 fixture）
 
@@ -89,7 +88,7 @@
 
 ### Journey 2 — 回归核心闭环（P0 核心）
 
-**File:** `tests-e2e/journey-regression-loop.spec.ts`
+**File:** `tests-e2e/journey-regression-loop.authed-admin.spec.ts`
 **角色：** admin
 **前置：** 存在可跑的 suite（用 `examples/sample_tests` 经 `POST /tests/link` 注册或复用 seed）；profile 可选
 
@@ -107,7 +106,7 @@
   5. 点击该 run 行打开 `RunDetailsDrawer`
      - expect: drawer 可见，`drawer-tab-logs` 默认激活，console 输出可见
 
-> 这是 `run-lifecycle.spec.ts`（仅 2 条浅测）的真扩展，覆盖完整排队→执行→终态→查看链路。
+> 这是 `run-lifecycle.authed-admin.spec.ts`（仅 2 条浅测）的真扩展，覆盖完整排队→执行→终态→查看链路。
 
 #### J2.2 同一 profile 二次触发后 Diff tab 出现跨次对比
 
@@ -129,7 +128,7 @@
 
 ### Journey 3 — 探索式失败分析
 
-**File:** `tests-e2e/journey-failure-analysis.spec.ts`
+**File:** `tests-e2e/journey-failure-analysis.authed-admin.spec.ts`
 **角色：** admin
 **前置：** 已有 ≥3 条 mixed-status 的 run（mock 或 J2 产出）
 
@@ -160,13 +159,13 @@
   3. 点 `Download` 按钮
      - expect: 浏览器发起下载（监听 `download` 事件断言文件名）
 
-> 这条与 `run-details.spec.ts` 的 copy/download 用例有重叠，但本旅程强调"**作为失败分析流向的一部分**"触达，而非孤立按钮测试。
+> 这条与 `run-details.authed-admin.spec.ts` 的 copy/download 用例有重叠，但本旅程强调"**作为失败分析流向的一部分**"触达，而非孤立按钮测试。
 
 ---
 
 ### Journey 4 — 调度驱动的回归心跳
 
-**File:** `tests-e2e/journey-schedule-heartbeat.spec.ts`
+**File:** `tests-e2e/journey-schedule-heartbeat.authed-admin.spec.ts`
 **角色：** admin
 **前置：** 已有 profile（用 `POST /profiles` 经 API 造，避免 UI 长 journey）
 
@@ -185,14 +184,14 @@
   5. 轮询该 run 至终态
   6. 测试末尾以 admin API `DELETE /schedules/{id}` 清理
 
-**断言重点：** cron 写入 → 立即触发 → run 归属为调度而非手动 的全链路。这是 `schedule-trigger.spec.ts`（3 条）的深度组合。
+**断言重点：** cron 写入 → 立即触发 → run 归属为调度而非手动 的全链路。这是 `schedule-trigger.authed-admin.spec.ts`（3 条）的深度组合。
 **前置依赖：** profile 必须可创建且 trigger 端点可用——见第 6 节未闭环项。
 
 ---
 
 ### Journey 5 — Local 套件接入与首跑
 
-**File:** `tests-e2e/journey-suite-onboard.spec.ts`
+**File:** `tests-e2e/journey-suite-onboard.authed-admin.spec.ts`
 **角色：** admin
 **前置：** 宿主机存在一个本地测试目录（用 `examples/sample_tests`）
 
