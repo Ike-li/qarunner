@@ -69,6 +69,7 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
   const openEditProfile = useCallback((profile: Profile) => {
     setEditingProfileId(profile.id)
     setTestsPath(profile.tests_path)
+    setSelectedRunner(profile.runner || 'pytest')
     setCustomArgs(profile.extra_args || '')
     setAllureEnabled(true)
     setTimeoutSeconds(profile.timeout === null ? '' : profile.timeout)

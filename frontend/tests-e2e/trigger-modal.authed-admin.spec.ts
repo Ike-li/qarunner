@@ -523,10 +523,10 @@ test.describe('Trigger Run Modal', () => {
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
     await expect(page.locator('#semi-modal-title')).toContainText(/Modify Saved Execution Profile/i);
 
-    // 3. Verify form fields are populated from the profile.
-    //    Note: openEditProfile does not call setSelectedRunner, so the runner
-    //    select defaults to 'pytest' (not 'playwright'). This is a known
-    //    limitation of the current implementation.
+    // 3. Verify form fields are populated from the profile, including the
+    //    runner. Saving a Playwright profile must not silently downgrade it to
+    //    pytest.
+    await expect(page.getByTestId('trigger-runner-select')).toContainText('playwright');
     await expect(page.getByTestId('trigger-args-input')).toHaveValue('-k smoke');
     await expect(page.getByTestId('trigger-timeout-input')).toHaveValue('120');
 
@@ -540,6 +540,7 @@ test.describe('Trigger Run Modal', () => {
     }).toPass({ timeout: 5000 });
     expect((putBody as Record<string, unknown>).extra_args).toBe('-k smoke --updated');
     expect((putBody as Record<string, unknown>).timeout).toBe(120);
+    expect((putBody as Record<string, unknown>).runner).toBe('playwright');
 
     // 6. Modal should close after successful update.
     await expect(page.getByTestId('trigger-modal')).not.toBeVisible({ timeout: 5000 });
