@@ -60,6 +60,7 @@
 
 - **Allure 报告** — 单文件 HTML,可内嵌 iframe 或全屏查看。
 - **JUnit 解析** — `defusedxml` 防 XXE,10MB 上限防 billion-laughs;汇总 `total / passed / failed / skipped / error / duration` + 计算 `pass_rate`。
+- **Runner 产物** — Playwright trace / screenshot / video 保存在 run 目录,详情抽屉可列出并下载。
 - **实时日志（SSE）** — `GET /runs/{id}/stream` 流式 stdout;前端配全屏终端、日志级别过滤(ERR/WARN/OK)、搜索、下载、自动滚动。
 - **运行锁定** — 锁住的 run 不被清理删除。
 - **删除单条 run** — `DELETE /runs/{id}`(owner)彻底删除一条 run 的元数据与物理产物;锁定或仍在 queued/running 的 run 拒删(`409`,需先解锁 / 取消)。

@@ -11,7 +11,7 @@ import { diffBuckets, diffIsEmpty, type DiffTone } from '../runDiff'
 import { caseCells, type CaseTone } from '../runCaseHistory'
 import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
-import type { CaseHistory, RunDiff, TestCaseResult } from '../types'
+import type { CaseHistory, RunArtifact, RunDiff, TestCaseResult } from '../types'
 
 const DIFF_TONE_COLOR: Record<DiffTone, string> = {
   danger: '#ef4444',
@@ -49,6 +49,12 @@ const CASE_STATUS_COLOR: Record<TestCaseResult['status'], string> = {
   failed: '#ef4444',
   error: '#b91c1c',
   skipped: '#64748b',
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes % 1024 === 0 ? 0 : 1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /** One case row inside the Diff tab. Clicking it lazily pulls the case's
@@ -183,12 +189,47 @@ export function RunDetailsDrawer() {
   const [runDiff, setRunDiff] = useState<RunDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffError, setDiffError] = useState(false)
+  const [runArtifacts, setRunArtifacts] = useState<RunArtifact[]>([])
+  const [artifactsLoading, setArtifactsLoading] = useState(false)
+  const [artifactsError, setArtifactsError] = useState(false)
 
   // Fetch the baseline diff lazily — only when the Diff tab is active (and
   // re-fetch when the selected run changes while it stays active). The cancel
   // flag drops a stale response if the user switches run/tab mid-flight.
   const selectedRunId = d.runs.selectedRun?.id
   const closeDrawer = d.runs.closeDrawer
+  useEffect(() => {
+    if (d.terminal.drawerTab !== 'report' || !selectedRunId) {
+      setRunArtifacts([])
+      setArtifactsLoading(false)
+      setArtifactsError(false)
+      return
+    }
+
+    let cancelled = false
+    setArtifactsLoading(true)
+    setArtifactsError(false)
+    setRunArtifacts([])
+    d.apiFetch(`/runs/${selectedRunId}/artifacts`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Artifacts request failed: ${r.status}`)
+        return r.json()
+      })
+      .then((data: { artifacts?: RunArtifact[] } | null) => {
+        if (!cancelled) setRunArtifacts(data?.artifacts ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRunArtifacts([])
+          setArtifactsError(true)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setArtifactsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [d.apiFetch, d.terminal.drawerTab, selectedRunId])
+
   useEffect(() => {
     if (d.terminal.drawerTab !== 'diff' || !selectedRunId) return
     let cancelled = false
@@ -698,6 +739,66 @@ export function RunDetailsDrawer() {
                           </div>
                         )
                       })}
+                    </div>
+                  </div>
+                )}
+
+                {artifactsLoading && (
+                  <span className={styles.terminalPlaceholder} data-testid="run-artifacts-loading">
+                    {d.t('artifactsLoading')}
+                  </span>
+                )}
+
+                {artifactsError && (
+                  <div className={styles.summaryPlaceholder} data-testid="run-artifacts-error">
+                    <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
+                    <p>{d.t('artifactsLoadError')}</p>
+                  </div>
+                )}
+
+                {runArtifacts.length > 0 && (
+                  <div
+                    data-testid="run-artifacts"
+                    style={{
+                      border: '1px solid var(--semi-color-border)',
+                      borderRadius: 4,
+                      padding: '0.65rem 0.75rem',
+                      marginBottom: '0.75rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('runnerArtifacts')}</h4>
+                      <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>
+                        {d.t('runnerArtifactsDesc')}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      {runArtifacts.map((artifact, index) => (
+                        <a
+                          key={artifact.path}
+                          data-testid={`run-artifact-link-${index}`}
+                          href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
+                          download
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '0.75rem',
+                            color: 'var(--semi-color-primary)',
+                            textDecoration: 'none',
+                            fontSize: '0.8rem',
+                          }}
+                        >
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
+                            <Download size={13} />
+                            <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
+                          </span>
+                          <span style={{ opacity: 0.65, flexShrink: 0 }}>{formatBytes(artifact.size_bytes)}</span>
+                        </a>
+                      ))}
                     </div>
                   </div>
                 )}

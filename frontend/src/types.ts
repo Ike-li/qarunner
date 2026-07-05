@@ -40,6 +40,11 @@ export interface Run {
   locked?: boolean
 }
 
+export interface RunArtifact {
+  path: string
+  size_bytes: number
+}
+
 export interface TestCaseResult {
   suite: string
   name: string

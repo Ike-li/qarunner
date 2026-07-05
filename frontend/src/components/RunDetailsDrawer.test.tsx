@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RunDetailsDrawer } from './RunDetailsDrawer'
@@ -71,7 +71,12 @@ function makeDashboard() {
   return {
     lang: 'en',
     t: (key: string) => key,
-    apiFetch: vi.fn(),
+    apiFetch: vi.fn(async () =>
+      new Response(JSON.stringify({ artifacts: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ),
     terminalRef: { current: null },
     runs: {
       selectedRun,
@@ -117,6 +122,42 @@ describe('RunDetailsDrawer', () => {
     expect(screen.getByTestId('run-case-result-0')).toHaveTextContent('456ms')
     expect(screen.getByTestId('run-case-result-0')).toHaveTextContent(
       'Expected confirmation',
+    )
+  })
+
+  it('shows downloadable runner artifacts on the report tab', async () => {
+    dashboard.current.runs.selectedRun = {
+      ...dashboard.current.runs.selectedRun,
+      runner: 'playwright',
+    }
+    dashboard.current.apiFetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          artifacts: [
+            { path: 'failed-case/trace.zip', size_bytes: 1024 },
+            { path: 'failed-case/screenshot.png', size_bytes: 2048 },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    render(<RunDetailsDrawer />)
+
+    await waitFor(() => {
+      expect(dashboard.current.apiFetch).toHaveBeenCalledWith('/runs/run-001/artifacts')
+    })
+
+    expect(await screen.findByTestId('run-artifacts')).toBeVisible()
+    expect(screen.getByTestId('run-artifact-link-0')).toHaveTextContent(
+      'failed-case/trace.zip',
+    )
+    expect(screen.getByTestId('run-artifact-link-0')).toHaveAttribute(
+      'href',
+      '/runs/run-001/artifacts/failed-case%2Ftrace.zip',
+    )
+    expect(screen.getByTestId('run-artifact-link-1')).toHaveTextContent(
+      'failed-case/screenshot.png',
     )
   })
 })
