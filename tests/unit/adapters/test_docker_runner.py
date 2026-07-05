@@ -460,6 +460,20 @@ async def test_docker_runner_streamer_reload_exception() -> None:
     assert result.stdout == "hello"
 
 
+async def test_docker_runner_log_stream_drain_timeout_still_gathers_final_logs() -> None:
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+
+    with patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)):
+        result = await runner.run(cmd, cwd="/tmp/tests")
+
+    assert result.exit_code == 0
+    assert result.stdout == "hello"
+    assert result.stderr == "error"
+
+
 async def test_docker_runner_streamer_logs_exception() -> None:
     # Test when logs() raises an exception inside the streamer loop but succeeds later
     mock_client = MockClient(images_exist=True, wait_status=0)

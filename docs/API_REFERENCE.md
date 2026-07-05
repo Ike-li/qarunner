@@ -179,7 +179,7 @@
 | tests_path | str | 是 | | |
 | runner | str | 否 | `pytest` | `pytest` / `playwright` |
 | selected_files | list[str] | 否 | `[]` | |
-| selected_markers | list[str] | 否 | `[]` | |
+| selected_markers | list[str] | 否 | `[]` | `pytest` → `-m "a or b"`；`playwright` → `--grep "@a|@b"`（按标题/标签过滤） |
 | extra_args | str | 否 | `""` | |
 | executor_mode | enum | 否 | `docker` | `docker` / `subprocess`（非法值 → 422） |
 | timeout | int \| null | 否 | null | `>0` 且 `<=86400`，否则 422 |
@@ -213,7 +213,7 @@
 | timeout | int \| null | 否 | null | `>0` 且 `<=86400` |
 | executor_mode | enum | 否 | `docker` | `docker` / `subprocess` |
 | selected_files | list[str] | 否 | `[]` | |
-| selected_markers | list[str] | 否 | `[]` | |
+| selected_markers | list[str] | 否 | `[]` | `pytest` → `-m "a or b"`；`playwright` → `--grep "@a|@b"`（按标题/标签过滤） |
 | extra_args | str | 否 | `""` | |
 | env | dict[str,str] | 否 | `{}` | |
 

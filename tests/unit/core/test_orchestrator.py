@@ -1241,6 +1241,17 @@ class TestPlaywrightRunnerExecution:
         assert "--headed" in run.args
 
     @pytest.mark.asyncio
+    async def test_playwright_selected_markers_compile_to_grep(self):
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            selected_markers=["smoke", "regression"],
+        )
+        run = await orch.create(req)
+        assert run.args == ["--grep", "@smoke|@regression"]
+
+    @pytest.mark.asyncio
     async def test_playwright_runner_compilation_and_execution(self):
         from qarunner.models import CollectResult, TestSummary
 

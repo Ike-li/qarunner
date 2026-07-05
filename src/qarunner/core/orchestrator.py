@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shlex
 import sys
 from typing import TYPE_CHECKING
@@ -77,12 +78,12 @@ _JAIL_IGNORE_NAMES = frozenset({".git", ".venv", ".pytest_cache", ".ruff_cache",
 
 
 def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") -> list[str]:
-    """Compile a validated pytest argv list from *req*.
+    """Compile a validated runner argv list from *req*.
 
     Rejects argv-injection vectors: dangerous flags supplied via ``args`` or
     ``extra_args``, and ``selected_files`` that escape the suite directory,
-    start with ``-``, or are not ``.py`` files. Raises ``UnsafeArguments``
-    (a ``UnsafePath`` subclass) on violation.
+    start with ``-``, or are not valid for the selected runner. Raises
+    ``UnsafeArguments`` (a ``UnsafePath`` subclass) on violation.
     """
     # -- playwright branch --
     if runner_name == "playwright":
@@ -92,6 +93,11 @@ def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") 
             if flag in _DANGEROUS_PLAYWRIGHT_FLAGS:
                 raise UnsafeArguments(f"playwright flag {flag!r} is not allowed in run arguments")
         compiled: list[str] = list(req.args)
+        if req.selected_markers:
+            grep_expr = "|".join(
+                f"@{re.escape(marker.lstrip('@'))}" for marker in req.selected_markers
+            )
+            compiled.extend(["--grep", grep_expr])
         compiled.extend(extra_tokens)
         for selected in req.selected_files:
             if selected.startswith("-"):

@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # container into memory, so a test emitting unbounded output can't OOM the
 # platform (subprocess caps bytes; docker's logs API can only tail by line).
 _MAX_LOG_LINES = 50_000
+_LOG_STREAM_DRAIN_TIMEOUT_SECONDS = 1.0
 
 
 class DockerRunner:
@@ -268,9 +269,17 @@ class DockerRunner:
                     logger.warning("Failed to kill container: %s", kill_exc)
                 exit_code = 137  # Standard SIGKILL exit code
             finally:
-                log_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await log_task
+                if timed_out:
+                    log_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await log_task
+                else:
+                    try:
+                        await asyncio.wait_for(log_task, timeout=_LOG_STREAM_DRAIN_TIMEOUT_SECONDS)
+                    except TimeoutError:
+                        log_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await log_task
 
             # 6. Gather logs
             def _get_logs():
