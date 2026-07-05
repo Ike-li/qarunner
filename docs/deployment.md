@@ -44,13 +44,13 @@ docker compose -f docker-compose.dev.yml ps
 docker-compose.dev.yml
 ├── backend (qarunner-backend-dev)
 │   ├── 镜像: Dockerfile.dev
-│   ├── 端口: 8001 → 容器 8000
+│   ├── 端口: 8000 → 容器 8000
 │   ├── 挂载: src/、tests/（代码修改即时生效）
 │   └── 依赖: Docker daemon socket
 │
 └── frontend (qarunner-frontend-dev)
     ├── 镜像: node:20-slim
-    ├── 端口: 5174 → 容器 5173
+    ├── 端口: 5173 → 容器 5173
     ├── 挂载: frontend/（代码修改即时生效）
     └── VITE_BACKEND_URL: http://backend:8000
 ```
@@ -134,36 +134,61 @@ docker compose up -d --build                  # 生产
 docker compose -f docker-compose.dev.yml up -d --build  # 开发
 
 # ── 在容器内运行测试 ──
-docker compose exec app uv run pytest                   # 后端单元测试
-docker compose exec app uv run pytest -m e2e --no-cov   # 后端 E2E 测试
-docker compose -f docker-compose.dev.yml exec frontend npm run test:unit  # 前端单元测试
+docker compose -f docker-compose.dev.yml exec backend uv run pytest                  # 后端单元测试
+docker compose -f docker-compose.dev.yml exec backend uv run pytest -m e2e --no-cov  # 后端 E2E 测试
+docker compose -f docker-compose.dev.yml exec frontend npm run test:unit -- --run    # 前端单元测试
 ```
 
 ---
 
 ## 运行 E2E 测试
 
-前端 E2E 测试使用 Playwright，需要浏览器环境。建议在**宿主机**运行（因为 Playwright 浏览器在容器内安装较慢）：
+前端 E2E 测试使用官方 Playwright Docker 镜像运行，避免宿主机浏览器、Node
+依赖和 Chrome channel 差异影响结果。开发环境的 compose project network 默认是
+`qarunner_default`，容器内前端服务地址是 `http://frontend:5173`。
 
 ```bash
 # 1. 确保前后端服务都在运行
 docker compose -f docker-compose.dev.yml up -d
 
-# 2. 在宿主机运行（前端目录下）
-cd frontend
-E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test --reporter=list
+# 2. 列出 Playwright project/spec 分配
+docker run --rm \
+  --network qarunner_default \
+  -v "$PWD":/work \
+  -w /work/frontend \
+  -e BASE_URL=http://frontend:5173 \
+  -e E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' \
+  -e PLAYWRIGHT_USE_BUNDLED_CHROMIUM=true \
+  mcr.microsoft.com/playwright:v1.61.1-noble \
+  bash -lc 'npx playwright test --list'
 
-# 3. 运行特定测试文件
-E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test run-details.authed-admin.spec.ts
+# 3. 运行完整前端 E2E
+docker run --rm \
+  --network qarunner_default \
+  -v "$PWD":/work \
+  -w /work/frontend \
+  -e BASE_URL=http://frontend:5173 \
+  -e E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' \
+  -e PLAYWRIGHT_USE_BUNDLED_CHROMIUM=true \
+  mcr.microsoft.com/playwright:v1.61.1-noble \
+  bash -lc 'npx playwright test --reporter=list'
 
-# 4. 有头模式调试
-E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test --headed
+# 4. 运行特定测试文件
+docker run --rm \
+  --network qarunner_default \
+  -v "$PWD":/work \
+  -w /work/frontend \
+  -e BASE_URL=http://frontend:5173 \
+  -e E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' \
+  -e PLAYWRIGHT_USE_BUNDLED_CHROMIUM=true \
+  mcr.microsoft.com/playwright:v1.61.1-noble \
+  bash -lc 'npx playwright test run-details.authed-admin.spec.ts --reporter=list'
 ```
 
 后端 E2E 测试在容器内运行（需要 pytest + allure CLI）：
 
 ```bash
-docker compose exec app uv run pytest -m e2e --no-cov
+docker compose -f docker-compose.dev.yml exec backend uv run pytest -m e2e --no-cov
 ```
 
 ---
@@ -179,4 +204,4 @@ docker compose exec app uv run pytest -m e2e --no-cov
 | 验证生产部署 | `docker compose up -d --build` |
 | 生产前端代码改了 | `docker compose up -d --build` |
 | 生产后端代码改了 | `docker compose restart app` |
-| 查看运行的测试 | `docker compose exec app uv run pytest` |
+| 查看运行的测试 | `docker compose -f docker-compose.dev.yml exec backend uv run pytest` |
