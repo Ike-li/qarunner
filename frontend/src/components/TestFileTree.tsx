@@ -68,6 +68,7 @@ export function TestFileTree({
     <Tree
       treeData={treeData}
       multiple
+      leafOnly
       value={selectedFiles}
       onChange={(checkedKeys) => {
         const keysArray = Array.isArray(checkedKeys) ? checkedKeys : []

@@ -13,7 +13,7 @@ export function TriggerRunModal() {
   const onClose = () => d.setIsTriggerModalOpen(false)
   const dialogRef = useDialogA11y({ isOpen: d.isTriggerModalOpen, onClose })
   const onTriggerRun = (e: React.FormEvent) =>
-    d.form.handleTriggerRun(e, (runId: string) => {
+    d.form.handleTriggerRun(e, d.selectedFiles, d.selectedMarkers, (runId: string) => {
       d.setIsTriggerModalOpen(false)
       d.runs.fetchRuns()
       d.runs.setSelectedRunId(runId)

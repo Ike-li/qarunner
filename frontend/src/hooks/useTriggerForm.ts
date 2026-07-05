@@ -90,7 +90,12 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
   // ── actions ──────────────────────────────────────────────────────────
 
   const handleTriggerRun = useCallback(
-    async (e: React.FormEvent, afterRun: (runId: string) => void) => {
+    async (
+      e: React.FormEvent,
+      selectedFiles: string[],
+      selectedMarkers: string[],
+      afterRun: (runId: string) => void,
+    ) => {
       e.preventDefault()
       if (!testsPath) {
         setFormError('Please select a test directory.')
@@ -109,8 +114,8 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
             args: [],
             allure: allureEnabled,
             timeout: timeoutSeconds === '' ? null : Number(timeoutSeconds),
-            selected_files: [],
-            selected_markers: [],
+            selected_files: selectedFiles,
+            selected_markers: selectedMarkers,
             extra_args: customArgs,
             env: makeEnvPayload(),
           }),

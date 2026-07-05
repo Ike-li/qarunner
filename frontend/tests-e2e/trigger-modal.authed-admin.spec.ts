@@ -594,4 +594,83 @@ test.describe('Trigger Run Modal', () => {
     await smokeTag.click();
     await expect(smokeTag).toBeVisible();
   });
+
+  // ── Test 17 ──────────────────────────────────────────────────────────
+  test('Manual trigger sends selected files and marker tags', async ({ page }) => {
+    const mockTreeData = [
+      {
+        name: 'specs',
+        path: 'specs',
+        is_dir: true,
+        children: [
+          { name: 'login.spec.ts', path: 'specs/login.spec.ts', is_dir: false, children: [] },
+        ],
+      },
+    ];
+    let postBody: unknown = null;
+
+    await page.unroute('**/suites');
+    await page.route('**/suites', async (route) => {
+      await route.fulfill({
+        json: [{ name: 'suite_a/', source: 'local', repo_url: null, ref: null }],
+      });
+    });
+    await page.route('**/tests/**', async (route) => {
+      const url = route.request().url();
+      if (url.includes('/tree')) {
+        await route.fulfill({ json: mockTreeData });
+      } else if (url.includes('/markers')) {
+        await route.fulfill({ json: ['smoke', 'regression'] });
+      } else {
+        await route.fulfill({ json: ['suite_a/'] });
+      }
+    });
+    await page.route('**/runs', async (route) => {
+      if (route.request().method() === 'POST') {
+        postBody = JSON.parse(route.request().postData() ?? '{}');
+        await route.fulfill({
+          status: 201,
+          json: {
+            id: 'run-selected-0001', status: 'queued', runner: 'playwright',
+            created_by: 'admin', tests_path: 'suite_a/', args: [],
+            executor_mode: 'docker', summary: null, report: null,
+            exit_code: null, error: null, passed: false,
+            created_at: '2026-07-02T10:00:00Z', started_at: null,
+            finished_at: null, stdout: null, stderr: null, locked: false,
+          },
+        });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.reload();
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+
+    await page.getByTestId('open-trigger-button').click();
+    await expect(page.getByTestId('trigger-modal')).toBeVisible();
+
+    const runnerSelect = page.getByTestId('trigger-runner-select');
+    await runnerSelect.click();
+    await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: 'playwright' }).click();
+
+    await selectTargetDirectory(page);
+    const tree = page.getByRole('tree');
+    await expect(tree).toBeVisible({ timeout: 10000 });
+    const loginSpecItem = tree.getByRole('treeitem', { name: /login\.spec\.ts/ });
+    if (!(await loginSpecItem.isVisible().catch(() => false))) {
+      await tree.getByRole('treeitem').filter({ hasText: 'specs' }).first().getByRole('button').first().click();
+    }
+    await expect(loginSpecItem).toBeVisible({ timeout: 5000 });
+    await loginSpecItem.locator('.semi-checkbox').click();
+
+    await page.getByText(/@smoke/).click();
+    await page.getByTestId('trigger-submit-button').click();
+
+    await expect(async () => {
+      expect(postBody).not.toBeNull();
+    }).toPass({ timeout: 5000 });
+    expect((postBody as Record<string, unknown>).runner).toBe('playwright');
+    expect((postBody as Record<string, unknown>).selected_files).toEqual(['specs/login.spec.ts']);
+    expect((postBody as Record<string, unknown>).selected_markers).toEqual(['smoke']);
+  });
 });
