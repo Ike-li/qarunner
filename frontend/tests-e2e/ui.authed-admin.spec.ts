@@ -37,6 +37,15 @@ test.describe('qarunner Premium UI E2E Tests — admin', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
   });
 
+  test('Logout from header returns to login screen', async ({ page }) => {
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+
+    await page.getByRole('button', { name: /sign out|退出登录/i }).click();
+
+    await expect(page.getByTestId('login-title')).toBeVisible();
+    await expect(page.getByTestId('login-submit')).toBeVisible();
+  });
+
   test('Test Case 4: Run Trigger Modal Workflow', async ({ page }) => {
     // Click on Trigger Run
     await page.getByTestId('open-trigger-button').click();

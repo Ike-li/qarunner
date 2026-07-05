@@ -79,22 +79,7 @@ test.describe('Login and Authentication', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
   });
 
-  // ── 1.4 Logout from the header returns to login screen ──────────────────────
-
-  test('Logout from header returns to login screen', async ({ page }) => {
-    // 1. Login as admin first
-    await page.getByTestId('login-username').fill('admin');
-    await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-    await page.getByTestId('login-submit').click();
-    await expect(page.getByTestId('profile-username')).toHaveText('admin');
-    // 2. Click the logout button in the header (last button in header actions)
-    await page.locator('header button:last-of-type').click();
-    // 3. Verify the login overlay is displayed again
-    await expect(page.getByTestId('login-title')).toBeVisible();
-    await expect(page.getByTestId('login-submit')).toBeVisible();
-  });
-
-  // ── 1.5 Login form field validation - empty username ────────────────────────
+  // ── 1.4 Login form field validation - empty username ────────────────────────
 
   test('Login form field validation - empty username', async ({ page }) => {
     // 1. Navigate to the app — handled by beforeEach
@@ -107,7 +92,7 @@ test.describe('Login and Authentication', () => {
     await expect(page.getByTestId('login-username')).toBeVisible();
   });
 
-  // ── 1.6 Login form field validation - empty password ────────────────────────
+  // ── 1.5 Login form field validation - empty password ────────────────────────
 
   test('Login form field validation - empty password', async ({ page }) => {
     // 1. Navigate to the app — handled by beforeEach
@@ -120,7 +105,7 @@ test.describe('Login and Authentication', () => {
     await expect(page.getByTestId('login-password')).toBeVisible();
   });
 
-  // ── 1.7 Theme toggle on login screen switches between dark and light ─────────
+  // ── 1.6 Theme toggle on login screen switches between dark and light ─────────
 
   test('Theme toggle on login screen switches between dark and light', async ({ page }) => {
     // 1. Navigate to the app — handled by beforeEach (default dark theme)
@@ -139,7 +124,7 @@ test.describe('Login and Authentication', () => {
     await expect(themeToggle).toBeVisible();
   });
 
-  // ── 1.8 Language toggle on login screen switches between EN and ZH ───────────
+  // ── 1.7 Language toggle on login screen switches between EN and ZH ───────────
 
   test('Language toggle on login screen switches between EN and ZH', async ({ page }) => {
     // 1. Navigate to the app — handled by beforeEach (default English)
