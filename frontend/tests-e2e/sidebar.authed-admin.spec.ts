@@ -3,8 +3,8 @@ import { test, expect } from '@playwright/test';
 // Sidebar Suite Navigation E2E tests
 // Tests suite filtering, git-specific buttons, profile display, instant run,
 // and profile deletion in the left sidebar.
+// Runs under `chromium-authed-admin`: admin auth comes from storageState.
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'Demo-Qarunner-2026!';
 const SUITE_A = 'suite_a/';
 const SUITE_B = 'suite_b/';
 
@@ -108,16 +108,13 @@ const PROFILE_NO_RUNS = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
 /**
- * Register route mocks before login so all API calls during page load are
+ * Register route mocks before dashboard load so all API calls during page load are
  * intercepted.
  */
 async function mockBackend(
@@ -177,6 +174,19 @@ async function mockBackend(
     await page.route('**/suites', (route) => route.fulfill({ json: [] }));
   }
 
+  // ── git-suite lifecycle actions ───────────────────────
+  await page.route(/\/tests\/[^/]+\/(pull|prepare)$/, async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: 'ok' }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
   // ── /profiles ──────────────────────────────────────────
   if (profiles) {
     let profilesData = [...profiles];
@@ -224,7 +234,7 @@ test.describe('Sidebar Suite Navigation', () => {
       suites: [GIT_SUITE, LOCAL_SUITE],
       runs: { runs: RUNS },
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Initially all 3 runs should be visible
@@ -254,7 +264,7 @@ test.describe('Sidebar Suite Navigation', () => {
       suites: [GIT_SUITE, LOCAL_SUITE],
       runs: { runs: [] },
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Hover over the git suite (suite_a/) to reveal action buttons
@@ -286,7 +296,7 @@ test.describe('Sidebar Suite Navigation', () => {
       runs: { runs: RUNS },
       profiles: [PROFILE_WITH_RUNS, PROFILE_NO_RUNS],
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // ── Profile with runs (Smoke Tests / pytest) ──
@@ -331,7 +341,7 @@ test.describe('Sidebar Suite Navigation', () => {
       profiles: [PROFILE_WITH_RUNS],
       triggerRun: true,
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Set up a listener for the POST /runs response BEFORE clicking
@@ -361,7 +371,7 @@ test.describe('Sidebar Suite Navigation', () => {
       profiles: [PROFILE_WITH_RUNS],
       profilesDelete: true,
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Verify the profile is initially visible
@@ -391,7 +401,7 @@ test.describe('Sidebar Suite Navigation', () => {
       suites: [GIT_SUITE, LOCAL_SUITE],
       runs: { runs: [] },
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     page.on('dialog', async (dialog) => {
@@ -416,7 +426,7 @@ test.describe('Sidebar Suite Navigation', () => {
       suites: [GIT_SUITE, LOCAL_SUITE],
       runs: { runs: [] },
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     page.on('dialog', async (dialog) => {
@@ -450,7 +460,7 @@ test.describe('Sidebar Suite Navigation', () => {
       route.fulfill({ json: { tests_path: '', points: [] } }),
     );
 
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     await page.route(`**/tests/${encodeURIComponent(SUITE_A)}`, async (route) => {
@@ -480,7 +490,7 @@ test.describe('Sidebar Suite Navigation', () => {
       suites: [GIT_SUITE],
       runs: { runs: [] },
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     await page.getByText(SUITE_A, { exact: true }).first().hover();
@@ -501,7 +511,7 @@ test.describe('Sidebar Suite Navigation', () => {
       runs: { runs: RUNS },
       profiles: [PROFILE_WITH_RUNS],
     });
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     const profileText = page.getByText('Smoke Tests', { exact: true }).first();
