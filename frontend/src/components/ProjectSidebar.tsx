@@ -87,7 +87,12 @@ export function ProjectSidebar() {
         </div>
 
         {/* Scanned test directories */}
-        {d.suites.tests.length === 0 ? (
+        {d.suites.suiteLoadError ? (
+          <div className={styles.sidebarEmpty} data-testid="suite-load-error" role="alert">
+            <p>{d.t('suiteLoadError')}</p>
+            <span>{d.t('suiteLoadErrorDesc')}</span>
+          </div>
+        ) : d.suites.tests.length === 0 ? (
           <div className={styles.sidebarEmpty}>
             <p>{d.t('noSuitesScanned')}</p>
           </div>

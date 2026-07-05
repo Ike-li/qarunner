@@ -16,19 +16,24 @@ export function useSuites({ apiFetch, enabled, lang }: UseSuitesOpts) {
   const [suites, setSuites] = useState<SuiteInfo[]>([])
   const [scannedFilesTree, setScannedFilesTree] = useState<TreeNode[]>([])
   const [scannedMarkers, setScannedMarkers] = useState<string[]>([])
+  const [suiteLoadError, setSuiteLoadError] = useState(false)
 
   // ── fetch ──────────────────────────────────────────────────────────────
 
   const fetchTests = useCallback(async () => {
+    setSuiteLoadError(false)
     try {
       const resp = await apiFetch('/suites')
-      if (resp.ok) {
-        const data: SuiteInfo[] = await resp.json()
-        setSuites(data)
-        setTests(data.map((s) => s.name))
-      }
+      if (!resp.ok) throw new Error(`Suites request failed: ${resp.status}`)
+      const data: SuiteInfo[] = await resp.json()
+      setSuites(data)
+      setTests(data.map((s) => s.name))
+      setSuiteLoadError(false)
     } catch (err) {
       console.error('Error fetching test directories:', err)
+      setSuites([])
+      setTests([])
+      setSuiteLoadError(true)
     }
   }, [apiFetch])
 
@@ -150,6 +155,7 @@ export function useSuites({ apiFetch, enabled, lang }: UseSuitesOpts) {
   return {
     tests,
     suites,
+    suiteLoadError,
     scannedFilesTree,
     scannedMarkers,
     fetchTests,
@@ -162,6 +168,7 @@ export function useSuites({ apiFetch, enabled, lang }: UseSuitesOpts) {
       setSuites([])
       setScannedFilesTree([])
       setScannedMarkers([])
+      setSuiteLoadError(false)
     },
   } as const
 }

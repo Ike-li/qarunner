@@ -140,6 +140,7 @@ async function mockBackend(
   page: import('@playwright/test').Page,
   options: {
     suites?: Array<{ name: string; source: string; repo_url: string | null; ref: string | null }>;
+    suitesError?: boolean;
     runs?: { runs: any[] };
     profiles?: any[];
     profilesDelete?: boolean;
@@ -151,6 +152,7 @@ async function mockBackend(
 ) {
   const {
     suites,
+    suitesError,
     runs,
     profiles,
     profilesDelete,
@@ -207,7 +209,11 @@ async function mockBackend(
   }
 
   // ── /suites ───────────────────────────────────────────
-  if (suites) {
+  if (suitesError) {
+    await page.route('**/suites', (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"suites failed"}' }),
+    );
+  } else if (suites) {
     await page.route('**/suites', (route) => route.fulfill({ json: suites }));
   } else {
     await page.route('**/suites', (route) => route.fulfill({ json: [] }));
@@ -327,6 +333,18 @@ test.describe('Sidebar Suite Navigation', () => {
 
     // All 3 runs should be visible again
     await expect(tableRows).toHaveCount(3);
+  });
+
+  test('Suite list load failure shows an error instead of an empty sidebar', async ({ page }) => {
+    await mockBackend(page, {
+      suitesError: true,
+      runs: { runs: [] },
+    });
+    await openDashboard(page);
+
+    await expect(page.getByTestId('suite-load-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('suite-load-error')).toContainText(/Unable to load|无法加载/);
+    await expect(page.getByText('No suites found')).toHaveCount(0);
   });
 
   // ── 2. Suite update and prepare buttons visible for git suites ─────────────
