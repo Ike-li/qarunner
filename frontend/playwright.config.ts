@@ -5,12 +5,14 @@ const desktopChrome = {
   ...devices['Desktop Chrome'],
   ...(useBundledChromium ? {} : { channel: 'chrome' as const }),
 };
+const unauthenticatedChromiumSpecs =
+  /.*\/(login-auth|login-smoke|role-anonymous)\.spec\.ts/;
 
 /**
  * See https://playwright.dev/docs/test-configuration.
  *
  * Projects:
- *   - chromium               : unauthenticated + login-flow specs
+ *   - chromium               : explicitly allowlisted anonymous + login-flow specs
  *                               (no storageState). globalSetup does not affect
  *                               them.
  *   - chromium-authed-admin   : storageState injected from global-setup, matches
@@ -52,8 +54,7 @@ export default defineConfig({
       // Default project: anonymous specs and login-flow specs that must run without storageState.
       // No storageState — globalSetup's persisted cookies do NOT leak into these.
       name: 'chromium',
-      testMatch: /.*\.spec\.ts/,
-      testIgnore: /.*\.authed-(admin|user)\.spec\.ts/,
+      testMatch: unauthenticatedChromiumSpecs,
       use: desktopChrome,
     },
     {
