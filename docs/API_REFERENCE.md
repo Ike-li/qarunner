@@ -294,7 +294,7 @@
 
 #### `GET /runs/{run_id}/diff` — owner
 把该 run 的 per-case 结果与其**基线**比对,分五桶。
-- **基线定义**：**同执行范围**（同 `tests_path` + `runner` + 编译后 `args`）、`created_at` 更早、状态 `COMPLETED` 的**最近一个** run。范围不等则用例集不可比,故严格匹配；非 `COMPLETED`（可能无/部分 cases）一律排除。
+- **基线定义**：**同执行范围**（同 `profile_id` + `tests_path` + `runner` + 编译后 `args`）、`created_at` 更早、状态 `COMPLETED` 的**最近一个** run。范围不等则用例集不可比,故严格匹配；非 `COMPLETED`（可能无/部分 cases）一律排除。
 - **基线候选同样 owner-scope**：非 admin 只在**自己的** run 里选基线，admin 跨全部——避免基线泄露他人 run 的 id 与用例数据。
 - 无可比基线 → `baseline: null` + 空 diff（**不**把全部用例塞进 `new_cases`）。
 - **成功**：`200` `RunDiffResponse`（`{baseline, diff}`，见 §八）。
@@ -302,7 +302,7 @@
 
 #### `GET /cases/history` — 认证（非 admin 静默过滤）
 单个测试用例的跨 run 历史 + flaky 判定。
-- 查询参数：`tests_path` · `suite` · `name`（三者**必填**,联合定位一个用例）· `limit`（默认 `20`）。
+- 查询参数：`tests_path` · `suite` · `name`（三者**必填**,联合定位一个用例）· `profile_id`（可选，限定一个 saved profile）· `limit`（默认 `20`）。
 - 返回最近 `limit` 次 `(created_at, status)`，按 `created_at` **升序**；`flaky` 由相邻 `pass ↔ fail/error` 翻转次数判定（**≥2 次**为 flaky，单次回归/修复不算），`flip_count` 为翻转次数。
 - **成功**：`200` `CaseHistoryResponse`（`{points, flaky, flip_count}`，见 §八）。
 - 非 admin 经 run 的 `created_by` 过滤,只看自己 run 里的该用例历史。

@@ -72,20 +72,21 @@ def diff(
 def select_baseline(head: Run, candidates: list[Run]) -> Run | None:
     """Pick the most recent COMPLETED run preceding *head* with the same scope.
 
-    Same execution scope = identical ``tests_path``, ``runner`` and compiled
-    ``args`` (markers / selected files / extra args are folded into ``args`` at
-    create time, so equal ``args`` ⇒ the same case universe — this is what
-    keeps the diff's new/removed buckets meaningful rather than artefacts of a
-    different selection). Only ``COMPLETED`` qualifies: FAILED/TIMEOUT/CANCELLED
-    runs may hold no or partial cases and would inflate the diff. ``candidates``
-    may include *head* itself (excluded by id). Returns ``None`` when no
-    comparable baseline exists.
+    Same execution scope = identical ``profile_id``, ``tests_path``, ``runner``
+    and compiled ``args`` (markers / selected files / extra args are folded into
+    ``args`` at create time, so equal ``args`` ⇒ the same case universe — this
+    is what keeps the diff's new/removed buckets meaningful rather than
+    artefacts of a different selection). Only ``COMPLETED`` qualifies:
+    FAILED/TIMEOUT/CANCELLED runs may hold no or partial cases and would inflate
+    the diff. ``candidates`` may include *head* itself (excluded by id). Returns
+    ``None`` when no comparable baseline exists.
     """
     comparable = [
         r
         for r in candidates
         if r.id != head.id
         and r.status == RunStatus.COMPLETED
+        and r.profile_id == head.profile_id
         and r.tests_path == head.tests_path
         and r.runner == head.runner
         and r.args == head.args

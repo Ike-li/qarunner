@@ -13,6 +13,7 @@ const MOCK_RUN = {
   status: 'completed',
   runner: 'pytest',
   created_by: 'admin',
+  profile_id: 'profile-e2e-diff',
   tests_path: 'suite/',
   args: ['-k', 'smoke'],
   executor_mode: 'docker',
@@ -119,9 +120,15 @@ test.describe('Run details — Diff tab (cross-run stage 2)', () => {
     await page.route(`**/runs/${RUN_ID}/diff`, (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(DIFF_WITH_BASELINE) }),
     );
-    await page.route('**/cases/history*', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FLAKY_HISTORY) }),
-    );
+    let historyRequestUrl: URL | null = null;
+    await page.route('**/cases/history*', (route) => {
+      historyRequestUrl = new URL(route.request().url());
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(FLAKY_HISTORY),
+      });
+    });
 
     await openRunAndDiffTab(page);
     await expect(page.getByTestId('diff-bucket-new_failures')).toBeVisible({ timeout: 5000 });
@@ -132,5 +139,6 @@ test.describe('Run details — Diff tab (cross-run stage 2)', () => {
 
     await expect(page.getByTestId('case-history').first()).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('flaky-badge').first()).toBeVisible();
+    expect(historyRequestUrl?.searchParams.get('profile_id')).toBe('profile-e2e-diff');
   });
 });

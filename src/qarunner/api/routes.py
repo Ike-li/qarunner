@@ -1500,6 +1500,7 @@ async def get_case_history(
     tests_path: str,
     suite: str,
     name: str,
+    profile_id: str | None = None,
     limit: int = 20,
     current_user: User = Depends(get_current_user),
 ) -> CaseHistoryResponse:
@@ -1510,7 +1511,14 @@ async def get_case_history(
     """
     container = request.app.state.container
     created_by = None if current_user.role == UserRole.ADMIN else current_user.username
-    points = await container.store.get_case_history(tests_path, suite, name, limit, created_by)
+    points = await container.store.get_case_history(
+        tests_path,
+        suite,
+        name,
+        limit,
+        created_by,
+        profile_id,
+    )
     policy = flaky.FlakyPolicy(
         min_observations=container.settings.flaky_min_observations,
         flip_threshold=container.settings.flaky_flip_threshold,

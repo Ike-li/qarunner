@@ -1100,6 +1100,31 @@ async def test_get_case_history_owner_scoped(store: SqliteStore) -> None:
     assert len(await store.get_case_history("suite_a", "s", "t", created_by="alice")) == 1
 
 
+async def test_get_case_history_profile_scoped(store: SqliteStore) -> None:
+    for rid, profile_id, status, day in [
+        ("pa-old", "profile-a", "passed", 1),
+        ("pb", "profile-b", "failed", 2),
+        ("pa-new", "profile-a", "passed", 3),
+    ]:
+        run = _make_run(
+            id=rid,
+            tests_path="suite_a",
+            profile_id=profile_id,
+            status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, day, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            rid,
+            "suite_a",
+            run.created_at,
+            [TestCaseResult(suite="s", name="t", status=status, duration_ms=0)],
+        )
+
+    hist = await store.get_case_history("suite_a", "s", "t", profile_id="profile-a")
+    assert [p.status for p in hist] == ["passed", "passed"]
+
+
 async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:
     run = _make_run(id="run-cascade")
     await store.save(run)

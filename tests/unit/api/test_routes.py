@@ -163,6 +163,7 @@ class FakeStore:
         name,
         limit=20,
         created_by=None,
+        profile_id=None,
     ) -> list:
         rows = []
         for run_id, cases in self._cases.items():
@@ -170,6 +171,8 @@ class FakeStore:
             if run is None or run.tests_path != tests_path:
                 continue
             if created_by is not None and run.created_by != created_by:
+                continue
+            if profile_id is not None and run.profile_id != profile_id:
                 continue
             for c in cases:
                 if c.suite == suite and c.name == name:
@@ -941,6 +944,60 @@ def test_run_diff_baseline_spans_owners_for_admin() -> None:
     assert resp.json()["baseline"]["id"] == "bob-base"
 
 
+def test_run_diff_baseline_prefers_same_profile_scope() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store,
+        id="same-profile-base",
+        created_by="alice",
+        tests_path="suite_a",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
+        profile_id="profile-a",
+    )
+    _make_run_in_store(
+        container.store,
+        id="sibling-profile-base",
+        created_by="alice",
+        tests_path="suite_a",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=3),
+        profile_id="profile-b",
+    )
+    _make_run_in_store(
+        container.store,
+        id="head",
+        created_by="alice",
+        tests_path="suite_a",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=5),
+        profile_id="profile-a",
+    )
+    _seed_cases(
+        container.store,
+        "same-profile-base",
+        [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
+    )
+    _seed_cases(
+        container.store,
+        "sibling-profile-base",
+        [TestCaseResult(suite="s", name="t", status="failed", duration_ms=0)],
+    )
+    _seed_cases(
+        container.store,
+        "head",
+        [TestCaseResult(suite="s", name="t", status="failed", duration_ms=0)],
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/head/diff")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["baseline"]["id"] == "same-profile-base"
+    assert [c["name"] for c in body["diff"]["new_failures"]] == ["t"]
+
+
 # ── GET /runs/trend (cross-run stage 1) ─────────────────────────────────
 
 
@@ -1440,6 +1497,38 @@ def test_case_history_admin_sees_all_owners() -> None:
     with TestClient(app) as client:
         resp = client.get("/cases/history?tests_path=s3&suite=x&name=t")
     assert len(resp.json()["points"]) == 2
+
+
+def test_case_history_can_be_profile_scoped() -> None:
+    container = _make_container()
+    for rid, profile_id, status, minute in [
+        ("p1-old", "profile-a", "passed", 0),
+        ("p2", "profile-b", "failed", 1),
+        ("p1-new", "profile-a", "passed", 2),
+    ]:
+        _make_run_in_store(
+            container.store,
+            id=rid,
+            created_by="alice",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=NOW + timedelta(minutes=minute),
+            profile_id=profile_id,
+        )
+        _seed_cases(
+            container.store,
+            rid,
+            [TestCaseResult(suite="s", name="t", status=status, duration_ms=0)],
+        )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=suite_a&suite=s&name=t&profile_id=profile-a")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [p["status"] for p in body["points"]] == ["passed", "passed"]
+    assert body["flaky"] is False
+    assert body["flip_count"] == 0
 
 
 def test_case_history_empty_for_unknown_case() -> None:

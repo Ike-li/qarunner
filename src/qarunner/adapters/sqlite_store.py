@@ -576,13 +576,16 @@ class SqliteStore:
         name: str,
         limit: int = 20,
         created_by: str | None = None,
+        profile_id: str | None = None,
     ) -> list[CaseHistoryPoint]:
-        """One case's recent outcomes, oldest-first. ``created_by`` (non-admin)
-        joins ``runs`` to scope to the caller's own runs; ``None`` (admin) spans
-        all owners. Indexed by ``idx_cases_case (tests_path, suite, name, …)``.
+        """One case's recent outcomes, oldest-first.
+
+        ``created_by`` and ``profile_id`` join ``runs`` to scope the history.
+        With no run-level filters, the query stays on the denormalised
+        ``run_test_cases`` table and its ``idx_cases_case`` index.
         """
         async with self._connect() as db:
-            if created_by is None:
+            if created_by is None and profile_id is None:
                 cursor = await db.execute(
                     "SELECT created_at, status FROM run_test_cases "
                     "WHERE tests_path = ? AND suite = ? AND name = ? "
@@ -590,13 +593,21 @@ class SqliteStore:
                     (tests_path, suite, name, limit),
                 )
             else:
+                clauses = ["c.tests_path = ?", "c.suite = ?", "c.name = ?"]
+                params: list[object] = [tests_path, suite, name]
+                if created_by is not None:
+                    clauses.append("r.created_by = ?")
+                    params.append(created_by)
+                if profile_id is not None:
+                    clauses.append("r.profile_id = ?")
+                    params.append(profile_id)
+                params.append(limit)
                 cursor = await db.execute(
                     "SELECT c.created_at, c.status FROM run_test_cases c "
                     "JOIN runs r ON c.run_id = r.id "
-                    "WHERE c.tests_path = ? AND c.suite = ? AND c.name = ? "
-                    "AND r.created_by = ? "
+                    f"WHERE {' AND '.join(clauses)} "
                     "ORDER BY c.created_at DESC LIMIT ?",
-                    (tests_path, suite, name, created_by, limit),
+                    params,
                 )
             rows = await cursor.fetchall()
         # DESC + LIMIT keeps the most recent window; reverse to oldest-first for

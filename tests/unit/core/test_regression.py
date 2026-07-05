@@ -5,7 +5,7 @@ Two contracts:
   "fails" iff status is ``failed``/``error`` (``passed``/``skipped`` are
   non-failures — the regression view cares about red, not coverage).
 - ``select_baseline(head, candidates)``: most recent COMPLETED run preceding
-  *head* with the same execution scope (tests_path + runner + args).
+  *head* with the same execution scope (profile_id + tests_path + runner + args).
 """
 
 from datetime import datetime, timedelta
@@ -29,6 +29,7 @@ def _run(
     tests_path="suite",
     args=None,
     minutes=0,
+    profile_id=None,
 ):
     return Run(
         id=run_id,
@@ -38,6 +39,7 @@ def _run(
         tests_path=tests_path,
         args=list(args or []),
         created_at=_T0 + timedelta(minutes=minutes),
+        profile_id=profile_id,
     )
 
 
@@ -145,6 +147,11 @@ class TestSelectBaseline:
     def test_excludes_different_tests_path(self):
         head = _run("h", tests_path="suiteA", minutes=10)
         other = _run("b", tests_path="suiteB", minutes=5)
+        assert select_baseline(head, [head, other]) is None
+
+    def test_excludes_different_profile(self):
+        head = _run("h", profile_id="profile-a", minutes=10)
+        other = _run("b", profile_id="profile-b", minutes=5)
         assert select_baseline(head, [head, other]) is None
 
     def test_excludes_non_completed(self):

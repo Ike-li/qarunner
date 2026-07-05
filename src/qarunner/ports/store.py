@@ -178,11 +178,13 @@ class Store(
         name: str,
         limit: int = 20,
         created_by: str | None = None,
+        profile_id: str | None = None,
     ) -> list[CaseHistoryPoint]:
         """Return one case's recent outcomes, oldest-first.
 
         ``created_by`` (a non-admin caller) scopes to that user's own runs;
-        ``None`` (admin) spans all owners.
+        ``None`` (admin) spans all owners. ``profile_id`` optionally narrows the
+        history to one saved execution profile.
         """
         ...
 

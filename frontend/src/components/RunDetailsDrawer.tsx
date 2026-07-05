@@ -63,6 +63,7 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
   const [loading, setLoading] = useState(false)
   const c = caseResult
   const testsPath = d.runs.selectedRun?.tests_path
+  const profileId = d.runs.selectedRun?.profile_id
   const label = c.suite ? `${c.suite}::${c.name}` : c.name
 
   const toggle = () => {
@@ -71,6 +72,7 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
     if (next && history === null && !loading && testsPath) {
       setLoading(true)
       const qs = new URLSearchParams({ tests_path: testsPath, suite: c.suite, name: c.name })
+      if (profileId) qs.set('profile_id', profileId)
       d.apiFetch(`/cases/history?${qs.toString()}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data: CaseHistory | null) => setHistory(data))
