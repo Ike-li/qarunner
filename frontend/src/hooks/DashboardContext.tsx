@@ -156,12 +156,14 @@ export function DashboardProvider({
   useEffect(() => {
     if (form.testsPath) {
       suites.fetchSuiteMetadata(form.testsPath)
-      setSelectedFiles([])
-      setSelectedMarkers([])
-      form.setSelectedProfileId('')
-      form.setProfileName('')
-      form.setProfileDesc('')
-      form.setIsSavingProfile(false)
+      if (!form.editingProfileId) {
+        setSelectedFiles([])
+        setSelectedMarkers([])
+        form.setSelectedProfileId('')
+        form.setProfileName('')
+        form.setProfileDesc('')
+        form.setIsSavingProfile(false)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.testsPath])

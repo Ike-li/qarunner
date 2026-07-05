@@ -4,14 +4,17 @@ import { test, expect } from '@playwright/test';
 // runner select, submit (success + error), save-as-profile, and profile
 // select flows using route-mocked backend for determinism.
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
-
-async function login(page: import('@playwright/test').Page) {
+// Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
+}
+
+async function selectTargetDirectory(page: import('@playwright/test').Page, suite = 'suite_a/') {
+  const testsPathSelect = page.locator('#trigger-tests-path');
+  await testsPathSelect.click();
+  await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: suite }).click();
+  await expect(testsPathSelect).toContainText(suite);
 }
 
 test.describe('Trigger Run Modal', () => {
@@ -25,7 +28,9 @@ test.describe('Trigger Run Modal', () => {
       await route.fulfill({ json: { runs: [] } });
     });
     await page.route('**/suites', async (route) => {
-      await route.fulfill({ json: ['suite_a/'] });
+      await route.fulfill({
+        json: [{ name: 'suite_a/', source: 'local', repo_url: null, ref: null }],
+      });
     });
     await page.route('**/tests', async (route) => {
       await route.fulfill({ json: ['suite_a/'] });
@@ -37,7 +42,7 @@ test.describe('Trigger Run Modal', () => {
       }
       await route.fulfill({ json: [] });
     });
-    await login(page);
+    await openDashboard(page);
   });
 
   // ── Test 1 ────────────────────────────────────────────────────────────
@@ -165,10 +170,7 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // Select target directory via keyboard
-    await page.locator('#trigger-tests-path').focus();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
+    await selectTargetDirectory(page);
 
     await page.getByTestId('trigger-timeout-input').fill('60');
 
@@ -316,8 +318,8 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // 2. Click the modal mask at a position outside the panel
-    await page.locator('.semi-modal-mask').click({ position: { x: 10, y: 10 } });
+    // 2. Click outside the modal panel. Semi UI's wrap receives the pointer event.
+    await page.mouse.click(10, 10);
 
     // 3. Verify modal is no longer visible
     await expect(page.getByTestId('trigger-modal')).not.toBeVisible();
@@ -364,15 +366,13 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // 2. Select target directory via keyboard (ArrowDown + Enter)
-    await page.locator('#trigger-tests-path').focus();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
+    await selectTargetDirectory(page);
 
     // 3. Fill timeout
     await page.getByTestId('trigger-timeout-input').fill('60');
 
-    // 4. Press Enter to submit the form from the focused timeout input
+    // 4. Press Enter on the focused submit button to submit by keyboard.
+    await page.getByTestId('trigger-submit-button').focus();
     await page.keyboard.press('Enter');
 
     // 5. Verify POST was sent with correct data
@@ -395,8 +395,8 @@ test.describe('Trigger Run Modal', () => {
     await expect(page.getByPlaceholder(/Name e\.g\. BASE_URL/i)).toBeVisible();
     await expect(page.getByPlaceholder('Value')).toBeVisible();
 
-    // 4. Click the delete button (danger button with X icon) on the env var row
-    await page.locator('.semi-button-danger').click();
+    // 4. Click the delete button on the env var row.
+    await page.getByRole('button', { name: 'Remove environment variable' }).click();
 
     // 5. Verify the row is removed (inputs no longer visible)
     await expect(page.getByPlaceholder(/Name e\.g\. BASE_URL/i)).not.toBeVisible();
@@ -426,9 +426,8 @@ test.describe('Trigger Run Modal', () => {
       });
     });
 
-    // Override /tests to handle the tree + markers endpoints.
-    await page.unroute('**/tests');
-    await page.route('**/tests', async (route) => {
+    // Override /tests metadata endpoints.
+    await page.route('**/tests/**', async (route) => {
       const url = route.request().url();
       if (url.includes('/tree')) {
         await route.fulfill({ json: mockTreeData });
@@ -443,30 +442,29 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // 2. Select target directory via keyboard
-    await page.locator('#trigger-tests-path').focus();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
+    await selectTargetDirectory(page);
 
     // 3. Wait for the tree to render (fetchSuiteMetadata fetches /tree after
     //    testsPath changes, which triggers the React effect)
-    await expect(page.locator('.semi-tree')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.semi-tree-option').first()).toBeVisible();
+    const tree = page.getByRole('tree');
+    await expect(tree).toBeVisible({ timeout: 10000 });
 
-    // 4. Click expand arrow on the first folder node
-    await page.locator('.semi-tree-option-expand-icon').first().click();
+    // 4. Expand the first folder node if its children are not already visible.
+    const testsFolder = tree.getByRole('treeitem').filter({ hasText: 'tests' }).first();
+    const testApiItem = tree.getByRole('treeitem', { name: /test_api\.py/ });
+    if (!(await testApiItem.isVisible().catch(() => false))) {
+      await testsFolder.getByRole('button').first().click();
+    }
 
     // 5. Verify child files appear after expanding
-    await expect(
-      page.locator('.semi-tree-option').filter({ hasText: 'test_api.py' })
-    ).toBeVisible({ timeout: 5000 });
+    await expect(testApiItem).toBeVisible({ timeout: 5000 });
 
     // 6. Check a checkbox on a file node
-    const fileOption = page.locator('.semi-tree-option').filter({ hasText: 'test_api.py' });
-    await fileOption.locator('.semi-checkbox').click();
+    const fileCheckbox = testApiItem.locator('.semi-checkbox');
+    await fileCheckbox.click();
 
     // 7. Verify the checkbox is now checked
-    await expect(fileOption.locator('.semi-checkbox')).toHaveClass(/semi-checkbox-checked/);
+    await expect(fileCheckbox).toHaveClass(/semi-checkbox-checked/);
   });
 
   // ── Test 15 ──────────────────────────────────────────────────────────
@@ -519,18 +517,11 @@ test.describe('Trigger Run Modal', () => {
     });
 
     // 1. Click the "Edit Profile" button in the sidebar.
-    //    The sidebar has profile action buttons: Instant Run, Edit,
-    //    Schedule (data-testid="open-schedule-button"), Delete.
-    //    The edit button is the 2nd button in the profile actions container.
-    const editBtn = page.getByTestId('open-schedule-button')
-      .locator('..')          // tooltip-wrapper span (3rd child)
-      .locator('..')          // nestedProfileActions div
-      .locator('> :nth-child(2) button');  // 2nd child span's button = Edit
-    await editBtn.click();
+    await page.getByRole('button', { name: 'Edit Profile' }).click();
 
     // 2. Verify modal opens in edit mode.
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
-    await expect(page.getByTestId('trigger-modal')).toContainText(/Modify Saved Execution Profile/i);
+    await expect(page.locator('#semi-modal-title')).toContainText(/Modify Saved Execution Profile/i);
 
     // 3. Verify form fields are populated from the profile.
     //    Note: openEditProfile does not call setSelectedRunner, so the runner
@@ -566,9 +557,8 @@ test.describe('Trigger Run Modal', () => {
       });
     });
 
-    // Override /tests to handle markers + tree endpoints.
-    await page.unroute('**/tests');
-    await page.route('**/tests', async (route) => {
+    // Override /tests metadata endpoints.
+    await page.route('**/tests/**', async (route) => {
       const url = route.request().url();
       if (url.includes('/markers')) {
         await route.fulfill({ json: mockMarkers });
@@ -585,10 +575,7 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // 2. Select target directory to trigger marker fetch.
-    await page.locator('#trigger-tests-path').focus();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
+    await selectTargetDirectory(page);
 
     // 3. Wait for marker tags to appear.
     await expect(page.getByText(/@smoke/)).toBeVisible({ timeout: 10000 });

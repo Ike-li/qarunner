@@ -2,8 +2,7 @@ import { test, expect } from '@playwright/test';
 
 // Report viewer E2E tests — verifies the report tab in RunDetailsDrawer and the
 // fullscreen Allure report overlay using route-mocked run data.
-
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
+// Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
 
 const MOCK_RUN_COMPLETED_WITH_REPORT = {
   id: 'run-report-0001',
@@ -45,11 +44,8 @@ const MOCK_RUN_RUNNING = {
   finished_at: null,
 };
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -61,7 +57,7 @@ test.describe('Report viewer', () => {
         await route.fallback();
         return;
       }
-      await route.fulfill({ json: [MOCK_RUN_COMPLETED_WITH_REPORT] });
+      await route.fulfill({ json: { runs: [MOCK_RUN_COMPLETED_WITH_REPORT] } });
     });
     await page.route('**/suites', async (route) => {
       await route.fulfill({ json: [] });
@@ -69,7 +65,7 @@ test.describe('Report viewer', () => {
     await page.route('**/tests', async (route) => {
       await route.fulfill({ json: ['suite/'] });
     });
-    await login(page);
+    await openDashboard(page);
   });
 
   test('report tab shows summary and report buttons for completed run with report', async ({ page }) => {
@@ -149,7 +145,7 @@ test.describe('Report viewer', () => {
         await route.fallback();
         return;
       }
-      await route.fulfill({ json: [MOCK_RUN_COMPLETED_NO_REPORT] });
+      await route.fulfill({ json: { runs: [MOCK_RUN_COMPLETED_NO_REPORT] } });
     });
 
     await page.reload();
@@ -173,7 +169,7 @@ test.describe('Report viewer', () => {
         await route.fallback();
         return;
       }
-      await route.fulfill({ json: [MOCK_RUN_RUNNING] });
+      await route.fulfill({ json: { runs: [MOCK_RUN_RUNNING] } });
     });
 
     await page.reload();

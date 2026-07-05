@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-// Verifies the cross-run pass-rate trend sparkline (stage 1). Login hits the
-// real backend (same as the other specs); /tests + /suites are route-mocked so
-// the sidebar shows a clickable suite, and /runs/trend is mocked so the SVG
+// Verifies the cross-run pass-rate trend sparkline (stage 1). Runs under
+// `chromium-authed-admin` with storageState; /tests + /suites are route-mocked
+// so the sidebar shows a clickable suite, and /runs/trend is mocked so the SVG
 // polyline (and the <2-points hint) render deterministically without real
 // cross-run data on disk.
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
 const SUITE = 'suite_a';
 
 const TREND_3 = {
@@ -18,11 +17,8 @@ const TREND_3 = {
   ],
 };
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -41,7 +37,7 @@ test.describe('Dashboard — suite pass-rate trend (cross-run stage 1)', () => {
     await page.route('**/suites', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ name: SUITE, source: 'local', repo_url: null, ref: null }]) }),
     );
-    await login(page);
+    await openDashboard(page);
   });
 
   test('renders the trend sparkline for the filtered suite', async ({ page }) => {
