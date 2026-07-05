@@ -252,6 +252,17 @@
 - **成功**：`200` 文件。
 - **错误**：`404`（不存在 / 文件不存在）· `403`（路径穿越被拦）。
 
+### `GET /runs/{run_id}/artifacts` — owner
+- 列出本次 run 的 Playwright trace / screenshot / video 等 runner 产物；只返回
+  `results/playwright-results` 下的普通文件，越界 symlink 会被忽略。
+- **成功**：`200` `{"artifacts": [{"path": "...", "size_bytes": 123}, ...]}`；没有产物目录时返回空数组。
+- **错误**：`404`（run 不存在）· `403`（他人）。
+
+### `GET /runs/{run_id}/artifacts/{path}` — owner
+- 路径参数：`path` 为列表接口返回的相对路径。
+- **成功**：`200` 文件。
+- **错误**：`404`（run 不存在 / 文件不存在）· `403`（他人 / 路径穿越或越界 symlink）。
+
 ### `GET /runs/{run_id}/stream` — owner
 **SSE 实时日志**，`Content-Type: text/event-stream`。
 - **成功**：`200`，流式逐行 `data: <一行日志>\n\n`；终态后 flush 剩余（≤256KB）后结束；单连接最长 3600s；客户端断开即停。

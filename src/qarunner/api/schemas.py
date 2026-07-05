@@ -107,6 +107,19 @@ class RunListResponse(BaseModel):
     runs: list[RunResponse]
 
 
+class RunArtifactResponse(BaseModel):
+    """A downloadable artifact produced by a run-specific runner."""
+
+    path: str
+    size_bytes: int
+
+
+class RunArtifactListResponse(BaseModel):
+    """Collection wrapper for a run's downloadable artifacts."""
+
+    artifacts: list[RunArtifactResponse] = Field(default_factory=list)
+
+
 class RunDiffBaselineInfo(BaseModel):
     """Identity of the baseline run a diff was computed against."""
 

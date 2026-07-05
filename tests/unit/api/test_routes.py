@@ -762,6 +762,135 @@ def test_get_report_assets_missing_file(tmp_path: Path) -> None:
     assert resp.status_code == 404
 
 
+# ── GET /runs/{run_id}/artifacts (Playwright artifacts) ────────────────
+
+
+def _playwright_artifact_run(tmp_path: Path, run_id: str = "pw-run") -> tuple[Container, Path]:
+    artifacts_root = tmp_path / "artifacts"
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(
+        container.store,
+        id=run_id,
+        runner="playwright",
+        status=RunStatus.COMPLETED,
+    )
+    artifact_dir = artifacts_root / run_id / "results" / "playwright-results"
+    artifact_dir.mkdir(parents=True)
+    return container, artifact_dir
+
+
+def test_list_run_artifacts_returns_playwright_files(tmp_path: Path) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    nested = artifact_dir / "failed-case"
+    nested.mkdir()
+    (nested / "trace.zip").write_bytes(b"trace-data")
+    (nested / "screenshot.png").write_bytes(b"png-data")
+    (artifact_dir / "empty-dir").mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    (artifact_dir / "escape").symlink_to(secret)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "artifacts": [
+            {"path": "failed-case/screenshot.png", "size_bytes": 8},
+            {"path": "failed-case/trace.zip", "size_bytes": 10},
+        ]
+    }
+
+
+def test_list_run_artifacts_missing_dir_returns_empty(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(
+        container.store,
+        id="pw-run",
+        runner="playwright",
+        status=RunStatus.COMPLETED,
+    )
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"artifacts": []}
+
+
+def test_list_run_artifacts_run_not_found(tmp_path: Path) -> None:
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path / "artifacts")))
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/missing/artifacts")
+
+    assert resp.status_code == 404
+
+
+def test_list_run_artifacts_non_owner_forbidden(tmp_path: Path) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    (artifact_dir / "trace.zip").write_bytes(b"trace")
+    run = container.store._runs["pw-run"]
+    container.store._runs["pw-run"] = run.model_copy(update={"created_by": "alice"})
+
+    app = create_app(container)
+    _override_user(app, "bob", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts")
+
+    assert resp.status_code == 403
+
+
+def test_download_run_artifact_success(tmp_path: Path) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    (artifact_dir / "trace.zip").write_bytes(b"trace-data")
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts/trace.zip")
+
+    assert resp.status_code == 200
+    assert resp.content == b"trace-data"
+
+
+def test_download_run_artifact_run_not_found(tmp_path: Path) -> None:
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path / "artifacts")))
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/missing/artifacts/trace.zip")
+
+    assert resp.status_code == 404
+
+
+def test_download_run_artifact_traversal_blocked(tmp_path: Path) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    (artifact_dir / "escape").symlink_to(secret)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts/escape")
+
+    assert resp.status_code == 403
+    assert "TOPSECRET" not in resp.text
+
+
+def test_download_run_artifact_missing_file(tmp_path: Path) -> None:
+    container, _artifact_dir = _playwright_artifact_run(tmp_path)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts/missing.zip")
+
+    assert resp.status_code == 404
+
+
 # ── object-level authorization (SEC-4) ─────────────────────────────────
 
 

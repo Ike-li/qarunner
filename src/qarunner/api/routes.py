@@ -28,6 +28,8 @@ from qarunner.api.schemas import (
     LinkTestSuiteResponse,
     LockRunRequest,
     LoginRequest,
+    RunArtifactListResponse,
+    RunArtifactResponse,
     RunDiffBaselineInfo,
     RunDiffResponse,
     RunListResponse,
@@ -1414,6 +1416,11 @@ def _read_log_tail(path: Path) -> str | None:
     return text
 
 
+def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path:
+    """Return the Playwright output directory for a run."""
+    return Path(artifacts_root) / run_id / "results" / "playwright-results"
+
+
 @router.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: str,
@@ -1578,6 +1585,68 @@ async def get_report_assets(
         raise HTTPException(status_code=404, detail="File not found")
 
     return FileResponse(asset_file)
+
+
+@router.get("/runs/{run_id}/artifacts", response_model=RunArtifactListResponse)
+async def list_run_artifacts(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunArtifactListResponse:
+    """List downloadable runner artifacts for a completed run."""
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+
+    artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
+    if not artifact_root.is_dir():
+        return RunArtifactListResponse()
+
+    artifact_root_resolved = artifact_root.resolve()
+    artifacts: list[RunArtifactResponse] = []
+    for candidate in sorted(artifact_root.rglob("*")):
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(artifact_root_resolved) or not candidate.is_file():
+            continue
+        artifacts.append(
+            RunArtifactResponse(
+                path=candidate.relative_to(artifact_root).as_posix(),
+                size_bytes=candidate.stat().st_size,
+            )
+        )
+    return RunArtifactListResponse(artifacts=artifacts)
+
+
+@router.get("/runs/{run_id}/artifacts/{path:path}")
+async def download_run_artifact(
+    run_id: str,
+    path: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> FileResponse:
+    """Download a single runner artifact without allowing path escape."""
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+
+    from qarunner.core.paths import safe_subpath
+
+    artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
+    try:
+        artifact_path = safe_subpath(str(artifact_root), path)
+    except UnsafePath:
+        raise HTTPException(status_code=403, detail="Access denied") from None
+
+    artifact_file = Path(artifact_path)
+    if not artifact_file.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(artifact_file)
 
 
 # CONC-1: bound the SSE log-follow loop so an abandoned or slow client cannot
