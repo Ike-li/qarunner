@@ -63,7 +63,7 @@ test.describe('Journey 1 — new user onboarding chain', () => {
     await expect(page.getByTestId('user-modal')).toBeHidden({ timeout: 5000 });
 
     // ── Step 3: Admin logs out via UI ──
-    // Logout button = last <button> in <header> (verified by user-mgmt.spec.ts).
+    // Logout button = last <button> in <header> (verified by user-mgmt.authed-admin.spec.ts).
     await page.locator('header button:last-of-type').click();
 
     // Should land on login screen.
