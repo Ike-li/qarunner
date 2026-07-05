@@ -14,18 +14,22 @@ interface UseProfilesOpts {
  */
 export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UseProfilesOpts) {
   const [profiles, setProfiles] = useState<Profile[]>([])
+  const [profileLoadError, setProfileLoadError] = useState(false)
 
   // ── fetch ──────────────────────────────────────────────────────────────
 
   const fetchProfiles = useCallback(async () => {
+    setProfileLoadError(false)
     try {
       const resp = await apiFetch('/profiles')
-      if (resp.ok) {
-        const data = await resp.json()
-        setProfiles(data)
-      }
+      if (!resp.ok) throw new Error(`Profiles request failed: ${resp.status}`)
+      const data = await resp.json()
+      setProfiles(data)
+      setProfileLoadError(false)
     } catch (err) {
       console.error('Error fetching profiles:', err)
+      setProfiles([])
+      setProfileLoadError(true)
     }
   }, [apiFetch])
 
@@ -85,11 +89,13 @@ export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UsePr
 
   return {
     profiles,
+    profileLoadError,
     fetchProfiles,
     handleTriggerProfile,
     handleDeleteProfile,
     _reset: () => {
       setProfiles([])
+      setProfileLoadError(false)
     },
   } as const
 }

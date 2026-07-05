@@ -97,7 +97,14 @@ export function ProjectSidebar() {
             <p>{d.t('noSuitesScanned')}</p>
           </div>
         ) : (
-          d.suites.tests.map((suite) => {
+          <>
+          {d.profiles.profileLoadError && (
+            <div className={styles.sidebarEmpty} data-testid="profile-load-error" role="alert">
+              <p>{d.t('profileLoadError')}</p>
+              <span>{d.t('profileLoadErrorDesc')}</span>
+            </div>
+          )}
+          {d.suites.tests.map((suite) => {
             const isFiltered = d.selectedSuiteFilter === suite
             const suiteRunsCount = d.runs.runs.filter(r => r.tests_path === suite).length
             const suiteProfiles = d.profiles.profiles.filter(p => p.tests_path === suite)
@@ -406,7 +413,8 @@ export function ProjectSidebar() {
                 )}
               </div>
             )
-          })
+          })}
+          </>
         )}
       </div>
     </div>

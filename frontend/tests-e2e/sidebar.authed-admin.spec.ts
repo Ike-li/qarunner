@@ -143,6 +143,7 @@ async function mockBackend(
     suitesError?: boolean;
     runs?: { runs: any[] };
     profiles?: any[];
+    profilesError?: boolean;
     profilesDelete?: boolean;
     triggerRun?: boolean;
     triggerProfile?: boolean;
@@ -155,6 +156,7 @@ async function mockBackend(
     suitesError,
     runs,
     profiles,
+    profilesError,
     profilesDelete,
     triggerRun,
     triggerProfile,
@@ -233,7 +235,11 @@ async function mockBackend(
   });
 
   // ── /profiles ──────────────────────────────────────────
-  if (profiles) {
+  if (profilesError) {
+    await page.route('**/profiles', (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"profiles failed"}' }),
+    );
+  } else if (profiles) {
     let profilesData = [...profiles];
 
     await page.route('**/profiles', async (route) => {
@@ -345,6 +351,19 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(page.getByTestId('suite-load-error')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('suite-load-error')).toContainText(/Unable to load|无法加载/);
     await expect(page.getByText('No suites found')).toHaveCount(0);
+  });
+
+  test('Profile list load failure shows an error instead of hiding saved profiles', async ({ page }) => {
+    await mockBackend(page, {
+      suites: [GIT_SUITE],
+      runs: { runs: [] },
+      profilesError: true,
+    });
+    await openDashboard(page);
+
+    await expect(page.getByText(SUITE_A, { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('profile-load-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('profile-load-error')).toContainText(/Unable to load|无法加载/);
   });
 
   // ── 2. Suite update and prepare buttons visible for git suites ─────────────
