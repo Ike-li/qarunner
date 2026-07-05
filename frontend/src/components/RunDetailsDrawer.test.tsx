@@ -114,6 +114,12 @@ describe('RunDetailsDrawer', () => {
   it('shows persisted case results on the report tab', () => {
     render(<RunDetailsDrawer />)
 
+    const summarySection = screen.getByTestId('report-section-summary')
+    const casesSection = screen.getByTestId('report-section-cases')
+    expect(summarySection).toHaveTextContent('testOutcomes')
+    expect(summarySection.compareDocumentPosition(casesSection)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
     expect(screen.getByTestId('run-case-results')).toBeVisible()
     expect(screen.getByTestId('run-case-result-0')).toHaveTextContent(
       'checkout::test_guest_checkout',
@@ -167,6 +173,11 @@ describe('RunDetailsDrawer', () => {
     })
 
     expect(await screen.findByTestId('run-artifacts')).toBeVisible()
+    const casesSection = screen.getByTestId('report-section-cases')
+    const artifactsSection = screen.getByTestId('report-section-artifacts')
+    expect(casesSection.compareDocumentPosition(artifactsSection)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
     expect(screen.getByTestId('run-artifacts-download-all')).toHaveTextContent(
       'downloadAllArtifacts',
     )

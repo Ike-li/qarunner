@@ -671,283 +671,292 @@ export function RunDetailsDrawer() {
             {d.terminal.drawerTab === 'report' && (
               <>
                 {/* Dynamic summary chart block */}
-                {d.runs.selectedRun.summary ? (
-                  <div className={styles.compactSummaryBar}>
-                    <div className={styles.compactSummaryMetrics}>
-                      <span className={`${styles.compactMetric} ${styles.compactMetricPassed}`}>
-                        <CheckCircle2 size={12} />
-                        <span>{d.t('passed')}:</span>
-                        <strong>{d.runs.selectedRun.summary.passed}</strong>
-                      </span>
-                      <span className={`${styles.compactMetric} ${styles.compactMetricFailed}`}>
-                        <XCircle size={12} />
-                        <span>{d.t('failed')}:</span>
-                        <strong>{d.runs.selectedRun.summary.failed}</strong>
-                      </span>
-                      <span className={`${styles.compactMetric} ${styles.compactMetricError}`}>
-                        <AlertTriangle size={12} />
-                        <span>{d.t('error')}:</span>
-                        <strong>{d.runs.selectedRun.summary.error}</strong>
-                      </span>
-                      <span className={`${styles.compactMetric} ${styles.compactMetricSkipped}`}>
-                        <Clock size={12} />
-                        <span>{d.t('skipped')}:</span>
-                        <strong>{d.runs.selectedRun.summary.skipped}</strong>
-                      </span>
-                      <span className={styles.compactMetricDuration}>
-                        <Clock size={12} />
-                        <span>{d.t('durationLabel')}: {formatDuration(d.runs.selectedRun.summary.duration_ms)}</span>
-                      </span>
-                    </div>
-
-                    {/* Multi-segmented single bar chart */}
-                    <div className={styles.compactSegmentBar}>
-                      {d.runs.selectedRun.summary.passed > 0 && (
-                        <div 
-                          className={styles.segmentPassed} 
-                          style={{ width: `${(d.runs.selectedRun.summary.passed / d.runs.selectedRun.summary.total) * 100}%` }}
-                          title={`${d.t('passed')}: ${d.runs.selectedRun.summary.passed}`}
-                        ></div>
-                      )}
-                      {d.runs.selectedRun.summary.failed > 0 && (
-                        <div 
-                          className={styles.segmentFailed} 
-                          style={{ width: `${(d.runs.selectedRun.summary.failed / d.runs.selectedRun.summary.total) * 100}%` }}
-                          title={`${d.t('failed')}: ${d.runs.selectedRun.summary.failed}`}
-                        ></div>
-                      )}
-                      {d.runs.selectedRun.summary.error > 0 && (
-                        <div 
-                          className={styles.segmentError} 
-                          style={{ width: `${(d.runs.selectedRun.summary.error / d.runs.selectedRun.summary.total) * 100}%` }}
-                          title={`${d.t('error')}: ${d.runs.selectedRun.summary.error}`}
-                        ></div>
-                      )}
-                      {d.runs.selectedRun.summary.skipped > 0 && (
-                        <div 
-                          className={styles.segmentSkipped} 
-                          style={{ width: `${(d.runs.selectedRun.summary.skipped / d.runs.selectedRun.summary.total) * 100}%` }}
-                          title={`${d.t('skipped')}: ${d.runs.selectedRun.summary.skipped}`}
-                        ></div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className={styles.summaryPlaceholder}>
-                    <Activity size={24} className={styles.pulseIcon} style={{ color: '#06b6d4', marginBottom: '0.75rem' }} />
-                    <p>{d.t('execInProgress')}</p>
-                    <span>{d.t('execInProgressDesc')}</span>
-                  </div>
-                )}
-
-                {caseResults.length > 0 && (
-                  <div
-                    data-testid="run-case-results"
-                    style={{
-                      border: '1px solid var(--semi-color-border)',
-                      borderRadius: 4,
-                      padding: '0.65rem 0.75rem',
-                      marginBottom: '0.75rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.5rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
-                      <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('caseResults')}</h4>
-                      <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>{caseResults.length}</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      {caseResults.map((caseResult, index) => {
-                        const label = caseResult.suite
-                          ? `${caseResult.suite}::${caseResult.name}`
-                          : caseResult.name
-                        return (
-                          <div
-                            key={`${caseResult.suite}:${caseResult.name}:${index}`}
-                            data-testid={`run-case-result-${index}`}
-                            style={{
-                              borderTop: index === 0 ? 'none' : '1px solid var(--semi-color-border)',
-                              paddingTop: index === 0 ? 0 : '0.4rem',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '0.25rem',
-                              fontSize: '0.8rem',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                              <code>{label}</code>
-                              <span style={{ color: CASE_STATUS_COLOR[caseResult.status], fontWeight: 600 }}>
-                                {caseResult.status}
-                              </span>
-                              <span style={{ opacity: 0.7 }}>{formatDuration(caseResult.duration_ms)}</span>
-                            </div>
-                            {caseResult.message && (
-                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', opacity: 0.7 }}>
-                                {caseResult.message}
-                              </pre>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {artifactsLoading && (
-                  <span className={styles.terminalPlaceholder} data-testid="run-artifacts-loading">
-                    {d.t('artifactsLoading')}
-                  </span>
-                )}
-
-                {artifactsError && (
-                  <div className={styles.summaryPlaceholder} data-testid="run-artifacts-error">
-                    <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
-                    <p>{d.t('artifactsLoadError')}</p>
-                  </div>
-                )}
-
-                {runArtifacts.length > 0 && (
-                  <div
-                    data-testid="run-artifacts"
-                    style={{
-                      border: '1px solid var(--semi-color-border)',
-                      borderRadius: 4,
-                      padding: '0.65rem 0.75rem',
-                      marginBottom: '0.75rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.5rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                        <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('runnerArtifacts')}</h4>
-                        <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>
-                          {d.t('runnerArtifactsDesc')}
+                <section data-testid="report-section-summary" aria-label={d.t('testOutcomes')}>
+                  <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.9rem' }}>{d.t('testOutcomes')}</h4>
+                  {d.runs.selectedRun.summary ? (
+                    <div className={styles.compactSummaryBar}>
+                      <div className={styles.compactSummaryMetrics}>
+                        <span className={`${styles.compactMetric} ${styles.compactMetricPassed}`}>
+                          <CheckCircle2 size={12} />
+                          <span>{d.t('passed')}:</span>
+                          <strong>{d.runs.selectedRun.summary.passed}</strong>
+                        </span>
+                        <span className={`${styles.compactMetric} ${styles.compactMetricFailed}`}>
+                          <XCircle size={12} />
+                          <span>{d.t('failed')}:</span>
+                          <strong>{d.runs.selectedRun.summary.failed}</strong>
+                        </span>
+                        <span className={`${styles.compactMetric} ${styles.compactMetricError}`}>
+                          <AlertTriangle size={12} />
+                          <span>{d.t('error')}:</span>
+                          <strong>{d.runs.selectedRun.summary.error}</strong>
+                        </span>
+                        <span className={`${styles.compactMetric} ${styles.compactMetricSkipped}`}>
+                          <Clock size={12} />
+                          <span>{d.t('skipped')}:</span>
+                          <strong>{d.runs.selectedRun.summary.skipped}</strong>
+                        </span>
+                        <span className={styles.compactMetricDuration}>
+                          <Clock size={12} />
+                          <span>{d.t('durationLabel')}: {formatDuration(d.runs.selectedRun.summary.duration_ms)}</span>
                         </span>
                       </div>
-                      <a
-                        data-testid="run-artifacts-download-all"
-                        href={`/runs/${d.runs.selectedRun!.id}/artifacts.zip`}
-                        download
+
+                      {/* Multi-segmented single bar chart */}
+                      <div className={styles.compactSegmentBar}>
+                        {d.runs.selectedRun.summary.passed > 0 && (
+                          <div
+                            className={styles.segmentPassed}
+                            style={{ width: `${(d.runs.selectedRun.summary.passed / d.runs.selectedRun.summary.total) * 100}%` }}
+                            title={`${d.t('passed')}: ${d.runs.selectedRun.summary.passed}`}
+                          ></div>
+                        )}
+                        {d.runs.selectedRun.summary.failed > 0 && (
+                          <div
+                            className={styles.segmentFailed}
+                            style={{ width: `${(d.runs.selectedRun.summary.failed / d.runs.selectedRun.summary.total) * 100}%` }}
+                            title={`${d.t('failed')}: ${d.runs.selectedRun.summary.failed}`}
+                          ></div>
+                        )}
+                        {d.runs.selectedRun.summary.error > 0 && (
+                          <div
+                            className={styles.segmentError}
+                            style={{ width: `${(d.runs.selectedRun.summary.error / d.runs.selectedRun.summary.total) * 100}%` }}
+                            title={`${d.t('error')}: ${d.runs.selectedRun.summary.error}`}
+                          ></div>
+                        )}
+                        {d.runs.selectedRun.summary.skipped > 0 && (
+                          <div
+                            className={styles.segmentSkipped}
+                            style={{ width: `${(d.runs.selectedRun.summary.skipped / d.runs.selectedRun.summary.total) * 100}%` }}
+                            title={`${d.t('skipped')}: ${d.runs.selectedRun.summary.skipped}`}
+                          ></div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={styles.summaryPlaceholder}>
+                      <Activity size={24} className={styles.pulseIcon} style={{ color: '#06b6d4', marginBottom: '0.75rem' }} />
+                      <p>{d.t('execInProgress')}</p>
+                      <span>{d.t('execInProgressDesc')}</span>
+                    </div>
+                  )}
+                </section>
+
+                {caseResults.length > 0 && (
+                  <section data-testid="report-section-cases" aria-label={d.t('caseResults')}>
+                    <div
+                      data-testid="run-case-results"
+                      style={{
+                        border: '1px solid var(--semi-color-border)',
+                        borderRadius: 4,
+                        padding: '0.65rem 0.75rem',
+                        marginBottom: '0.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                        <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('caseResults')}</h4>
+                        <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>{caseResults.length}</span>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        {caseResults.map((caseResult, index) => {
+                          const label = caseResult.suite
+                            ? `${caseResult.suite}::${caseResult.name}`
+                            : caseResult.name
+                          return (
+                            <div
+                              key={`${caseResult.suite}:${caseResult.name}:${index}`}
+                              data-testid={`run-case-result-${index}`}
+                              style={{
+                                borderTop: index === 0 ? 'none' : '1px solid var(--semi-color-border)',
+                                paddingTop: index === 0 ? 0 : '0.4rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.25rem',
+                                fontSize: '0.8rem',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <code>{label}</code>
+                                <span style={{ color: CASE_STATUS_COLOR[caseResult.status], fontWeight: 600 }}>
+                                  {caseResult.status}
+                                </span>
+                                <span style={{ opacity: 0.7 }}>{formatDuration(caseResult.duration_ms)}</span>
+                              </div>
+                              {caseResult.message && (
+                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', opacity: 0.7 }}>
+                                  {caseResult.message}
+                                </pre>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {(artifactsLoading || artifactsError || runArtifacts.length > 0) && (
+                  <section data-testid="report-section-artifacts" aria-label={d.t('runnerArtifacts')}>
+                    {artifactsLoading && (
+                      <span className={styles.terminalPlaceholder} data-testid="run-artifacts-loading">
+                        {d.t('artifactsLoading')}
+                      </span>
+                    )}
+
+                    {artifactsError && (
+                      <div className={styles.summaryPlaceholder} data-testid="run-artifacts-error">
+                        <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
+                        <p>{d.t('artifactsLoadError')}</p>
+                      </div>
+                    )}
+
+                    {runArtifacts.length > 0 && (
+                      <div
+                        data-testid="run-artifacts"
                         style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          color: 'var(--semi-color-primary)',
-                          fontSize: '0.78rem',
-                          fontWeight: 700,
-                          textDecoration: 'none',
-                          flexShrink: 0,
+                          border: '1px solid var(--semi-color-border)',
+                          borderRadius: 4,
+                          padding: '0.65rem 0.75rem',
+                          marginBottom: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
                         }}
                       >
-                        <Download size={13} />
-                        <span>{d.t('downloadAllArtifacts')}</span>
-                      </a>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                      {artifactGroups.map((group) => (
-                        <div
-                          key={group.key}
-                          data-testid={`run-artifact-group-${group.key}`}
-                          style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}
-                        >
-                          <div style={{ fontSize: '0.72rem', fontWeight: 700, opacity: 0.72, textTransform: 'uppercase' }}>
-                            {d.t(group.labelKey)}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('runnerArtifacts')}</h4>
+                            <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>
+                              {d.t('runnerArtifactsDesc')}
+                            </span>
                           </div>
-                          {group.items.map(({ artifact, index }) => {
-                            const traceCommand = traceViewerCommand(artifact)
-                            return (
-                              <div
-                                key={artifact.path}
-                                style={{
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  gap: '0.25rem',
-                                }}
-                              >
-                                <a
-                                  data-testid={`run-artifact-link-${index}`}
-                                  href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
-                                  download
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    gap: '0.75rem',
-                                    color: 'var(--semi-color-primary)',
-                                    textDecoration: 'none',
-                                    fontSize: '0.8rem',
-                                  }}
-                                >
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
-                                    <Download size={13} />
-                                    <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
-                                  </span>
-                                  <span
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '0.5rem',
-                                      opacity: 0.65,
-                                      flexShrink: 0,
-                                    }}
-                                  >
-                                    <code>{artifact.content_type}</code>
-                                    <span>{formatBytes(artifact.size_bytes)}</span>
-                                  </span>
-                                </a>
-                                {group.key === 'trace' && (
+                          <a
+                            data-testid="run-artifacts-download-all"
+                            href={`/runs/${d.runs.selectedRun!.id}/artifacts.zip`}
+                            download
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              color: 'var(--semi-color-primary)',
+                              fontSize: '0.78rem',
+                              fontWeight: 700,
+                              textDecoration: 'none',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Download size={13} />
+                            <span>{d.t('downloadAllArtifacts')}</span>
+                          </a>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                          {artifactGroups.map((group) => (
+                            <div
+                              key={group.key}
+                              data-testid={`run-artifact-group-${group.key}`}
+                              style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}
+                            >
+                              <div style={{ fontSize: '0.72rem', fontWeight: 700, opacity: 0.72, textTransform: 'uppercase' }}>
+                                {d.t(group.labelKey)}
+                              </div>
+                              {group.items.map(({ artifact, index }) => {
+                                const traceCommand = traceViewerCommand(artifact)
+                                return (
                                   <div
-                                    data-testid={`run-artifact-trace-command-${index}`}
+                                    key={artifact.path}
                                     style={{
                                       display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'space-between',
-                                      gap: '0.75rem',
-                                      border: '1px dashed var(--semi-color-border)',
-                                      borderRadius: 4,
-                                      padding: '0.35rem 0.45rem',
-                                      fontSize: '0.76rem',
-                                      color: 'var(--semi-color-text-1)',
-                                      background: 'var(--semi-color-fill-0)',
+                                      flexDirection: 'column',
+                                      gap: '0.25rem',
                                     }}
                                   >
-                                    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
-                                      <span style={{ opacity: 0.65 }}>{d.t('traceViewerCommand')}</span>
-                                      <code style={{ overflowWrap: 'anywhere' }}>{traceCommand}</code>
-                                    </span>
-                                    <button
-                                      type="button"
-                                      data-testid={`run-artifact-trace-copy-${index}`}
-                                      onClick={() => d.terminal.copyToClipboard(traceCommand)}
+                                    <a
+                                      data-testid={`run-artifact-link-${index}`}
+                                      href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
+                                      download
                                       style={{
-                                        display: 'inline-flex',
+                                        display: 'flex',
                                         alignItems: 'center',
-                                        gap: '0.25rem',
+                                        justifyContent: 'space-between',
+                                        gap: '0.75rem',
                                         color: 'var(--semi-color-primary)',
-                                        border: 'none',
-                                        background: 'transparent',
-                                        cursor: 'pointer',
-                                        fontSize: '0.74rem',
-                                        fontWeight: 700,
-                                        padding: 0,
-                                        flexShrink: 0,
+                                        textDecoration: 'none',
+                                        fontSize: '0.8rem',
                                       }}
                                     >
-                                      <Copy size={12} />
-                                      <span>{d.t('copyTraceCommand')}</span>
-                                    </button>
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
+                                        <Download size={13} />
+                                        <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
+                                      </span>
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '0.5rem',
+                                          opacity: 0.65,
+                                          flexShrink: 0,
+                                        }}
+                                      >
+                                        <code>{artifact.content_type}</code>
+                                        <span>{formatBytes(artifact.size_bytes)}</span>
+                                      </span>
+                                    </a>
+                                    {group.key === 'trace' && (
+                                      <div
+                                        data-testid={`run-artifact-trace-command-${index}`}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          gap: '0.75rem',
+                                          border: '1px dashed var(--semi-color-border)',
+                                          borderRadius: 4,
+                                          padding: '0.35rem 0.45rem',
+                                          fontSize: '0.76rem',
+                                          color: 'var(--semi-color-text-1)',
+                                          background: 'var(--semi-color-fill-0)',
+                                        }}
+                                      >
+                                        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
+                                          <span style={{ opacity: 0.65 }}>{d.t('traceViewerCommand')}</span>
+                                          <code style={{ overflowWrap: 'anywhere' }}>{traceCommand}</code>
+                                        </span>
+                                        <button
+                                          type="button"
+                                          data-testid={`run-artifact-trace-copy-${index}`}
+                                          onClick={() => d.terminal.copyToClipboard(traceCommand)}
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.25rem',
+                                            color: 'var(--semi-color-primary)',
+                                            border: 'none',
+                                            background: 'transparent',
+                                            cursor: 'pointer',
+                                            fontSize: '0.74rem',
+                                            fontWeight: 700,
+                                            padding: 0,
+                                            flexShrink: 0,
+                                          }}
+                                        >
+                                          <Copy size={12} />
+                                          <span>{d.t('copyTraceCommand')}</span>
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
-                            )
-                          })}
+                                )
+                              })}
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                      </div>
+                    )}
+                  </section>
                 )}
 
                 {/* Premium Allure Report Portal Actions */}
