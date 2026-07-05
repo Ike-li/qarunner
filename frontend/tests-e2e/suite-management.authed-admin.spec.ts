@@ -1,19 +1,12 @@
 import { test, expect } from '@playwright/test';
 
-// The backend rejects known-weak admin passwords (SEC-2), so the seeded admin
-// password is configurable. Override via E2E_ADMIN_PASSWORD to match the backend
-// under test; defaults to the legacy 'admin123' for local/dev backends.
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
+// Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
 
 test.describe('Suite Management (Add Suite Modal)', () => {
   // spec: specs/ui-test-plan.md §6
 
   test.beforeEach(async ({ page }) => {
-    // Navigate to the application and log in as admin
     await page.goto('/');
-    await page.getByTestId('login-username').fill('admin');
-    await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-    await page.getByTestId('login-submit').click();
     await expect(page.getByTestId('profile-username')).toHaveText('admin');
   });
 
@@ -124,8 +117,9 @@ test.describe('Suite Management (Add Suite Modal)', () => {
     await page.getByTestId('open-add-suite-button').click();
     await expect(page.getByTestId('add-suite-modal')).toBeAttached();
 
-    // 2. Click the Semi UI Modal mask at a position outside the panel
-    await page.locator('.semi-modal-mask').click({ position: { x: 10, y: 10 } });
+    // 2. Click outside the panel. Semi UI's wrap receives the pointer event
+    // above the visual mask layer.
+    await page.locator('.semi-modal-wrap').click({ position: { x: 10, y: 10 } });
 
     // 3. Verify modal is no longer attached
     await expect(page.getByTestId('add-suite-modal')).not.toBeAttached();
