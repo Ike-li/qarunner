@@ -150,7 +150,7 @@
 - **错误**：`400`（不安全路径）· `404`（套件不存在）。
 
 ### `GET /tests/{suite_name}/markers` — 认证
-- 路径参数：`suite_name`。静态解析 pytest marker。
+- 路径参数：`suite_name`。静态解析 pytest marker 与 Playwright 测试标题中的 `@tag`。
 - **成功**：`200` `["smoke", "slow", ...]`（不存在的套件返回 `[]`）。
 - **错误**：`400`（不安全路径）。
 

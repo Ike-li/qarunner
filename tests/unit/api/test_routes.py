@@ -2655,6 +2655,43 @@ def test_get_tree_includes_playwright_specs(
     assert {c["name"] for c in specs_node["children"]} == {"messaging.spec.ts"}
 
 
+def test_get_markers_includes_playwright_title_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Playwright suites use ``@tag`` in test titles, not ``pytest.mark`` decorators."""
+    tests_dir = tmp_path / "external_tests"
+    tests_dir.mkdir()
+    suite_dir = tests_dir / "playwright_suite"
+    suite_dir.mkdir()
+    (suite_dir / "login.spec.ts").write_text(
+        """
+import { test, expect } from '@playwright/test';
+
+test.describe('login @smoke', () => {
+  test('admin can sign in @auth-flow @regression', async ({ page }) => {});
+  test('plain title without tags', async ({ page }) => {});
+});
+""",
+        encoding="utf-8",
+    )
+    (suite_dir / "test_string_only.py").write_text(
+        """
+def test_not_playwright_title():
+    text = "test('not a Playwright title @notatag')"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/tests/playwright_suite/markers")
+
+    assert resp.status_code == 200
+    assert resp.json() == ["auth-flow", "regression", "smoke"]
+
+
 def test_create_profile_rejects_nonpositive_timeout() -> None:
     # P2-5: a non-positive timeout would expire immediately; reject at the edge.
     container = _make_container()

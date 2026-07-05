@@ -25,7 +25,7 @@
 - **Pull 更新** — 对 git 套件拉取最新(复用 clone 时绑定的凭证)。
 - **Prepare 依赖** — 对含 `package.json` 的套件跑 `npm ci`(playwright 套件常用)。
 
-辅助:**文件树浏览**(挑选要跑的测试文件)、**pytest marker 解析**(按标记过滤用例)、**Playwright tag grep**(选中标记编译为 `--grep @tag`)、删除套件。
+辅助:**文件树浏览**(挑选要跑的测试文件)、**pytest marker / Playwright `@tag` 解析**(按标记过滤用例)、**Playwright tag grep**(选中标记编译为 `--grep @tag`)、删除套件。
 
 - **凭证管理(私有仓库认证)** — `POST/GET/DELETE /credentials` 存 HTTPS token:secret **加密落库**(Fernet,密钥由 `SECRET_KEY` 经 HKDF 派生)、**只写不回读**;clone/pull 时 token 经 **`GIT_ASKPASS` env 注入**,绝不进 argv / URL / 日志;owner-scope(非 admin 只能用自己的凭证)。
 

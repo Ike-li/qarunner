@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import stat
 import tempfile
 import uuid
@@ -986,6 +987,21 @@ async def delete_test_suite(
 # JS/TS suffixes a Playwright suite (e.g. my-e2e-suite) renders an empty
 # tree and the UI can't browse or select any test.
 _JS_TEST_SUFFIXES = (".spec.ts", ".spec.js", ".spec.mjs", ".test.ts", ".test.js", ".test.mjs")
+_PLAYWRIGHT_TITLE_PATTERNS = (
+    re.compile(
+        r"""\btest(?:\.(?:describe(?:\.(?:only|skip|serial|parallel))?|only|skip|fixme|slow|fail))?\s*\(\s*'((?:\\.|[^'\\])*)'""",
+        re.DOTALL,
+    ),
+    re.compile(
+        r'\btest(?:\.(?:describe(?:\.(?:only|skip|serial|parallel))?|only|skip|fixme|slow|fail))?\s*\(\s*"((?:\\.|[^"\\])*)"',
+        re.DOTALL,
+    ),
+    re.compile(
+        r"""\btest(?:\.(?:describe(?:\.(?:only|skip|serial|parallel))?|only|skip|fixme|slow|fail))?\s*\(\s*`((?:\\.|[^`\\])*)`""",
+        re.DOTALL,
+    ),
+)
+_PLAYWRIGHT_TAG_PATTERN = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
 
 
 def _is_test_tree_file(name: str) -> bool:
@@ -1051,7 +1067,7 @@ async def get_test_markers(
     suite_name: str,
     _current_user: User = Depends(get_current_user),
 ) -> list[str]:
-    """Statically parse pytest decorators under the suite using Python's AST."""
+    """Statically parse pytest markers and Playwright title tags under the suite."""
     import ast
 
     cfg = request.app.state.container.settings
@@ -1092,6 +1108,15 @@ async def get_test_markers(
                                         markers.add(dec_node.attr)
             except (OSError, SyntaxError, ValueError):
                 logger.warning("Failed to parse markers from %s", py_file, exc_info=True)
+        for js_file in suite_dir.glob("**/*"):
+            if js_file.name.startswith(".") or js_file.name.startswith("__"):
+                continue
+            if not js_file.is_file() or not js_file.name.endswith(_JS_TEST_SUFFIXES):
+                continue
+            content = js_file.read_text(encoding="utf-8", errors="replace")
+            for title_pattern in _PLAYWRIGHT_TITLE_PATTERNS:
+                for title_match in title_pattern.finditer(content):
+                    markers.update(_PLAYWRIGHT_TAG_PATTERN.findall(title_match.group(1)))
         return sorted(list(markers))
 
     return await asyncio.to_thread(_parse_markers)
