@@ -38,23 +38,9 @@ export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UsePr
   /** Direct one-click trigger from the sidebar. */
   const handleTriggerProfile = useCallback(
     async (profile: Profile, afterRun: (runId: string) => void) => {
-      const payload = {
-        tests_path: profile.tests_path,
-        runner: profile.runner || 'pytest',
-        args: [],
-        allure: true,
-        timeout: profile.timeout,
-        selected_files: profile.selected_files,
-        selected_markers: profile.selected_markers,
-        extra_args: profile.extra_args,
-        env: profile.env || {},
-      }
-
       try {
-        const resp = await apiFetch('/runs', {
+        const resp = await apiFetch(`/profiles/${encodeURIComponent(profile.id)}/trigger`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
         })
         if (resp.ok) {
           const newRun = await resp.json()

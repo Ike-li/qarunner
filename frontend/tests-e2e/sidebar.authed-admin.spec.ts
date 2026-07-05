@@ -128,9 +128,10 @@ async function mockBackend(
     profiles?: any[];
     profilesDelete?: boolean;
     triggerRun?: boolean;
+    triggerProfile?: boolean;
   } = {},
 ) {
-  const { suites, runs, profiles, profilesDelete, triggerRun } = options;
+  const { suites, runs, profiles, profilesDelete, triggerRun, triggerProfile } = options;
 
   // ── /runs ────────────────────────────────────────────
   if (runs) {
@@ -157,6 +158,14 @@ async function mockBackend(
             finished_at: null,
             locked: false,
           }),
+        });
+        return;
+      }
+      if (route.request().method() === 'POST') {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Unexpected direct /runs trigger' }),
         });
         return;
       }
@@ -207,6 +216,38 @@ async function mockBackend(
         if (route.request().method() === 'DELETE') {
           profilesData = [];
           await route.fulfill({ status: 200, json: { message: 'deleted' } });
+          return;
+        }
+        await route.fallback();
+      });
+    }
+
+    if (triggerProfile) {
+      await page.route(/\/profiles\/[^/]+\/trigger$/, async (route) => {
+        if (route.request().method() === 'POST') {
+          await route.fulfill({
+            status: 202,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              id: 'run-triggered-001',
+              status: 'queued',
+              runner: 'pytest',
+              created_by: 'admin',
+              profile_id: 'prof-001',
+              tests_path: SUITE_A,
+              args: [],
+              executor_mode: 'docker',
+              summary: null,
+              report: null,
+              exit_code: null,
+              error: null,
+              passed: null,
+              created_at: new Date().toISOString(),
+              started_at: null,
+              finished_at: null,
+              locked: false,
+            }),
+          });
           return;
         }
         await route.fallback();
@@ -342,14 +383,16 @@ test.describe('Sidebar Suite Navigation', () => {
       suites: [GIT_SUITE],
       runs: { runs: RUNS },
       profiles: [PROFILE_WITH_RUNS],
-      triggerRun: true,
+      triggerProfile: true,
     });
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    // Set up a listener for the POST /runs response BEFORE clicking
-    const postResponse = page.waitForResponse(
-      (resp) => resp.url().includes('/runs') && resp.request().method() === 'POST',
+    // Set up a listener for the profile-bound trigger request BEFORE clicking.
+    const triggerRequest = page.waitForRequest(
+      (req) =>
+        req.url().includes('/profiles/prof-001/trigger') && req.method() === 'POST',
+      { timeout: 3000 },
     );
 
     // Locate the instant-run button for the profile "Smoke Tests".
@@ -360,9 +403,8 @@ test.describe('Sidebar Suite Navigation', () => {
     const runButton = profileMainRow.locator('button').first();
     await runButton.click();
 
-    // Wait for the POST to complete and verify it succeeded
-    const response = await postResponse;
-    expect(response.ok()).toBeTruthy();
+    const request = await triggerRequest;
+    expect(request.method()).toBe('POST');
   });
 
   // ── 5. Delete profile removes it from sidebar ────────────────────────────────

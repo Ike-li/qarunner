@@ -192,6 +192,11 @@
 - 查询参数：`tests_path`（可选，按路径过滤）。
 - **成功**：`200` `[TestProfileResponse, ...]`。
 
+### `POST /profiles/{profile_id}/trigger` — owner
+无请求体；服务端从已保存的 profile 重建 `RunRequest` 并创建绑定该 profile 的 run。
+- **成功**：`202` `RunResponse`（`status="queued"`，`profile_id=profile_id`）。
+- **错误**：`403`（他人）· `404`（不存在）· `429`（同一用户 in-flight run 达上限）· `400`。
+
 ### `PUT /profiles/{profile_id}` — owner
 - **成功**：`200` `TestProfileResponse`。 · **错误**：`403`（他人）· `404`（不存在）· `422`。
 

@@ -325,12 +325,16 @@ class FakeOrchestrator:
     _counter: int = 0
     raise_unknown_runner: bool = False
     raise_unsafe_path: bool = False
+    last_req: RunRequest | None = None
+    last_profile_id: str | None = None
 
     async def create(self, req: RunRequest, created_by: str, profile_id: str | None = None) -> Run:
         if self.raise_unknown_runner:
             raise UnknownRunner(req.runner)
         if self.raise_unsafe_path:
             raise UnsafePath(f"{req.tests_path!r} resolves outside root")
+        self.last_req = req
+        self.last_profile_id = profile_id
         self._counter += 1
         run = Run(
             id=f"id-{self._counter:03d}",
@@ -343,6 +347,8 @@ class FakeOrchestrator:
             timeout=req.timeout,
             executor_mode=req.executor_mode,
             created_at=NOW,
+            env=req.env,
+            profile_id=profile_id,
         )
         await self.store.save(run)
         return run
@@ -3275,6 +3281,83 @@ def test_trigger_schedule_missing_profile_409() -> None:
     assert resp.status_code == 409
 
 
+# ── POST /profiles/{id}/trigger ─────────────────────────────────────────
+
+
+def _seed_trigger_profile(
+    container: Container,
+    *,
+    profile_owner: str = "test_user",
+    profile_id: str = "profile-x",
+) -> None:
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(
+        container.store.save_profile(
+            TestProfile(
+                id=profile_id,
+                name="Daily Playwright",
+                tests_path="suite/",
+                runner="playwright",
+                selected_files=["specs/smoke.spec.ts"],
+                selected_markers=["smoke"],
+                extra_args="--headed",
+                executor_mode="docker",
+                timeout=120,
+                created_by=profile_owner,
+                created_at=NOW,
+                env={"BASE_URL": "http://app"},
+            )
+        )
+    )
+    loop.close()
+
+
+def test_trigger_profile_creates_profile_bound_run_from_profile() -> None:
+    container = _make_container()
+    _seed_trigger_profile(container)
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/profiles/profile-x/trigger")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["runner"] == "playwright"
+    assert body["profile_id"] == "profile-x"
+
+    orch = container.orchestrator  # type: ignore[attr-defined]
+    assert orch.last_profile_id == "profile-x"
+    assert orch.last_req is not None
+    assert orch.last_req.tests_path == "suite/"
+    assert orch.last_req.runner == "playwright"
+    assert orch.last_req.selected_files == ["specs/smoke.spec.ts"]
+    assert orch.last_req.selected_markers == ["smoke"]
+    assert orch.last_req.extra_args == "--headed"
+    assert orch.last_req.timeout == 120
+    assert orch.last_req.env == {"BASE_URL": "http://app"}
+
+
+def test_trigger_profile_forbidden_for_non_owner() -> None:
+    container = _make_container()
+    _seed_trigger_profile(container, profile_owner="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/profiles/profile-x/trigger")
+    assert resp.status_code == 403
+
+
+def test_trigger_profile_nonexistent_404() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/profiles/ghost/trigger")
+    assert resp.status_code == 404
+
+
 # Run creation guards (subprocess gate + in-flight cap) must apply on every path
 # that reaches the orchestrator, not just POST /runs — else /rerun and /trigger
 # become bypasses.
@@ -3312,6 +3395,20 @@ def test_trigger_schedule_respects_inflight_cap() -> None:
     _override_user(app, "normal_user", UserRole.USER)
     with TestClient(app) as client:
         resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 429
+
+
+def test_trigger_profile_respects_inflight_cap() -> None:
+    container = _make_container()
+    container.settings.max_inflight_runs_per_user = 1
+    _seed_trigger_profile(container, profile_owner="normal_user")
+    _make_run_in_store(
+        container.store, id="if-1", status=RunStatus.RUNNING, created_by="normal_user"
+    )
+    app = create_app(container)
+    _override_user(app, "normal_user", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/profiles/profile-x/trigger")
     assert resp.status_code == 429
 
 

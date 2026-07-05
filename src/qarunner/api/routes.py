@@ -1151,6 +1151,32 @@ async def list_profiles(
     return [profile_to_response(p) for p in profiles]
 
 
+@router.post("/profiles/{profile_id}/trigger", status_code=202, response_model=RunResponse)
+async def trigger_profile(
+    profile_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> RunResponse:
+    """Trigger a run directly from a saved execution profile.
+
+    The server rebuilds the RunRequest from the stored profile so the run is
+    profile-bound and cannot drift from the saved runner/files/markers/env.
+    """
+    container = request.app.state.container
+    profile = await container.store.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Profile {profile_id} not found")
+    _require_owner_access(profile.created_by, current_user)
+
+    run = await _create_run_guarded(
+        container,
+        RunRequest.from_profile(profile),
+        current_user,
+        profile_id=profile.id,
+    )
+    return run_to_response(run)
+
+
 @router.put("/profiles/{profile_id}", response_model=TestProfileResponse)
 async def update_profile(
     profile_id: str,
