@@ -41,8 +41,7 @@ test.describe('A1.6 FullscreenTerminalOverlay 焦点管理', () => {
     // Open drawer by clicking first run row
     await openDrawerFromFirstRow(page);
 
-    // Look for the terminal fullscreen button (title="Fullscreen Terminal" or visible text "Fullscreen")
-    const terminalBtn = page.locator('button', { hasText: /^Fullscreen$|^全屏终端$/ }).first();
+    const terminalBtn = page.getByTestId('terminal-fullscreen-button');
     const hasTerminalBtn = await terminalBtn.isVisible({ timeout: 3_000 }).catch(() => false);
 
     if (!hasTerminalBtn) {
@@ -50,33 +49,29 @@ test.describe('A1.6 FullscreenTerminalOverlay 焦点管理', () => {
       return;
     }
 
-    // Record trigger element for F4
-    const triggerTitle = await terminalBtn.getAttribute('title');
+    await terminalBtn.focus();
+    await expect(terminalBtn).toBeFocused();
 
     // F1: Open overlay — focus should enter the dialog.
     // Note: the drawer (SideSheet) also has role="dialog", so we need to
     // target the fullscreen overlay specifically.
-    await terminalBtn.click();
-    const dialog = page.locator('[role="dialog"][aria-modal="true"]');
+    await page.keyboard.press('Enter');
+    const dialog = page.getByTestId('fullscreen-terminal-overlay').locator('[role="dialog"]');
     await expect(dialog).toBeVisible({ timeout: 5_000 });
-    expect(await isFocusInside(page, '[role="dialog"][aria-modal="true"]')).toBe(true);
+    expect(await isFocusInside(page, '[data-testid="fullscreen-terminal-overlay"] [role="dialog"]')).toBe(true);
 
     // F2: Tab trap — Tab multiple times, focus should stay inside
     for (let i = 0; i < 5; i++) {
       await page.keyboard.press('Tab');
     }
-    expect(await isFocusInside(page, '[role="dialog"][aria-modal="true"]')).toBe(true);
+    expect(await isFocusInside(page, '[data-testid="fullscreen-terminal-overlay"] [role="dialog"]')).toBe(true);
 
     // F3: Esc closes the overlay
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden({ timeout: 5_000 });
 
     // F4: Focus restores to trigger element (the fullscreen button)
-    const activeTitle = await page.evaluate(() => {
-      const el = document.activeElement;
-      return el?.getAttribute('title') || el?.textContent?.trim();
-    });
-    expect(activeTitle).toBe(triggerTitle);
+    await expect(terminalBtn).toBeFocused();
   });
 });
 

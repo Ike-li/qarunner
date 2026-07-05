@@ -67,7 +67,7 @@ test.describe('Run lifecycle E2E', () => {
 
     // Click the first clickable row in the runs table.  Semi UI Table rows
     // have an onClick handler; we target the row by the run-id cell.
-    const firstRow = page.locator('table tbody tr').first();
+    const firstRow = page.locator('[data-testid^="run-row-"]').first();
     const firstRowExists = await firstRow.isVisible().catch(() => false);
     if (!firstRowExists) {
       // No runs exist yet — skip this test.

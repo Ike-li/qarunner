@@ -102,12 +102,10 @@ test.describe('Journey 2 — regression core loop', () => {
       await adminCtx2.dispose();
     }
 
-    // Open the run's drawer from the table. The table truncates run ids to 8
-    // chars in a <code> cell; locate the row by that prefix and click it.
-    const rowPrefix = runId.slice(0, 8);
+    // Open the run's drawer from the table by its stable row test id.
     await page.goto('/');
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await page.locator('code', { hasText: rowPrefix }).first().click();
+    await page.getByTestId(`run-row-${runId}`).click();
     await expect(page.getByTestId('drawer-tab-logs')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('drawer-tab-diff')).toBeVisible();
   });
@@ -136,10 +134,9 @@ test.describe('Journey 2 — regression core loop', () => {
     }
 
     // UI: open run B's drawer and the diff tab.
-    const rowPrefix = runBId!.slice(0, 8);
     await page.goto('/');
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await page.locator('code', { hasText: rowPrefix }).first().click();
+    await page.getByTestId(`run-row-${runBId}`).click();
     await expect(page.getByTestId('drawer-tab-diff')).toBeVisible({ timeout: 10000 });
     await page.getByTestId('drawer-tab-diff').click();
 

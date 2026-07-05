@@ -71,7 +71,7 @@ test.describe('Report viewer', () => {
   test('report tab shows summary and report buttons for completed run with report', async ({ page }) => {
     // Click the first row in the runs table to open the drawer.
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    const firstRow = page.locator('table tbody tr').first();
+    const firstRow = page.locator('[data-testid^="run-row-"]').first();
     await firstRow.click();
 
     // The drawer should open.
@@ -97,7 +97,7 @@ test.describe('Report viewer', () => {
 
   test('fullscreen report overlay opens and closes', async ({ page }) => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    const firstRow = page.locator('table tbody tr').first();
+    const firstRow = page.locator('[data-testid^="run-row-"]').first();
     await firstRow.click();
     await expect(page.locator('[role="dialog"]')).toBeVisible();
 
@@ -123,7 +123,7 @@ test.describe('Report viewer', () => {
 
   test('fullscreen report overlay closes on Escape key', async ({ page }) => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    const firstRow = page.locator('table tbody tr').first();
+    const firstRow = page.locator('[data-testid^="run-row-"]').first();
     await firstRow.click();
     await expect(page.locator('[role="dialog"]')).toBeVisible();
 
@@ -152,7 +152,7 @@ test.describe('Report viewer', () => {
     await expect(page.getByTestId('profile-username')).toHaveText('admin');
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const firstRow = page.locator('table tbody tr').first();
+    const firstRow = page.locator('[data-testid^="run-row-"]').first();
     await firstRow.click();
     await expect(page.locator('[role="dialog"]')).toBeVisible();
 
@@ -176,7 +176,7 @@ test.describe('Report viewer', () => {
     await expect(page.getByTestId('profile-username')).toHaveText('admin');
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const firstRow = page.locator('table tbody tr').first();
+    const firstRow = page.locator('[data-testid^="run-row-"]').first();
     await firstRow.click();
     await expect(page.locator('[role="dialog"]')).toBeVisible();
 

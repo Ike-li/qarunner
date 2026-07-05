@@ -65,7 +65,10 @@ export function UserManagementModal() {
                 render: (_: unknown, record: { username: string; role: string }) => {
                   const isSelf = record.username === u.currentUsername
                   return (
-                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                    <div
+                      style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}
+                      data-testid={`user-actions-${record.username}`}
+                    >
                       <Button
                         size="small"
                         theme="borderless"
@@ -168,9 +171,10 @@ export function UserManagementModal() {
                   onChange={(v) => u.setNewUserRole(v as 'admin' | 'user')}
                   style={{ width: '100%' }}
                   aria-label={d.lang === 'zh' ? '用户角色' : 'User role'}
+                  data-testid="user-role-select"
                 >
-                  <Select.Option value="user">User</Select.Option>
-                  <Select.Option value="admin">Admin</Select.Option>
+                  <Select.Option value="user" data-testid="user-role-option-user">User</Select.Option>
+                  <Select.Option value="admin" data-testid="user-role-option-admin">Admin</Select.Option>
                 </Select>
               </Col>
             </Row>
@@ -196,6 +200,7 @@ export function UserManagementModal() {
                 onChange={(v) => u.setRetentionDays(Number(v))}
                 addonAfter={d.lang === 'zh' ? '天' : 'days'}
                 aria-label={d.lang === 'zh' ? '保留天数' : 'Retention days'}
+                data-testid="retention-days-input"
               />
             </Col>
             <Col span={6}>
@@ -204,6 +209,7 @@ export function UserManagementModal() {
                 theme="light"
                 icon={u.isCleaningStorage ? <RotateCw size={14} className={styles.spinIcon} /> : <Trash2 size={14} />}
                 loading={u.isCleaningStorage}
+                data-testid="storage-cleanup-button"
                 onClick={async () => {
                   u.setIsCleaningStorage(true)
                   try {

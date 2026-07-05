@@ -62,7 +62,11 @@ export function RunsTable() {
       title: d.t('runId'),
       dataIndex: 'id',
       key: 'id',
-      render: (text: string) => <code style={{ fontFamily: 'var(--font-mono)' }}>{text.slice(0, 8)}</code>
+      render: (text: string) => (
+        <code data-testid={`run-id-${text}`} style={{ fontFamily: 'var(--font-mono)' }}>
+          {text.slice(0, 8)}
+        </code>
+      )
     },
     {
       title: <IconLock style={{ fontSize: '14px' }} />,
@@ -80,6 +84,7 @@ export function RunsTable() {
             type="tertiary"
             icon={locked ? <IconLock style={{ color: 'var(--semi-color-warning)' }} /> : <IconUnlock style={{ color: 'var(--semi-color-text-3)' }} />}
             size="small"
+            data-testid={`run-lock-toggle-${record.id}`}
             onClick={(e) => {
               e.stopPropagation()
               d.runs.handleToggleLock(record.id, e)
@@ -113,7 +118,12 @@ export function RunsTable() {
         }
 
         return (
-          <Tag color={color} size="large" style={{ textTransform: 'capitalize', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          <Tag
+            color={color}
+            size="large"
+            data-testid={`run-status-${record.id}`}
+            style={{ textTransform: 'capitalize', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
             {icon}
             {d.t(`status_${status}`)}
           </Tag>
@@ -154,7 +164,10 @@ export function RunsTable() {
         const rate = Math.round(summary.pass_rate * 100)
         const strokeColor = passRateColor(rate)
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
+          <div
+            data-testid="run-pass-rate"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '100px' }}
+          >
             <Progress percent={rate} stroke={strokeColor} style={{ width: '60px' }} size="small" />
             <span style={{ fontSize: '12px', minWidth: '32px', fontWeight: 600 }}>{rate}%</span>
           </div>
@@ -196,6 +209,7 @@ export function RunsTable() {
       onKeyDown: activateOnKey(() => {
         if (record) d.runs.setSelectedRunId(record.id)
       }),
+      'data-testid': record ? `run-row-${record.id}` : undefined,
       className: record?.id === d.runs.selectedRunId ? styles.rowSelected : ''
     }
   }
@@ -232,19 +246,19 @@ export function RunsTable() {
           onChange={e => d.setLogFilterTab(e.target.value as any)}
           style={{ marginRight: 'auto' }}
         >
-          <Radio value="All">
+          <Radio value="All" data-testid="log-filter-all">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconActivity />
               <span>{d.lang === 'zh' ? '全部记录' : 'All Runs'}</span>
             </span>
           </Radio>
-          <Radio value="Manual">
+          <Radio value="Manual" data-testid="log-filter-manual">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconUser />
               <span>{d.lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
             </span>
           </Radio>
-          <Radio value="Scheduled">
+          <Radio value="Scheduled" data-testid="log-filter-scheduled">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconClock />
               <span>{d.lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
@@ -281,12 +295,12 @@ export function RunsTable() {
           placeholder={d.t('filterStatusPlaceholder')}
           data-testid="filter-status-select"
         >
-          <Select.Option value="ALL">{d.t('filterStatusPlaceholder')}</Select.Option>
-          <Select.Option value="queued">{d.t('status_queued')}</Select.Option>
-          <Select.Option value="running">{d.t('status_running')}</Select.Option>
-          <Select.Option value="completed">{d.t('status_completed')}</Select.Option>
-          <Select.Option value="failed">{d.t('status_failed')}</Select.Option>
-          <Select.Option value="timeout">{d.t('status_timeout')}</Select.Option>
+          <Select.Option value="ALL" data-testid="status-option-all">{d.t('filterStatusPlaceholder')}</Select.Option>
+          <Select.Option value="queued" data-testid="status-option-queued">{d.t('status_queued')}</Select.Option>
+          <Select.Option value="running" data-testid="status-option-running">{d.t('status_running')}</Select.Option>
+          <Select.Option value="completed" data-testid="status-option-completed">{d.t('status_completed')}</Select.Option>
+          <Select.Option value="failed" data-testid="status-option-failed">{d.t('status_failed')}</Select.Option>
+          <Select.Option value="timeout" data-testid="status-option-timeout">{d.t('status_timeout')}</Select.Option>
         </Select>
 
         {/* 执行人筛选下拉框 */}
@@ -299,7 +313,7 @@ export function RunsTable() {
         >
           <Select.Option value="ALL">{d.t('filterOwnerPlaceholder')}</Select.Option>
           {uniqueOwners.map(owner => (
-            <Select.Option key={owner} value={owner}>
+            <Select.Option key={owner} value={owner} data-testid={`owner-option-${owner}`}>
               {owner}
             </Select.Option>
           ))}
@@ -329,15 +343,16 @@ export function RunsTable() {
           <IconBolt style={{ color: 'var(--semi-color-warning)', fontSize: '48px' }} />
           <h3>{d.t('noRunsTitle')}</h3>
           <p>{d.t('noRunsDesc')}</p>
-          <Button
-            theme="solid"
-            type="primary"
-            icon={<IconPlay />}
-            onClick={() => d.setIsTriggerModalOpen(true)}
-            style={{ marginTop: '1.5rem' }}
-          >
-            {d.t('launchFirstRun')}
-          </Button>
+            <Button
+              theme="solid"
+              type="primary"
+              icon={<IconPlay />}
+              onClick={() => d.setIsTriggerModalOpen(true)}
+              style={{ marginTop: '1.5rem' }}
+              data-testid="launch-first-run-button"
+            >
+              {d.t('launchFirstRun')}
+            </Button>
         </div>
       ) : isFilteredEmpty ? (
         <div className={styles.emptyState} data-testid="filtered-runs-empty">
@@ -355,7 +370,7 @@ export function RunsTable() {
           </Button>
         </div>
       ) : (
-        <div className={styles.tableWrapper}>
+        <div className={styles.tableWrapper} data-testid="runs-table-wrapper">
           <Table
             columns={columns}
             dataSource={filteredRuns}

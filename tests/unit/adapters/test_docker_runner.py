@@ -227,6 +227,10 @@ async def test_docker_runner_uses_playwright_image_and_env_junit_mount() -> None
     assert mock_client.run_kwargs["environment"]["HOME"] == "/tmp"
     assert mock_client.run_kwargs["environment"]["XDG_CACHE_HOME"] == "/tmp/.cache"
     assert mock_client.run_kwargs["environment"]["PLAYWRIGHT_BROWSERS_PATH"] == "/ms-playwright"
+    assert (
+        mock_client.run_kwargs["environment"]["NODE_PATH"]
+        == "/usr/local/lib/node_modules:/usr/lib/node_modules"
+    )
     assert mock_client.run_kwargs["shm_size"] == "1g"
 
 

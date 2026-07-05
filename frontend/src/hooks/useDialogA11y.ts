@@ -56,6 +56,7 @@ export function useDialogA11y<T extends HTMLElement = HTMLDivElement>({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
         onCloseRef.current()
         return
       }
@@ -63,15 +64,18 @@ export function useDialogA11y<T extends HTMLElement = HTMLDivElement>({
       const items = focusables()
       if (items.length === 0) {
         e.preventDefault()
+        e.stopPropagation()
         return
       }
       const first = items[0]
       const last = items[items.length - 1]
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault()
+        e.stopPropagation()
         last.focus()
       } else if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault()
+        e.stopPropagation()
         first.focus()
       }
     }

@@ -75,8 +75,7 @@ test.describe('Journey 4 — schedule-driven heartbeat', () => {
       await expect(page.getByTestId('execution-records-title')).toBeVisible({
         timeout: 10000,
       });
-      const rowPrefix = runId.slice(0, 8);
-      await expect(page.locator('code', { hasText: rowPrefix })).toBeVisible({
+      await expect(page.getByTestId(`run-id-${runId}`)).toBeVisible({
         timeout: 15000,
       });
 

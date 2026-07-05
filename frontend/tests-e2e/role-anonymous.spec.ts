@@ -11,6 +11,7 @@ import { test, expect } from '@playwright/test';
 const baseUrl = process.env.BASE_URL || 'http://localhost:5173';
 const backendUrl =
   process.env.E2E_BACKEND_URL ||
+  process.env.VITE_BACKEND_URL ||
   (new URL(baseUrl).hostname === 'frontend'
     ? 'http://backend:8000'
     : 'http://localhost:8000');

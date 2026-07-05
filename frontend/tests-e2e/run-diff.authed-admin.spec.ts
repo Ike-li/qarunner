@@ -64,7 +64,7 @@ async function openDashboard(page: import('@playwright/test').Page) {
 }
 
 async function openRunAndDiffTab(page: import('@playwright/test').Page) {
-  const firstRow = page.locator('table tbody tr').first();
+  const firstRow = page.locator('[data-testid^="run-row-"]').first();
   await expect(firstRow).toBeVisible({ timeout: 8000 });
   await firstRow.click();
   await expect(page.locator('[role="dialog"]').first()).toBeVisible({ timeout: 5000 });

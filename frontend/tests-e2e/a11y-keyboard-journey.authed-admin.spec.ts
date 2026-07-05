@@ -98,8 +98,7 @@ test.describe('A2.3 键盘 drawer + 全屏终端', () => {
     const drawerLogsTab = page.getByTestId('drawer-tab-logs');
     await expect(drawerLogsTab).toBeVisible({ timeout: 10_000 });
 
-    // The terminal fullscreen button has no data-testid; locate by visible text.
-    const fullscreenBtn = page.locator('button', { hasText: /^Fullscreen$|^全屏终端$/ }).first();
+    const fullscreenBtn = page.getByTestId('terminal-fullscreen-button');
     const hasFullscreen = await fullscreenBtn.isVisible({ timeout: 3_000 }).catch(() => false);
 
     if (hasFullscreen) {
@@ -111,7 +110,7 @@ test.describe('A2.3 键盘 drawer + 全屏终端', () => {
 
       // FullscreenTerminalOverlay has role="dialog" aria-modal="true"
       // (the drawer SideSheet also has role="dialog", so disambiguate)
-      const overlay = page.locator('[role="dialog"][aria-modal="true"]');
+      const overlay = page.getByTestId('fullscreen-terminal-overlay').locator('[role="dialog"]');
       await expect(overlay).toBeVisible({ timeout: 5_000 });
 
       // Esc should close the fullscreen overlay

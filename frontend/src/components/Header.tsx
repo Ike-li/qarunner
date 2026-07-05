@@ -58,7 +58,7 @@ export function Header() {
             onClick={() => { d.suites.fetchTests(); d.setIsTriggerModalOpen(true) }}>{d.t('triggerRun')}</Button>
 
           <Tooltip content={d.t('signOut')}>
-            <Button theme="borderless" onClick={d.handleLogout}
+            <Button theme="borderless" onClick={d.handleLogout} data-testid="logout-button"
               icon={<LogOut size={16} />} aria-label={d.t('signOut')} style={{ color: 'var(--semi-color-text-1)' }} />
           </Tooltip>
         </Space>

@@ -486,7 +486,7 @@ async def update_user(
     username: str,
     req: UserUpdateRequest,
     request: Request,
-    _admin_user: User = Depends(get_current_admin),
+    admin_user: User = Depends(get_current_admin),
 ) -> UserResponse:
     """Update a user's password and/or role (Admin-only).
 
@@ -504,6 +504,8 @@ async def update_user(
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
 
     if req.role is not None and existing["role"] == "admin" and req.role.value != "admin":
+        if username == admin_user.username:
+            raise HTTPException(status_code=400, detail="You cannot demote your own account.")
         users = await container.store.list_users()
         admin_count = sum(1 for u in users if u["role"] == "admin")
         if admin_count <= 1:

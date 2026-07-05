@@ -38,6 +38,7 @@ export function FullscreenTerminalOverlay() {
     <div
       className={styles.fullscreenTerminalOverlay}
       onClick={() => d.terminal.setIsTerminalFullscreen(false)}
+      data-testid="fullscreen-terminal-overlay"
     >
       <div
         ref={dialogRef}

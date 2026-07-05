@@ -9,6 +9,13 @@
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:ui": "playwright test",
+    "test:ui:smoke": "playwright test login-smoke.spec.ts smoke-infrastructure.authed-admin.spec.ts seed.authed-admin.spec.ts",
+    "test:ui:regression": "playwright test",
+    "test:ui:a11y": "playwright test a11y-axe.authed-admin.spec.ts a11y-dialog-focus.authed-admin.spec.ts a11y-form-semantics.authed-admin.spec.ts a11y-keyboard-journey.authed-admin.spec.ts",
+    "test:ui:live-api": "playwright test login-auth.spec.ts login-smoke.spec.ts role-anonymous.spec.ts role-api-scoping.authed-admin.spec.ts role-user-gate.authed-user.spec.ts role-user-ops.authed-admin.spec.ts smoke-infrastructure.authed-admin.spec.ts seed.authed-admin.spec.ts journey-failure-analysis.authed-admin.spec.ts journey-onboarding.authed-admin.spec.ts journey-regression-loop.authed-admin.spec.ts journey-schedule-heartbeat.authed-admin.spec.ts journey-suite-onboard.authed-admin.spec.ts playwright-runner-artifacts.authed-admin.spec.ts run-lifecycle.authed-admin.spec.ts ui.authed-admin.spec.ts user-management.authed-admin.spec.ts",
+    "test:ui:mocked-ui": "playwright test dashboard.authed-admin.spec.ts dashboard-filters.authed-admin.spec.ts run-details.authed-admin.spec.ts runs-table.authed-admin.spec.ts schedule-mgmt.authed-admin.spec.ts sidebar.authed-admin.spec.ts suite-management.authed-admin.spec.ts suite-trend.authed-admin.spec.ts suites.authed-admin.spec.ts trigger-modal.authed-admin.spec.ts",
+    "test:ui:legacy-duplicates": "playwright test report-viewer.authed-admin.spec.ts run-diff.authed-admin.spec.ts schedule.authed-admin.spec.ts schedule-trigger.authed-admin.spec.ts trigger-run.authed-admin.spec.ts user-mgmt.authed-admin.spec.ts",
+    "test:ui:playwright-runner": "playwright test playwright-runner-artifacts.authed-admin.spec.ts",
     "test:ui:headed": "playwright test --headed",
     "test:ui:report": "playwright show-report"
   },

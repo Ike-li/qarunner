@@ -36,6 +36,9 @@ services:
     volumes:
       - ./src:/app/src
       - ./tests:/app/tests
+      - ./examples:${PWD}/examples:ro
+      - ./Dockerfile:/app/Dockerfile:ro
+      - ./Dockerfile.playwright:/app/Dockerfile.playwright:ro
       # artifacts at an IDENTICAL host==container path so the docker executor's
       # cwd:cwd jail/results mounts resolve on the host daemon (see env above).
       # ${PWD} is the host repo root when you run compose from here, so source
@@ -43,6 +46,7 @@ services:
       # and it works on any machine, unlike the old hard-coded absolute host path.
       - ./artifacts:${PWD}/artifacts
       - ./external_tests:/app/external_tests
+      - ./examples/sample_playwright:/app/external_tests/sample_playwright:ro
       # mount the host projects root at the SAME path (source==target) so
       # symlinked local suites / env-referenced project paths resolve in-container.
       # No suite is hard-coded here: link a local project via the UI
@@ -53,7 +57,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: node:20-slim
+    image: mcr.microsoft.com/playwright:v1.61.1-noble
     container_name: qarunner-frontend-dev
     working_dir: /app/frontend
     ports:

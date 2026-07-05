@@ -157,6 +157,16 @@ async function mockRunsRoute(page: import('@playwright/test').Page, runsData: un
   });
 }
 
+async function selectStatusFilter(page: import('@playwright/test').Page, status: string) {
+  await page.getByTestId('filter-status-select').click();
+  await page.getByTestId(`status-option-${status}`).click();
+}
+
+async function selectOwnerFilter(page: import('@playwright/test').Page, owner: string) {
+  await page.getByTestId('filter-owner-select').click();
+  await page.getByTestId(`owner-option-${owner}`).click();
+}
+
 test.describe('Runs Table and Filtering', () => {
   // 1. Execution records table displays with correct columns
   test('Execution records table displays with correct columns', async ({ page }) => {
@@ -165,7 +175,7 @@ test.describe('Runs Table and Filtering', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Verify the table rendered with data rows.
-    const tableRows = page.locator('table tbody tr');
+    const tableRows = page.locator('[data-testid^="run-row-"]');
     await expect(tableRows).not.toHaveCount(0);
 
     // Verify table columns by checking header text.
@@ -184,13 +194,12 @@ test.describe('Runs Table and Filtering', () => {
     expect(idText?.trim().length).toBeLessThanOrEqual(8);
 
     // Verify status tag uses a color (Semi Tag has a color attribute or class).
-    const statusCell = tableRows.first().locator('td').nth(3);
-    await expect(statusCell.locator('.semi-tag')).toBeVisible();
+    await expect(page.getByTestId('run-status-run-alpha-0001')).toBeVisible();
 
     // Verify progress bar is visible for rows with summary data.
     const completedRow = tableRows.filter({ hasText: 'run-alpha' });
     if (await completedRow.count() > 0) {
-      await expect(completedRow.first().locator('.semi-progress')).toBeVisible();
+      await expect(completedRow.first().getByTestId('run-pass-rate')).toBeVisible();
     }
   });
 
@@ -201,21 +210,18 @@ test.describe('Runs Table and Filtering', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Initially all 6 runs should be visible (or filtered by logFilterTab="All").
-    let rows = page.locator('table tbody tr');
+    let rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(6);
 
     // Open status filter and select "failed".
-    const statusSelect = page.getByTestId('filter-status-select');
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /failed/i }).click();
+    await selectStatusFilter(page, 'failed');
 
     // Should show only the failed run (run-beta-0002).
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('run-beta');
 
     // Select "completed".
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /completed/i }).click();
+    await selectStatusFilter(page, 'completed');
     await expect(rows).toHaveCount(3);
   });
 
@@ -225,13 +231,11 @@ test.describe('Runs Table and Filtering', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(6);
 
     // Open owner filter and select "alice".
-    const ownerSelect = page.getByTestId('filter-owner-select');
-    await ownerSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: 'alice' }).click();
+    await selectOwnerFilter(page, 'alice');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('run-beta');
   });
@@ -242,7 +246,7 @@ test.describe('Runs Table and Filtering', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(6);
 
     // Type partial run ID into search input.
@@ -264,13 +268,11 @@ test.describe('Runs Table and Filtering', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(6);
 
     // Apply a status filter.
-    const statusSelect = page.getByTestId('filter-status-select');
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /failed/i }).click();
+    await selectStatusFilter(page, 'failed');
     await expect(rows).toHaveCount(1);
 
     // Reset filters.
@@ -289,13 +291,11 @@ test.describe('Runs Table and Filtering', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(6);
 
     // Set status filter to "completed".
-    const statusSelect = page.getByTestId('filter-status-select');
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /completed/i }).click();
+    await selectStatusFilter(page, 'completed');
     await expect(rows).toHaveCount(3);
 
     // Also search by Run ID containing "alpha".
@@ -312,11 +312,11 @@ test.describe('Runs Table and Filtering', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // MOCK_RUNS_MIXED has 4 manual runs (admin x2, alice, bob) and 2 scheduled (system:schedule x2).
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(6);
 
     // Click "Manually Triggered" radio button.
-    await page.getByText(/Manually Triggered/i).click();
+    await page.getByTestId('log-filter-manual').click();
     await expect(rows).toHaveCount(4);
     // Verify all visible rows contain manual owners (not "system:schedule").
     for (let i = 0; i < 4; i++) {
@@ -325,7 +325,7 @@ test.describe('Runs Table and Filtering', () => {
     }
 
     // Click "Scheduled Runs" radio button.
-    await page.getByText(/Scheduled Runs/i).click();
+    await page.getByTestId('log-filter-scheduled').click();
     await expect(rows).toHaveCount(2);
     // Verify all visible rows are scheduled.
     for (let i = 0; i < 2; i++) {
@@ -334,7 +334,7 @@ test.describe('Runs Table and Filtering', () => {
     }
 
     // Click "All Runs" radio button to restore all.
-    await page.getByText(/All Runs/i).click();
+    await page.getByTestId('log-filter-all').click();
     await expect(rows).toHaveCount(6);
   });
 
@@ -348,7 +348,7 @@ test.describe('Runs Table and Filtering', () => {
     await expect(page.getByText(/no runs/i)).toBeVisible({ timeout: 10000 });
 
     // Verify 'Launch your first run' button is visible.
-    const launchButton = page.getByText(/Launch First Run|启动首次运行/i);
+    const launchButton = page.getByTestId('launch-first-run-button');
     await expect(launchButton).toBeVisible();
 
     // The empty-state button calls setIsTriggerModalOpen(true) which should
@@ -376,14 +376,15 @@ test.describe('Runs Table and Filtering', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Should show 10 rows on page 1 with pagination controls visible.
-    await expect(page.locator('table tbody tr')).toHaveCount(10);
-    await expect(page.locator('.semi-page')).toBeVisible();
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(10);
+    const table = page.getByTestId('runs-table-wrapper');
+    await expect(table.getByRole('button', { name: 'Next' })).toBeVisible();
 
     // Click next page button.
-    await page.locator('.semi-page-next').click();
+    await table.getByRole('button', { name: 'Next' }).click();
 
     // Should show remaining 2 rows on page 2.
-    await expect(page.locator('table tbody tr')).toHaveCount(2);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(2);
   });
 
   // ── 10. Search with no matching results ──────────────────────────────
@@ -391,19 +392,19 @@ test.describe('Runs Table and Filtering', () => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(6);
 
     // Search for a run ID that does not exist in the mock data.
     const searchInput = page.getByPlaceholder(/Search Run ID|搜索运行 ID/);
     await searchInput.fill('NO_RESULT_ZZZZZ');
 
     // Expect no data rows in the table.
-    await expect(page.locator('table tbody tr')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(0);
     await expect(page.getByTestId('filtered-runs-empty')).toBeVisible();
     await expect(page.getByTestId('filtered-runs-empty')).toContainText(/No runs match|没有匹配/);
 
     await page.getByTestId('filtered-runs-clear').click();
-    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(6);
     await expect(page.getByTestId('filtered-runs-empty')).toHaveCount(0);
   });
 
@@ -424,12 +425,10 @@ test.describe('Runs Table and Filtering', () => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(6);
 
-    // Click the lock button in column index 1 of the first row
-    // (run-alpha-0001 has locked: false).
-    const lockBtn = page.locator('table tbody tr').first().locator('td').nth(1).locator('button');
-    await lockBtn.click();
+    // Click the lock button for run-alpha-0001.
+    await page.getByTestId('run-lock-toggle-run-alpha-0001').click();
 
     // Verify PUT /runs/{id}/lock was called.
     await expect(async () => {
@@ -442,7 +441,7 @@ test.describe('Runs Table and Filtering', () => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(6);
 
     // Start listening for the next GET /runs response.
     const getRunsPromise = page.waitForResponse(
@@ -463,16 +462,14 @@ test.describe('Runs Table and Filtering', () => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(6);
 
     // Open status filter and select "running".
-    const statusSelect = page.getByTestId('filter-status-select');
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /^running$/i }).click();
+    await selectStatusFilter(page, 'running');
 
     // Should show only the running run (run-epsilon5).
-    await expect(page.locator('table tbody tr')).toHaveCount(1);
-    await expect(page.locator('table tbody tr').first()).toContainText('run-eps');
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid^="run-row-"]').first()).toContainText('run-eps');
   });
 
   // ── 14. Filter by "queued" status ────────────────────────────────────
@@ -480,16 +477,14 @@ test.describe('Runs Table and Filtering', () => {
     await mockRunsRoute(page, MOCK_RUNS_MIXED);
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(6);
 
     // Open status filter and select "queued".
-    const statusSelect = page.getByTestId('filter-status-select');
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /^queued$/i }).click();
+    await selectStatusFilter(page, 'queued');
 
     // Should show only the queued run (run-delta004).
-    await expect(page.locator('table tbody tr')).toHaveCount(1);
-    await expect(page.locator('table tbody tr').first()).toContainText('run-delt');
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid^="run-row-"]').first()).toContainText('run-delt');
   });
 
   // ── 15. Filter by "timeout" status ───────────────────────────────────
@@ -522,15 +517,13 @@ test.describe('Runs Table and Filtering', () => {
     await mockRunsRoute(page, runsWithTimeout);
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
-    await expect(page.locator('table tbody tr')).toHaveCount(7);
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(7);
 
     // Open status filter and select "timeout".
-    const statusSelect = page.getByTestId('filter-status-select');
-    await statusSelect.click();
-    await page.locator('.semi-select-option').filter({ hasText: /^timeout$/i }).click();
+    await selectStatusFilter(page, 'timeout');
 
     // Should show only the timeout run (run-timeout-007).
-    await expect(page.locator('table tbody tr')).toHaveCount(1);
-    await expect(page.locator('table tbody tr').first()).toContainText('run-time');
+    await expect(page.locator('[data-testid^="run-row-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid^="run-row-"]').first()).toContainText('run-time');
   });
 });

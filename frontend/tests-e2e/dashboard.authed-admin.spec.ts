@@ -68,8 +68,7 @@ test.describe('Dashboard Layout and Header', () => {
     await expect(page.locator('header button').filter({ has: page.locator('[class*="lucide-moon"], [class*="lucide-sun"]') })).toBeVisible();
     // Language toggle — button shows locale text "中文" or "EN"
     await expect(page.getByRole('button', { name: /中文|EN/ })).toBeVisible();
-    // Logout button — last button in the header actions
-    await expect(page.locator('header button:last-of-type')).toBeVisible();
+    await expect(page.getByTestId('logout-button')).toBeVisible();
   });
 
   // ── 2.3 Sidebar shows 'All Suites' with add-suite button ───────────────────

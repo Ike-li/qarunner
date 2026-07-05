@@ -1,7 +1,7 @@
 import {
   Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, ChevronDown, ChevronRight,
   Clock, Copy, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Shuffle,
-  Terminal, Trash2, XCircle,
+  Terminal, Trash2, X, XCircle,
 } from 'lucide-react'
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
@@ -434,6 +434,11 @@ export function RunDetailsDrawer() {
         </div>
       }
       closable={true}
+      closeIcon={(
+        <span data-testid="run-details-close" style={{ display: 'inline-flex' }} aria-hidden="true">
+          <X size={16} />
+        </span>
+      )}
       bodyStyle={{ padding: '16px' }}
     >
       <div ref={dialogRef} tabIndex={-1}>
@@ -586,8 +591,12 @@ export function RunDetailsDrawer() {
                       {/* Fullscreen toggle button */}
                       <button 
                         className={styles.terminalFullscreenButton}
-                        onClick={() => d.terminal.setIsTerminalFullscreen(true)}
+                        onClick={(event) => {
+                          event.currentTarget.focus()
+                          d.terminal.setIsTerminalFullscreen(true)
+                        }}
                         title={d.lang === 'zh' ? "全屏终端" : "Fullscreen Terminal"}
+                        data-testid="terminal-fullscreen-button"
                       >
                         <Maximize2 size={13} />
                         <span>{d.lang === 'zh' ? "全屏终端" : "Fullscreen"}</span>

@@ -2569,6 +2569,31 @@ def test_update_user_cannot_demote_last_admin() -> None:
     assert container.store._users["test_user"]["role"] == "admin"  # type: ignore[attr-defined]
 
 
+def test_update_user_cannot_demote_self_even_when_other_admin_exists() -> None:
+    container = _make_container()  # test_user admin
+    _seed_user(container.store, "bob", role="admin")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.put("/users/test_user", json={"role": "user"})
+    assert resp.status_code == 400
+    assert container.store._users["test_user"]["role"] == "admin"  # type: ignore[attr-defined]
+
+
+def test_update_user_cannot_demote_other_last_admin() -> None:
+    container = _make_container()  # test_user is the only stored admin
+    app = create_app(container)
+
+    async def external_admin() -> User:
+        return User(username="external_admin", role=UserRole.ADMIN, created_at=NOW)
+
+    app.dependency_overrides[get_current_admin] = external_admin
+    with TestClient(app) as client:
+        resp = client.put("/users/test_user", json={"role": "user"})
+    assert resp.status_code == 400
+    assert container.store._users["test_user"]["role"] == "admin"  # type: ignore[attr-defined]
+
+
 def test_update_user_demote_admin_when_others_exist() -> None:
     container = _make_container()  # test_user admin
     _seed_user(container.store, "bob", role="admin")

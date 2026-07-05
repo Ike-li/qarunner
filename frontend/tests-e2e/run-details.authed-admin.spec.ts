@@ -182,7 +182,7 @@ async function mockRunArtifactsRoute(page: import('@playwright/test').Page, runI
 async function openDrawer(page: import('@playwright/test').Page) {
   // Click the first row in the runs table to open the drawer.
   await expect(page.getByTestId('execution-records-title')).toBeVisible({ timeout: 8000 });
-  const firstRow = page.locator('table tbody tr').first();
+  const firstRow = page.locator('[data-testid^="run-row-"]').first();
   await expect(firstRow).toBeVisible({ timeout: 5000 });
   await firstRow.click();
   // Wait for the SideSheet dialog to appear.
@@ -462,13 +462,12 @@ test.describe('Run Details Drawer', () => {
     await btn.waitFor({ state: 'attached', timeout: 5000 });
     await btn.evaluate((el) => (el as HTMLButtonElement).click());
 
-    // Verify fullscreen terminal overlay appears by looking for its heading text.
-    const overlayHeading = page.getByText('Read-only Console Terminal');
-    await expect(overlayHeading).toBeVisible({ timeout: 5000 });
+    const overlay = page.getByTestId('fullscreen-terminal-overlay');
+    await expect(overlay).toBeVisible({ timeout: 5000 });
 
     // Press Escape to close.
     await page.keyboard.press('Escape');
-    await expect(overlayHeading).not.toBeVisible({ timeout: 5000 });
+    await expect(overlay).not.toBeVisible({ timeout: 5000 });
 
     // The original drawer should still be visible.
     await expect(page.locator('[role="dialog"]').first()).toBeVisible();
@@ -537,9 +536,7 @@ test.describe('Run Details Drawer', () => {
     // Verify drawer is visible.
     await expect(page.locator('[role="dialog"]')).toBeVisible();
 
-    // Click the SideSheet close (X) button — Semi UI renders it as .semi-sidesheet-close.
-    const closeBtn = page.locator('.semi-sidesheet-close');
-    await closeBtn.click();
+    await page.getByTestId('run-details-close').click();
 
     // Verify drawer is no longer visible.
     await expect(page.locator('[role="dialog"]')).not.toBeVisible({ timeout: 5000 });
@@ -586,9 +583,7 @@ test.describe('Run Details Drawer', () => {
     await btn.waitFor({ state: 'attached', timeout: 5000 });
     await btn.evaluate((el) => (el as HTMLButtonElement).click());
 
-    // Wait for the fullscreen overlay to appear.
-    const overlayHeading = page.getByText('Read-only Console Terminal');
-    await expect(overlayHeading).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('fullscreen-terminal-overlay')).toBeVisible({ timeout: 5000 });
 
     // Locate the fullscreen terminal dialog for scoped assertions.
     const terminalDialog = page.locator('[role="dialog"][aria-labelledby="fullscreen-terminal-title"]');
@@ -626,9 +621,7 @@ test.describe('Run Details Drawer', () => {
     await btn.waitFor({ state: 'attached', timeout: 5000 });
     await btn.evaluate((el) => (el as HTMLButtonElement).click());
 
-    // Wait for the fullscreen overlay to appear.
-    const overlayHeading = page.getByText('Read-only Console Terminal');
-    await expect(overlayHeading).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('fullscreen-terminal-overlay')).toBeVisible({ timeout: 5000 });
 
     // Locate the fullscreen terminal dialog for scoped assertions.
     const terminalDialog = page.locator('[role="dialog"][aria-labelledby="fullscreen-terminal-title"]');
@@ -754,8 +747,7 @@ test.describe('Run Details Drawer', () => {
     await btn.waitFor({ state: 'attached', timeout: 5000 });
     await btn.evaluate((el) => (el as HTMLButtonElement).click());
 
-    // Wait for the fullscreen overlay to appear.
-    await expect(page.getByText('Read-only Console Terminal')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('fullscreen-terminal-overlay')).toBeVisible({ timeout: 5000 });
 
     // Scope to the fullscreen terminal dialog for targeting the Copy button.
     const terminalDialog = page.locator('[role="dialog"][aria-labelledby="fullscreen-terminal-title"]');
@@ -784,8 +776,7 @@ test.describe('Run Details Drawer', () => {
     await btn.waitFor({ state: 'attached', timeout: 5000 });
     await btn.evaluate((el) => (el as HTMLButtonElement).click());
 
-    // Wait for the fullscreen overlay to appear.
-    await expect(page.getByText('Read-only Console Terminal')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('fullscreen-terminal-overlay')).toBeVisible({ timeout: 5000 });
 
     // The Download button in the fullscreen terminal has a title attribute
     // set to "Download raw log file".

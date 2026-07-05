@@ -81,10 +81,10 @@ test.describe('User Management (Admin Only)', () => {
     const rowCount = await userRows.count();
     expect(rowCount).toBeGreaterThanOrEqual(2);
 
-    const secondaryRow = page.locator('tr').filter({ hasText: secondaryUser });
-    await expect(secondaryRow.getByTestId('user-change-password')).toBeVisible();
-    await expect(secondaryRow.getByTestId('user-toggle-role')).toBeVisible();
-    await expect(secondaryRow.getByTestId('user-delete')).toBeVisible();
+    const userActions = page.getByTestId(`user-actions-${secondaryUser}`);
+    await expect(userActions.getByTestId('user-change-password')).toBeVisible();
+    await expect(userActions.getByTestId('user-toggle-role')).toBeVisible();
+    await expect(userActions.getByTestId('user-delete')).toBeVisible();
   });
 
   test('Create user with empty username shows error', async ({ page }) => {
@@ -133,11 +133,11 @@ test.describe('User Management (Admin Only)', () => {
     await openAdminDashboard(page);
     await openUserModal(page);
 
-    const roleSelect = page.getByTestId('user-modal').locator('.semi-select');
+    const roleSelect = page.getByTestId('user-role-select');
     await expect(roleSelect).toContainText('User');
 
     await roleSelect.click();
-    await page.getByRole('option', { name: 'Admin' }).click();
+    await page.getByTestId('user-role-option-admin').click();
 
     await expect(roleSelect).toContainText('Admin');
   });
@@ -160,8 +160,8 @@ test.describe('User Management (Admin Only)', () => {
     page.on('dialog', (dialog) => dialog.accept());
 
     await openUserModal(page);
-    await page.getByTestId('user-modal').locator('input[type="number"]').fill('60');
-    await page.getByRole('button', { name: /Clean Old Runs/i }).click();
+    await page.getByTestId('retention-days-input').fill('60');
+    await page.getByTestId('storage-cleanup-button').click();
 
     await expect(async () => {
       expect(cleanupCalled).toBe(true);

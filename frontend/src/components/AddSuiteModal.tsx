@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Modal, Button, Input, Banner, Tabs, Select } from '@douyinfe/semi-ui'
-import { FolderPlus, GitBranch, KeyRound, Link, Settings, Terminal } from 'lucide-react'
+import { FolderPlus, GitBranch, KeyRound, Link, Settings, Terminal, X } from 'lucide-react'
 import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
 
@@ -118,6 +118,7 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
       footer={null}
       width={520}
       data-testid="add-suite-modal"
+      closeIcon={<X size={16} data-testid="add-suite-modal-close" />}
     >
       <div ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1}>
       <Tabs activeKey={activeTab} onChange={(k) => setActiveTab(k as 'local' | 'git')}>

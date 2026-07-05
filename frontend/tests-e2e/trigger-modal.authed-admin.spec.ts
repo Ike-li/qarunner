@@ -11,10 +11,15 @@ async function openDashboard(page: import('@playwright/test').Page) {
 }
 
 async function selectTargetDirectory(page: import('@playwright/test').Page, suite = 'suite_a/') {
-  const testsPathSelect = page.locator('#trigger-tests-path');
+  const testsPathSelect = page.getByTestId('trigger-tests-path-select');
   await testsPathSelect.click();
-  await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: suite }).click();
+  await page.getByTestId(`target-option-${suite}`).click();
   await expect(testsPathSelect).toContainText(suite);
+}
+
+async function selectRunner(page: import('@playwright/test').Page, runner: 'pytest' | 'playwright') {
+  await page.getByTestId('trigger-runner-select').click();
+  await page.getByTestId(`runner-option-${runner}`).click();
 }
 
 test.describe('Trigger Run Modal', () => {
@@ -73,22 +78,18 @@ test.describe('Trigger Run Modal', () => {
     const runnerSelect = page.getByTestId('trigger-runner-select');
     await expect(runnerSelect).toBeVisible();
     await runnerSelect.click();
-    const options = page.locator('.semi-select-option-list .semi-select-option');
-    await expect(options.filter({ hasText: 'pytest' })).toBeVisible();
-    await expect(options.filter({ hasText: 'playwright' })).toBeVisible();
+    await expect(page.getByTestId('runner-option-pytest')).toBeVisible();
+    await expect(page.getByTestId('runner-option-playwright')).toBeVisible();
   });
 
   test('Runner select updates argument field copy for Playwright', async ({ page }) => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
-    await expect(page.getByText('Pytest Arguments')).toBeVisible();
+    await expect(page.getByTestId('trigger-args-label')).toHaveText('Pytest Arguments');
 
-    const runnerSelect = page.getByTestId('trigger-runner-select');
-    await runnerSelect.click();
-    const options = page.locator('.semi-select-option-list .semi-select-option');
-    await options.filter({ hasText: 'playwright' }).click();
+    await selectRunner(page, 'playwright');
 
-    await expect(page.getByText('Playwright Arguments')).toBeVisible();
+    await expect(page.getByTestId('trigger-args-label')).toHaveText('Playwright Arguments');
     await expect(page.getByTestId('trigger-args-input')).toHaveAttribute(
       'placeholder',
       'e.g. --project=chromium --grep @smoke',
@@ -231,10 +232,7 @@ test.describe('Trigger Run Modal', () => {
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
     // 2. Select playwright runner
-    const runnerSelect = page.getByTestId('trigger-runner-select');
-    await runnerSelect.click();
-    const options = page.locator('.semi-select-option-list .semi-select-option');
-    await options.filter({ hasText: 'playwright' }).click();
+    await selectRunner(page, 'playwright');
 
     // 3. Fill args and timeout
     await page.getByTestId('trigger-args-input').fill('-k smoke');
@@ -295,7 +293,7 @@ test.describe('Trigger Run Modal', () => {
     // 2. Select the profile from the profile select dropdown
     const profileSelect = page.getByTestId('trigger-profile-select');
     await profileSelect.click();
-    await page.getByText('Smoke Tests').click();
+    await page.getByTestId('profile-option-profile-1').click();
 
     // 3. Verify runner, args, and timeout fields are populated from the profile
     await expect(page.getByTestId('trigger-runner-select')).toContainText('playwright');
@@ -309,8 +307,8 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // 2. Click the X close button (Semi UI renders it as .semi-modal-close)
-    await page.locator('.semi-modal-close').click();
+    // 2. Click the X close button.
+    await page.getByTestId('trigger-modal-close').click();
 
     // 3. Verify modal is no longer visible
     await expect(page.getByTestId('trigger-modal')).not.toBeVisible();
@@ -476,12 +474,12 @@ test.describe('Trigger Run Modal', () => {
     // 5. Verify child files appear after expanding
     await expect(testApiItem).toBeVisible({ timeout: 5000 });
 
-    // 6. Check a checkbox on a file node
-    const fileCheckbox = testApiItem.locator('.semi-checkbox');
-    await fileCheckbox.click();
+    // 6. Select a file node. Semi Tree routes leaf clicks through the same
+    // selection path as its checkbox control.
+    await testApiItem.click();
 
     // 7. Verify the checkbox is now checked
-    await expect(fileCheckbox).toHaveClass(/semi-checkbox-checked/);
+    await expect(testApiItem).toHaveAttribute('aria-checked', 'true');
   });
 
   // ── Test 15 ──────────────────────────────────────────────────────────
@@ -596,20 +594,20 @@ test.describe('Trigger Run Modal', () => {
     await selectTargetDirectory(page);
 
     // 3. Wait for marker tags to appear.
-    await expect(page.getByText(/@smoke/)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/@regression/)).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText(/@slow/)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('marker-tag-smoke')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('marker-tag-regression')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('marker-tag-slow')).toBeVisible({ timeout: 5000 });
 
     // 4. Click a marker tag to toggle its selection.
-    const smokeTag = page.getByText(/@smoke/);
+    const smokeTag = page.getByTestId('marker-tag-smoke');
     await smokeTag.click();
 
-    // 5. Verify the tag is still visible after toggling (no crash).
-    await expect(smokeTag).toBeVisible();
+    // 5. Verify the tag remains visible and exposes pressed state after toggling.
+    await expect(smokeTag).toHaveAttribute('aria-pressed', 'true');
 
     // 6. Click again to deselect.
     await smokeTag.click();
-    await expect(smokeTag).toBeVisible();
+    await expect(smokeTag).toHaveAttribute('aria-pressed', 'false');
   });
 
   // ── Test 17 ──────────────────────────────────────────────────────────
@@ -666,9 +664,7 @@ test.describe('Trigger Run Modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    const runnerSelect = page.getByTestId('trigger-runner-select');
-    await runnerSelect.click();
-    await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: 'playwright' }).click();
+    await selectRunner(page, 'playwright');
 
     await selectTargetDirectory(page);
     const tree = page.getByRole('tree');
@@ -678,9 +674,10 @@ test.describe('Trigger Run Modal', () => {
       await tree.getByRole('treeitem').filter({ hasText: 'specs' }).first().getByRole('button').first().click();
     }
     await expect(loginSpecItem).toBeVisible({ timeout: 5000 });
-    await loginSpecItem.locator('.semi-checkbox').click();
+    await loginSpecItem.click();
+    await expect(loginSpecItem).toHaveAttribute('aria-checked', 'true');
 
-    await page.getByText(/@smoke/).click();
+    await page.getByTestId('marker-tag-smoke').click();
     await page.getByTestId('trigger-submit-button').click();
 
     await expect(async () => {

@@ -132,6 +132,14 @@ async function openDashboard(page: import('@playwright/test').Page) {
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
+function suiteFilter(page: import('@playwright/test').Page, suite: string) {
+  return page.getByTestId(`suite-filter-${suite}`);
+}
+
+function profileItem(page: import('@playwright/test').Page, profileId: string) {
+  return page.getByTestId(`profile-filter-${profileId}`);
+}
+
 /**
  * Register route mocks before dashboard load so all API calls during page load are
  * intercepted.
@@ -330,11 +338,11 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Initially all 3 runs should be visible
-    const tableRows = page.locator('table tbody tr');
+    const tableRows = page.locator('[data-testid^="run-row-"]');
     await expect(tableRows).toHaveCount(3);
 
     // Click suite_a/ in the sidebar to filter by it
-    await page.getByText(SUITE_A, { exact: true }).first().click();
+    await suiteFilter(page, SUITE_A).click();
 
     // Only the 2 runs for suite_a/ should remain visible
     await expect(tableRows).toHaveCount(2);
@@ -343,7 +351,7 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(tableRows.first()).toContainText(SUITE_A);
 
     // Click 'All Suites' to clear the filter
-    await page.getByText('All Suites').click();
+    await page.getByTestId('all-suites-filter').click();
 
     // All 3 runs should be visible again
     await expect(tableRows).toHaveCount(3);
@@ -369,7 +377,7 @@ test.describe('Sidebar Suite Navigation', () => {
     });
     await openDashboard(page);
 
-    await expect(page.getByText(SUITE_A, { exact: true }).first()).toBeVisible();
+    await expect(suiteFilter(page, SUITE_A)).toBeVisible();
     await expect(page.getByTestId('profile-load-error')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('profile-load-error')).toContainText(/Unable to load|无法加载/);
   });
@@ -383,7 +391,7 @@ test.describe('Sidebar Suite Navigation', () => {
     });
     await openDashboard(page);
 
-    await expect(page.getByText('Smoke Tests', { exact: true }).first()).toBeVisible();
+    await expect(profileItem(page, 'prof-001')).toBeVisible();
     await expect(page.getByTestId('schedule-load-error')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('schedule-load-error')).toContainText(/Unable to load|无法加载/);
   });
@@ -399,7 +407,7 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Hover over the git suite (suite_a/) to reveal action buttons
-    await page.getByText(SUITE_A, { exact: true }).first().hover();
+    await suiteFilter(page, SUITE_A).hover();
 
     // Git-specific buttons should be visible
     await expect(page.getByTestId(`suite-update-${SUITE_A}`)).toBeVisible();
@@ -409,7 +417,7 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(page.getByTestId(`suite-remove-${SUITE_A}`)).toBeVisible();
 
     // Hover over the local suite (suite_b/)
-    await page.getByText(SUITE_B, { exact: true }).first().hover();
+    await suiteFilter(page, SUITE_B).hover();
 
     // Git-specific buttons should NOT exist for local suites
     await expect(page.getByTestId(`suite-update-${SUITE_B}`)).toHaveCount(0);
@@ -432,36 +440,31 @@ test.describe('Sidebar Suite Navigation', () => {
 
     // ── Profile with runs (Smoke Tests / pytest) ──
 
-    // Profile name is visible
-    const profileWithRuns = page.getByText('Smoke Tests', { exact: true }).first();
-    await expect(profileWithRuns).toBeVisible();
+    const profileWithRuns = profileItem(page, 'prof-001');
+    await expect(profileWithRuns).toContainText('Smoke Tests');
 
     // Runner tag (pytest) is visible in the profile row
-    await expect(page.getByText(/pytest/).first()).toBeVisible();
+    await expect(page.getByTestId('profile-runner-prof-001')).toHaveText('pytest');
 
     // Pass rate tag: profile prof-001 owns only run-001, so other profiles'
     // runs in the same suite must not pollute this row.
-    await expect(page.getByText(/^0% Pass$/)).toBeVisible();
+    await expect(page.getByTestId('profile-pass-rate-prof-001')).toHaveText('0% Pass');
 
-    // History dots: profile renders 5 dot spans total (2 real runs + 3 empty
-    // padding). Real run dots have role="button" for clickability.
-    // Navigate up from the profile name span to the profile item container,
-    // then count elements with role="button" which represent real run dots.
-    const profileItemContainer = profileWithRuns.locator('..').locator('..').locator('..');
-    const clickableDots = profileItemContainer.locator('span[role="button"]');
+    // History dots: profile prof-001 owns only run-001, so only one real run dot is clickable.
+    const clickableDots = profileWithRuns.locator('[data-testid^="profile-history-dot-"]');
     await expect(clickableDots).toHaveCount(1);
+    await expect(page.getByTestId('profile-history-dot-run-001')).toBeVisible();
 
     // ── Profile without runs (No Runs Profile / playwright) ──
 
-    const profileNoRuns = page.getByText('No Runs Profile', { exact: true }).first();
-    await expect(profileNoRuns).toBeVisible();
-    const profileNoRunsContainer = profileNoRuns.locator('..').locator('..').locator('..');
+    const profileNoRunsContainer = profileItem(page, 'prof-002');
+    await expect(profileNoRunsContainer).toContainText('No Runs Profile');
 
     // Runner tag should show 'playwright'
-    await expect(page.getByText(/playwright/).first()).toBeVisible();
+    await expect(page.getByTestId('profile-runner-prof-002')).toHaveText('playwright');
 
     // Should show 'No runs' label instead of a pass rate percentage
-    await expect(profileNoRunsContainer.getByText('No runs', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('profile-pass-rate-prof-002')).toHaveText('No runs');
   });
 
   test('Profile stats do not fall back to sibling runs in the same suite', async ({ page }) => {
@@ -473,13 +476,10 @@ test.describe('Sidebar Suite Navigation', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const emptyProfileName = page.getByText('Same Suite Empty Profile', { exact: true }).first();
-    await expect(emptyProfileName).toBeVisible();
-
-    const emptyProfileContainer = emptyProfileName.locator('..').locator('..').locator('..');
-    await expect(emptyProfileContainer.getByText('No runs')).toBeVisible();
-    await expect(emptyProfileContainer.getByText(/% Pass/)).toHaveCount(0);
-    await expect(emptyProfileContainer.locator('span[role="button"]')).toHaveCount(0);
+    const emptyProfileContainer = profileItem(page, 'prof-003');
+    await expect(emptyProfileContainer).toContainText('Same Suite Empty Profile');
+    await expect(page.getByTestId('profile-pass-rate-prof-003')).toHaveText('No runs');
+    await expect(emptyProfileContainer.locator('[data-testid^="profile-history-dot-"]')).toHaveCount(0);
   });
 
   test('Clicking a profile filters runs and trend to that profile', async ({ page }) => {
@@ -502,10 +502,10 @@ test.describe('Sidebar Suite Navigation', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const tableRows = page.locator('table tbody tr');
+    const tableRows = page.locator('[data-testid^="run-row-"]');
     await expect(tableRows).toHaveCount(3);
 
-    await page.getByText('Smoke Tests', { exact: true }).first().click();
+    await page.getByTestId('profile-filter-button-prof-001').click();
 
     await expect(tableRows).toHaveCount(1);
     await expect(tableRows.first()).toContainText('run-001'.slice(0, 8));
@@ -536,13 +536,7 @@ test.describe('Sidebar Suite Navigation', () => {
       { timeout: 3000 },
     );
 
-    // Locate the instant-run button for the profile "Smoke Tests".
-    // The profile name span is inside nestedProfileInfo, whose parent is
-    // nestedProfileMainRow. The first button in that row is the play button.
-    const profileName = page.getByText('Smoke Tests', { exact: true }).first();
-    const profileMainRow = profileName.locator('..').locator('..');
-    const runButton = profileMainRow.locator('button').first();
-    await runButton.click();
+    await page.getByTestId('profile-run-prof-001').click();
 
     const request = await triggerRequest;
     expect(request.method()).toBe('POST');
@@ -561,23 +555,18 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
     // Verify the profile is initially visible
-    const profileText = page.getByText('Smoke Tests', { exact: true }).first();
-    await expect(profileText).toBeVisible();
+    const profile = profileItem(page, 'prof-001');
+    await expect(profile).toBeVisible();
 
     // Register dialog handler BEFORE clicking delete — accepts the confirm()
     page.on('dialog', async (dialog) => {
       await dialog.accept();
     });
 
-    // Locate the delete button (last action button) for the profile.
-    // Same traversal: profile name span -> nestedProfileMainRow.
-    // The last button in the row is the delete button (type="danger").
-    const profileMainRow = profileText.locator('..').locator('..');
-    const deleteButton = profileMainRow.locator('button').last();
-    await deleteButton.click();
+    await page.getByTestId('profile-delete-prof-001').click();
 
     // After deletion the profile should disappear from the sidebar
-    await expect(profileText).not.toBeVisible({ timeout: 5000 });
+    await expect(profile).not.toBeVisible({ timeout: 5000 });
   });
 
   // ── 6. Suite update (git pull) button triggers API call ──────────────────────
@@ -598,7 +587,7 @@ test.describe('Sidebar Suite Navigation', () => {
       (resp) => resp.url().includes(`/tests/${encodeURIComponent(SUITE_A)}/pull`) && resp.request().method() === 'POST',
     );
 
-    await page.getByText(SUITE_A, { exact: true }).first().hover();
+    await suiteFilter(page, SUITE_A).hover();
     await page.getByTestId(`suite-update-${SUITE_A}`).click();
 
     const response = await postResponse;
@@ -623,7 +612,7 @@ test.describe('Sidebar Suite Navigation', () => {
       (resp) => resp.url().includes(`/tests/${encodeURIComponent(SUITE_A)}/prepare`) && resp.request().method() === 'POST',
     );
 
-    await page.getByText(SUITE_A, { exact: true }).first().hover();
+    await suiteFilter(page, SUITE_A).hover();
     await page.getByTestId(`suite-prepare-${SUITE_A}`).click();
 
     const response = await postResponse;
@@ -662,11 +651,11 @@ test.describe('Sidebar Suite Navigation', () => {
       await dialog.accept();
     });
 
-    await expect(page.getByText(SUITE_A, { exact: true }).first()).toBeVisible();
-    await page.getByText(SUITE_A, { exact: true }).first().hover();
+    await expect(suiteFilter(page, SUITE_A)).toBeVisible();
+    await suiteFilter(page, SUITE_A).hover();
     await page.getByTestId(`suite-remove-${SUITE_A}`).click();
 
-    await expect(page.getByText(SUITE_A, { exact: true })).not.toBeVisible({ timeout: 5000 });
+    await expect(suiteFilter(page, SUITE_A)).not.toBeVisible({ timeout: 5000 });
   });
 
   // ── 9. Quick-trigger button on suite row opens trigger modal ──────────
@@ -679,11 +668,8 @@ test.describe('Sidebar Suite Navigation', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    await page.getByText(SUITE_A, { exact: true }).first().hover();
-
-    const suiteRow = page.getByText(SUITE_A, { exact: true }).first().locator('..').locator('..');
-    const playButton = suiteRow.locator('button').first();
-    await playButton.click();
+    await suiteFilter(page, SUITE_A).hover();
+    await page.getByTestId(`suite-quick-trigger-${SUITE_A}`).click();
 
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
     await expect(page.getByTestId('trigger-modal')).toContainText(SUITE_A);
@@ -700,14 +686,9 @@ test.describe('Sidebar Suite Navigation', () => {
     await openDashboard(page);
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
 
-    const profileText = page.getByText('Smoke Tests', { exact: true }).first();
-    await expect(profileText).toBeVisible();
+    await expect(profileItem(page, 'prof-001')).toBeVisible();
 
-    const container = profileText.locator('..').locator('..').locator('..');
-    const clickableDots = container.locator('span[role="button"]');
-    await expect(clickableDots).toHaveCount(1);
-
-    await clickableDots.first().click();
+    await page.getByTestId('profile-history-dot-run-001').click();
 
     await expect(page.locator('#run-details-title')).toBeVisible();
   });

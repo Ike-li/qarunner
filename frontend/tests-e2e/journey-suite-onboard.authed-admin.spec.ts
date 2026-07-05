@@ -113,8 +113,7 @@ test.describe('Journey 5 — suite onboard and first run', () => {
     // ── Step 6: Verify the run row appears in the table ──
     await page.goto('/');
     await expect(page.getByTestId('execution-records-title')).toBeVisible({ timeout: 10000 });
-    const rowPrefix = newRun.id.slice(0, 8);
-    await expect(page.locator('code', { hasText: rowPrefix })).toBeVisible({
+    await expect(page.getByTestId(`run-id-${newRun.id}`)).toBeVisible({
       timeout: 15000,
     });
   });

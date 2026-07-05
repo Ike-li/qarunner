@@ -158,7 +158,7 @@ test.describe('Schedule Management', () => {
     await openAuthedDashboard(page);
     await openScheduleModalForProfile(page, profileName);
 
-    await page.locator('.semi-modal-close').click();
+    await page.getByTestId('schedule-modal-close').click();
 
     await expect(page.getByTestId('schedule-modal')).not.toBeAttached();
   });

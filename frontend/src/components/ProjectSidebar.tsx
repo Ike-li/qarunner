@@ -69,6 +69,7 @@ export function ProjectSidebar() {
             d.setSelectedSuiteFilter(null)
             d.setSelectedProfileFilter(null)
           })}
+          data-testid="all-suites-filter"
         >
           <div className={styles.sidebarItemMain}>
             <IconActivity style={{ color: d.selectedSuiteFilter === null ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
@@ -128,12 +129,12 @@ export function ProjectSidebar() {
                     d.setSelectedSuiteFilter(suite)
                     d.setSelectedProfileFilter(null)
                   }}
-                  onKeyDown={activateOnKey(() => {
-                    d.setSelectedSuiteFilter(suite)
-                    d.setSelectedProfileFilter(null)
-                  })}
-                >
-                  <div className={styles.sidebarItemMain}>
+	                  onKeyDown={activateOnKey(() => {
+	                    d.setSelectedSuiteFilter(suite)
+	                    d.setSelectedProfileFilter(null)
+	                  })}
+	                >
+	                  <div className={styles.sidebarItemMain} data-testid={`suite-filter-${suite}`}>
                     <IconFolder style={{ color: isFiltered ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
                     <span className={styles.suiteNameText} title={suite}>{suite}</span>
                     <Tag
@@ -161,10 +162,11 @@ export function ProjectSidebar() {
                         theme="light"
                         type="primary"
                         shape="circle"
-                        icon={<IconPlay style={{ fontSize: '10px' }} />}
-                        aria-label={d.t('quickTrigger')}
-                        onClick={() => {
-                          d.form.setTestsPath(suite)
+	                        icon={<IconPlay style={{ fontSize: '10px' }} />}
+	                        aria-label={d.t('quickTrigger')}
+	                        data-testid={`suite-quick-trigger-${suite}`}
+	                        onClick={() => {
+	                          d.form.setTestsPath(suite)
                           d.setIsTriggerModalOpen(true)
                         }}
                         style={{
@@ -280,11 +282,12 @@ export function ProjectSidebar() {
 
                         dots.push(
                           <Tooltip key={run.id} content={tooltip}>
-                            <span
-                              className={`${styles.historyDot} ${dotClass}`}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => d.runs.setSelectedRunId(run.id)}
+	                            <span
+	                              className={`${styles.historyDot} ${dotClass}`}
+	                              role="button"
+	                              tabIndex={0}
+	                              data-testid={`profile-history-dot-${run.id}`}
+	                              onClick={() => d.runs.setSelectedRunId(run.id)}
                               onKeyDown={activateOnKey(() => d.runs.setSelectedRunId(run.id))}
                             />
                           </Tooltip>
@@ -308,26 +311,28 @@ export function ProjectSidebar() {
                                 d.setSelectedSuiteFilter(profile.tests_path)
                                 d.setSelectedProfileFilter(profile.id)
                               }}
-                              onKeyDown={activateOnKey(() => {
-                                d.setSelectedSuiteFilter(profile.tests_path)
-                                d.setSelectedProfileFilter(profile.id)
-                              })}
-                            >
+	                              onKeyDown={activateOnKey(() => {
+	                                d.setSelectedSuiteFilter(profile.tests_path)
+	                                d.setSelectedProfileFilter(profile.id)
+	                              })}
+	                              data-testid={`profile-filter-button-${profile.id}`}
+	                            >
                               <IconSetting style={{ fontSize: '12px', color: 'var(--semi-color-text-2)', marginRight: '4px' }} />
                               <span className={styles.nestedProfileName}>{profile.name}</span>
                               <Tag
                                 size="small"
                                 color={(profile.runner || 'pytest') === 'playwright' ? 'blue' : 'green'}
                                 type="light"
-                                style={{
-                                  fontSize: '10px',
-                                  marginLeft: '6px',
+	                                style={{
+	                                  fontSize: '10px',
+	                                  marginLeft: '6px',
                                   padding: '0 4px',
                                   borderRadius: '4px',
                                   height: '16px',
-                                  lineHeight: '14px',
-                                }}
-                              >
+	                                  lineHeight: '14px',
+	                                }}
+	                                data-testid={`profile-runner-${profile.id}`}
+	                              >
                                 {profile.runner || 'pytest'}
                               </Tag>
                               {isSchedActive && (
@@ -337,14 +342,15 @@ export function ProjectSidebar() {
                               )}
                             </div>
                             <div className={styles.nestedProfileActions} onClick={(e) => e.stopPropagation()}>
-                              <Tooltip content={d.lang === 'zh' ? '立即执行' : 'Instant Run'}>
-                                <Button
+	                              <Tooltip content={d.lang === 'zh' ? '立即执行' : 'Instant Run'}>
+	                                <Button
                                   size="small"
                                   theme="borderless"
                                   type="tertiary"
-                                  icon={<IconPlay style={{ fontSize: '10px' }} />}
-                                  aria-label={d.lang === 'zh' ? '立即执行' : 'Instant Run'}
-                                  onClick={() => d.profiles.handleTriggerProfile(profile, (runId) => { d.runs.fetchRuns(); d.runs.setSelectedRunId(runId) })}
+	                                  icon={<IconPlay style={{ fontSize: '10px' }} />}
+	                                  aria-label={d.lang === 'zh' ? '立即执行' : 'Instant Run'}
+	                                  data-testid={`profile-run-${profile.id}`}
+	                                  onClick={() => d.profiles.handleTriggerProfile(profile, (runId) => { d.runs.fetchRuns(); d.runs.setSelectedRunId(runId) })}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
                               </Tooltip>
@@ -353,9 +359,10 @@ export function ProjectSidebar() {
                                   size="small"
                                   theme="borderless"
                                   type="tertiary"
-                                  icon={<IconEdit style={{ fontSize: '10px' }} />}
-                                  aria-label={d.lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
-                                  onClick={() => { d.form.openEditProfile(profile); d.setSelectedFiles(profile.selected_files||[]); d.setSelectedMarkers(profile.selected_markers||[]); d.setIsTriggerModalOpen(true) }}
+	                                  icon={<IconEdit style={{ fontSize: '10px' }} />}
+	                                  aria-label={d.lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
+	                                  data-testid={`profile-edit-${profile.id}`}
+	                                  onClick={() => { d.form.openEditProfile(profile); d.setSelectedFiles(profile.selected_files||[]); d.setSelectedMarkers(profile.selected_markers||[]); d.setIsTriggerModalOpen(true) }}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
                               </Tooltip>
@@ -365,20 +372,21 @@ export function ProjectSidebar() {
                                   theme="borderless"
                                   type={isSchedActive ? "primary" : "tertiary"}
                                   icon={<IconClock style={{ fontSize: '10px' }} />}
-                                  aria-label={d.lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
-                                  onClick={() => d.schedules.handleOpenScheduleModal(profile)}
-                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
-                                  data-testid="open-schedule-button"
-                                />
+	                                  aria-label={d.lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
+	                                  onClick={() => d.schedules.handleOpenScheduleModal(profile)}
+	                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
+	                                  data-testid="open-schedule-button"
+	                                />
                               </Tooltip>
                               <Tooltip content={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}>
                                 <Button
                                   size="small"
                                   theme="borderless"
                                   type="danger"
-                                  icon={<IconDelete style={{ fontSize: '10px' }} />}
-                                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                                  onClick={(e) => {
+	                                  icon={<IconDelete style={{ fontSize: '10px' }} />}
+	                                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
+	                                  data-testid={`profile-delete-${profile.id}`}
+	                                  onClick={(e) => {
                                     d.profiles.handleDeleteProfile(profile.id, e);
                                     if (d.form.selectedProfileId===profile.id) d.form.setSelectedProfileId('')
                                     if (d.selectedProfileFilter===profile.id) d.setSelectedProfileFilter(null)
@@ -394,21 +402,23 @@ export function ProjectSidebar() {
                             {stats.hasRuns ? (
                               <Tag
                                 size="small"
-                                color={stats.passRate >= 80 ? 'green' : stats.passRate >= 50 ? 'amber' : 'red'}
-                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
-                              >
+	                                color={stats.passRate >= 80 ? 'green' : stats.passRate >= 50 ? 'amber' : 'red'}
+	                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
+	                                data-testid={`profile-pass-rate-${profile.id}`}
+	                              >
                                 {stats.passRate}% {d.lang === 'zh' ? '通过率' : 'Pass'}
                               </Tag>
                             ) : (
                               <Tag
                                 size="small"
-                                color="grey"
-                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
-                              >
+	                                color="grey"
+	                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
+	                                data-testid={`profile-pass-rate-${profile.id}`}
+	                              >
                                 {d.lang === 'zh' ? '暂无记录' : 'No runs'}
                               </Tag>
                             )}
-                            <div className={styles.profileHistoryDots}>
+	                            <div className={styles.profileHistoryDots}>
                               {dots}
                             </div>
                           </div>

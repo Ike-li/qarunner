@@ -1,4 +1,4 @@
-import { Calendar, Clock, Play } from 'lucide-react'
+import { Calendar, Clock, Play, X } from 'lucide-react'
 import { Modal, Banner, Input, Select, Checkbox, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
@@ -36,6 +36,7 @@ export function ScheduleModal() {
       footer={null}
       width={480}
       data-testid="schedule-modal"
+      closeIcon={<X size={16} data-testid="schedule-modal-close" />}
     >
       <div ref={dialogRef} role="dialog" aria-modal="true" tabIndex={-1}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem 0' }}>

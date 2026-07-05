@@ -90,7 +90,7 @@ test.describe('Suite Management (Add Suite Modal)', () => {
     await expect(page.getByTestId('add-suite-modal')).toBeAttached();
 
     // 2. Click the X close button
-    await page.locator('.semi-modal-close').click();
+    await page.getByTestId('add-suite-modal-close').click();
 
     // 3. Verify modal is no longer attached (Semi UI removes modal from DOM)
     await expect(page.getByTestId('add-suite-modal')).not.toBeAttached();

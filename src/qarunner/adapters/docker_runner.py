@@ -134,7 +134,7 @@ class DockerRunner:
             proc_env["HOME"] = "/tmp"
             proc_env["XDG_CACHE_HOME"] = "/tmp/.cache"
             proc_env["PLAYWRIGHT_BROWSERS_PATH"] = "/ms-playwright"
-            proc_env["NODE_PATH"] = "/usr/local/lib/node_modules"
+            proc_env["NODE_PATH"] = "/usr/local/lib/node_modules:/usr/lib/node_modules"
 
         # 1. Get client & ensure image exists
         try:

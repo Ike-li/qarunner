@@ -46,6 +46,11 @@ export function TriggerRunModal() {
       footer={null}
       width={720}
       bodyStyle={{ maxHeight: '80vh', overflowY: 'auto', padding: '20px' }}
+      closeIcon={(
+        <span data-testid="trigger-modal-close" style={{ display: 'inline-flex' }} aria-hidden="true">
+          <X size={16} />
+        </span>
+      )}
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <SlidersHorizontal size={20} style={{ color: 'var(--semi-color-primary)' }} />
@@ -83,9 +88,12 @@ export function TriggerRunModal() {
               onChange={(val) => d.form.setTestsPath(val as string)}
               disabled={!!d.form.editingProfileId}
               style={{ width: '100%' }}
+              data-testid="trigger-tests-path-select"
             >
               {d.suites.tests.map(dir => (
-                <Select.Option key={dir} value={dir}>{dir}</Select.Option>
+                <Select.Option key={dir} value={dir} data-testid={`target-option-${dir}`}>
+                  {dir}
+                </Select.Option>
               ))}
             </Select>
           )}
@@ -107,8 +115,8 @@ export function TriggerRunModal() {
             onChange={(val) => d.form.setSelectedRunner(val as string)}
             style={{ width: '100%' }}
           >
-            <Select.Option value="pytest">pytest</Select.Option>
-            <Select.Option value="playwright">playwright</Select.Option>
+            <Select.Option value="pytest" data-testid="runner-option-pytest">pytest</Select.Option>
+            <Select.Option value="playwright" data-testid="runner-option-playwright">playwright</Select.Option>
           </Select>
           <span className={styles.fieldHelp}>
             {d.lang === 'zh' ? '选择测试执行引擎（Pytest 或 Playwright）' : 'Choose the test runner engine (Pytest or Playwright)'}
@@ -165,7 +173,7 @@ export function TriggerRunModal() {
                 {d.profiles.profiles
                   .filter(p => p.tests_path === d.form.testsPath)
                   .map(p => (
-                    <Select.Option key={p.id} value={p.id}>
+                    <Select.Option key={p.id} value={p.id} data-testid={`profile-option-${p.id}`}>
                       {p.name} {p.description ? `(${p.description})` : ''}
                     </Select.Option>
                   ))
@@ -217,14 +225,16 @@ export function TriggerRunModal() {
                   d.setSelectedMarkers(prev =>
                     prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
                   )
-                return (
-                  <Tag
-                    key={tag}
-                    color={isActive ? 'blue' : 'grey'}
-                    type={isActive ? 'solid' : 'light'}
-                    style={{ cursor: 'pointer', padding: '6px 12px', borderRadius: '16px', userSelect: 'none' }}
-                    onClick={toggleMarker}
-                  >
+	                return (
+	                  <Tag
+	                    key={tag}
+	                    color={isActive ? 'blue' : 'grey'}
+	                    type={isActive ? 'solid' : 'light'}
+	                    style={{ cursor: 'pointer', padding: '6px 12px', borderRadius: '16px', userSelect: 'none' }}
+	                    onClick={toggleMarker}
+	                    aria-pressed={isActive}
+	                    data-testid={`marker-tag-${tag}`}
+	                  >
                     @{tag}
                   </Tag>
                 )
@@ -235,7 +245,9 @@ export function TriggerRunModal() {
 
         {/* Runner Arguments */}
         <div className={styles.formField}>
-          <label className={styles.label} htmlFor="trigger-args">{d.t(argsLabelKey)}</label>
+          <label className={styles.label} htmlFor="trigger-args" data-testid="trigger-args-label">
+            {d.t(argsLabelKey)}
+          </label>
           <Input
             id="trigger-args"
             data-testid="trigger-args-input"

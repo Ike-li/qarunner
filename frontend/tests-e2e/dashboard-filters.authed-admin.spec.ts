@@ -126,10 +126,10 @@ test.describe('Dashboard filters', () => {
     // Open status filter and select "failed"
     const statusSelect = page.getByTestId('filter-status-select');
     await statusSelect.click();
-    await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: /failed/i }).click();
+    await page.getByTestId('status-option-failed').click();
 
     // Should show only the failed run
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('run-beta');
   });
@@ -137,9 +137,9 @@ test.describe('Dashboard filters', () => {
   test('filter by owner shows only matching runs', async ({ page }) => {
     const ownerSelect = page.getByTestId('filter-owner-select');
     await ownerSelect.click();
-    await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: 'alice' }).click();
+    await page.getByTestId('owner-option-alice').click();
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('run-beta');
   });
@@ -148,7 +148,7 @@ test.describe('Dashboard filters', () => {
     const searchInput = page.getByTestId('search-run-input');
     await searchInput.fill('gamma');
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('run-gamm');
   });
@@ -157,9 +157,9 @@ test.describe('Dashboard filters', () => {
     // First apply a filter
     const statusSelect = page.getByTestId('filter-status-select');
     await statusSelect.click();
-    await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: /failed/i }).click();
+    await page.getByTestId('status-option-failed').click();
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(1);
 
     // Reset filters
@@ -173,12 +173,12 @@ test.describe('Dashboard filters', () => {
     // Filter by owner=admin AND search by "alpha"
     const ownerSelect = page.getByTestId('filter-owner-select');
     await ownerSelect.click();
-    await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: 'admin' }).click();
+    await page.getByTestId('owner-option-admin').click();
 
     const searchInput = page.getByTestId('search-run-input');
     await searchInput.fill('alpha');
 
-    const rows = page.locator('table tbody tr');
+    const rows = page.locator('[data-testid^="run-row-"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText('run-alph');
   });
