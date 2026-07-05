@@ -163,6 +163,7 @@ export function RunDetailsDrawer() {
   // re-fetch when the selected run changes while it stays active). The cancel
   // flag drops a stale response if the user switches run/tab mid-flight.
   const selectedRunId = d.runs.selectedRun?.id
+  const closeDrawer = d.runs.closeDrawer
   useEffect(() => {
     if (d.terminal.drawerTab !== 'diff' || !selectedRunId) return
     let cancelled = false
@@ -176,6 +177,23 @@ export function RunDetailsDrawer() {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d.terminal.drawerTab, selectedRunId])
+
+  useEffect(() => {
+    if (!selectedRunId) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (d.terminal.isTerminalFullscreen || d.terminal.isReportFullscreen) return
+      event.preventDefault()
+      closeDrawer()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [
+    closeDrawer,
+    selectedRunId,
+    d.terminal.isReportFullscreen,
+    d.terminal.isTerminalFullscreen,
+  ])
 
   // ── Derived filtered logs ──────────────────────────────────────────────
   const filteredStdout = d.runs.selectedRun?.stdout

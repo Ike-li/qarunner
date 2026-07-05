@@ -4,8 +4,7 @@ import { test, expect } from '@playwright/test';
 // when a run row is clicked, including the Logs / Report / Diff tabs, fullscreen
 // overlays, action buttons (re-run / cancel / delete), and placeholder states.
 // All backend routes are mocked to ensure deterministic, isolated testing.
-
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
+// Runs under `chromium-authed-admin` so it uses storageState instead of UI login.
 
 // ── Mock data ──────────────────────────────────────────────────────────────
 
@@ -114,11 +113,8 @@ const FLAKY_HISTORY = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -166,7 +162,7 @@ test.describe('Run Details Drawer', () => {
     // Default mock: a single completed run with logs and report.
     await mockRunsRoute(page, [RUN_WITH_LOGS_AND_REPORT]);
     await mockRunDetailRoute(page, RUN_WITH_LOGS_AND_REPORT.id, RUN_WITH_LOGS_AND_REPORT);
-    await login(page);
+    await openDashboard(page);
   });
 
   // 1. Clicking a run row opens the details drawer
@@ -480,16 +476,17 @@ test.describe('Run Details Drawer', () => {
     const searchInput = page.getByPlaceholder('Search logs...');
     await searchInput.fill('FAILED');
 
-    // After filtering by 'FAILED', PASSED lines should be hidden, FAILED lines visible.
-    await expect(terminalDialog.getByText('PASSED').first()).not.toBeVisible();
-    await expect(terminalDialog.getByText('FAILED').first()).toBeVisible();
+    // After filtering by 'FAILED', passed case rows should be hidden while
+    // failed case rows remain. The pytest summary can still mention "passed".
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_logout PASSED')).not.toBeVisible();
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_login FAILED')).toBeVisible();
 
     // Clear the search query by clicking the clear button.
     await page.getByTitle('Clear search').click();
 
     // All log lines should be restored after clearing the search.
-    await expect(terminalDialog.getByText('PASSED').first()).toBeVisible();
-    await expect(terminalDialog.getByText('FAILED').first()).toBeVisible();
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_logout PASSED')).toBeVisible();
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_login FAILED')).toBeVisible();
   });
 
   // 15. Fullscreen terminal log level filter buttons work
@@ -518,17 +515,17 @@ test.describe('Run Details Drawer', () => {
     // Click the "ERR" (ERROR) level filter button.
     await page.getByRole('button', { name: 'ERR' }).click();
 
-    // After filtering by ERROR level, only error-level lines should remain.
-    // PASSED lines should be hidden; FAILED lines should still be visible.
-    await expect(terminalDialog.getByText('PASSED').first()).not.toBeVisible();
-    await expect(terminalDialog.getByText('FAILED').first()).toBeVisible();
+    // After filtering by ERROR level, passed case rows should be hidden while
+    // failed case rows remain. The pytest summary can still mention "passed".
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_logout PASSED')).not.toBeVisible();
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_login FAILED')).toBeVisible();
 
     // Click the "ALL" level filter button to reset to showing everything.
-    await page.getByRole('button', { name: 'ALL' }).click();
+    await terminalDialog.getByRole('button', { name: 'ALL', exact: true }).click();
 
     // All log lines should be restored.
-    await expect(terminalDialog.getByText('PASSED').first()).toBeVisible();
-    await expect(terminalDialog.getByText('FAILED').first()).toBeVisible();
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_logout PASSED')).toBeVisible();
+    await expect(terminalDialog.getByText('suite_integration/test_auth.py::test_login FAILED')).toBeVisible();
   });
 
   // ═══════════════════════════════════════════════════════════════════════════════
@@ -644,8 +641,8 @@ test.describe('Run Details Drawer', () => {
     // toggles the button text from "Copy" to "Copied".
     await copyButton.click();
 
-    // Verify the visual feedback: button now displays "Copied".
-    await expect(copyButton).toContainText('Copied');
+    // Verify the visual feedback: a copied-state button is shown.
+    await expect(terminalDialog.locator('button').filter({ hasText: 'Copied' })).toBeVisible();
   });
 
   // 21. Fullscreen terminal — Download button
@@ -665,7 +662,9 @@ test.describe('Run Details Drawer', () => {
 
     // The Download button in the fullscreen terminal has a title attribute
     // set to "Download raw log file".
-    const downloadButton = page.locator('button[title="Download raw log file"]');
+    const downloadButton = page
+      .locator('[role="dialog"][aria-labelledby="fullscreen-terminal-title"]')
+      .locator('button[title="Download raw log file"]');
     await expect(downloadButton).toBeVisible();
   });
 });

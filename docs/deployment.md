@@ -154,7 +154,7 @@ cd frontend
 E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test --reporter=list
 
 # 3. 运行特定测试文件
-E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test run-details.spec.ts
+E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test run-details.authed-admin.spec.ts
 
 # 4. 有头模式调试
 E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' npx playwright test --headed

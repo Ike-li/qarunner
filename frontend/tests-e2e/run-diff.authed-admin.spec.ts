@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test';
 
 // Verifies the cross-run Diff tab (stage 2.4) renders the API's RegressionDiff
-// shape. Login hits the real backend (same as the other specs); the runs list,
-// run detail and the /diff endpoint are route-mocked so the rendering — bucket
-// ordering/colouring and the no-baseline empty state — is exercised
+// shape. Runs under `chromium-authed-admin` with storageState; the runs list,
+// run detail and the /diff endpoint are route-mocked so the rendering, bucket
+// ordering/colouring and the no-baseline empty state are exercised
 // deterministically without needing real baseline data on disk.
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
 const RUN_ID = 'run-e2e-diff-0001';
 
 const MOCK_RUN = {
@@ -58,11 +57,8 @@ const FLAKY_HISTORY = {
   flip_count: 3,
 };
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -87,7 +83,7 @@ test.describe('Run details — Diff tab (cross-run stage 2)', () => {
     await page.route(`**/runs/${RUN_ID}`, (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_RUN) }),
     );
-    await login(page);
+    await openDashboard(page);
   });
 
   test('renders the five diff buckets from the API', async ({ page }) => {

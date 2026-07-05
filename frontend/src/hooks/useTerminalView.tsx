@@ -29,7 +29,12 @@ export function useTerminalView() {
 
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
+    try {
+      void navigator.clipboard?.writeText(text).catch(() => undefined)
+    } catch {
+      // The visual feedback is still useful in non-secure/browser-test contexts
+      // where the Clipboard API is unavailable.
+    }
     setCopySuccess(true)
     setTimeout(() => setCopySuccess(false), 2000)
   }
