@@ -452,6 +452,10 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(tableRows.first()).toContainText('run-001'.slice(0, 8));
     await expect(page.getByTestId('suite-trend')).toBeVisible({ timeout: 5000 });
     expect(trendRequestUrl?.searchParams.get('profile_id')).toBe('prof-001');
+    await expect(page.getByTestId('stat-total').locator('h2')).toHaveText('1');
+    await expect(page.getByTestId('stat-success-rate').locator('h2')).toHaveText('0%');
+    await expect(page.getByTestId('stat-failed').locator('h2')).toHaveText('1');
+    await expect(page.getByTestId('stat-active').locator('h2')).toHaveText('0');
   });
 
   // ── 4. Profile instant run button triggers a run ────────────────────────────

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { summarizeRuns } from '../runStats'
 import type { Run } from '../types'
 import { apiMutate } from './useApi'
 
@@ -299,37 +300,8 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const selectedRun =
     selectedRunDetails || runs.find((r) => r.id === selectedRunId) || null
 
-  const totalRuns = runs.length
   const completedRuns = runs.filter((r) => r.status === 'completed')
-  const passedRunsCount = completedRuns.filter((r) => r.passed).length
-  const overallSuccessRate =
-    completedRuns.length > 0
-      ? ((passedRunsCount / completedRuns.length) * 100).toFixed(0)
-      : '0'
-  const activeRunsCount = runs.filter(
-    (r) => r.status === 'queued' || r.status === 'running',
-  ).length
-  const failedRunsCount = runs.filter(
-    (r) => r.status === 'failed' || (r.status === 'completed' && !r.passed),
-  ).length
-  const manualRunsCount = runs.filter(
-    (r) => r.created_by !== 'system:schedule',
-  ).length
-  const scheduledRunsCount = runs.filter(
-    (r) => r.created_by === 'system:schedule',
-  ).length
-  const passedTestCases = runs.reduce(
-    (sum, r) => sum + (r.summary?.passed ?? 0),
-    0,
-  )
-  const failedTestCases = runs.reduce(
-    (sum, r) => sum + (r.summary ? r.summary.failed + r.summary.error : 0),
-    0,
-  )
-  const totalTestCases = runs.reduce(
-    (sum, r) => sum + (r.summary?.total ?? 0),
-    0,
-  )
+  const runStats = summarizeRuns(runs)
 
   // ── close drawer ───────────────────────────────────────────────────────
 
@@ -360,16 +332,16 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     handleDeleteRun,
     handleRerunRun,
     // derived
-    totalRuns,
+    totalRuns: runStats.totalRuns,
     completedRuns,
-    overallSuccessRate,
-    activeRunsCount,
-    failedRunsCount,
-    manualRunsCount,
-    scheduledRunsCount,
-    passedTestCases,
-    failedTestCases,
-    totalTestCases,
+    overallSuccessRate: runStats.overallSuccessRate,
+    activeRunsCount: runStats.activeRunsCount,
+    failedRunsCount: runStats.failedRunsCount,
+    manualRunsCount: runStats.manualRunsCount,
+    scheduledRunsCount: runStats.scheduledRunsCount,
+    passedTestCases: runStats.passedTestCases,
+    failedTestCases: runStats.failedTestCases,
+    totalTestCases: runStats.totalTestCases,
     // reset
     _reset: () => {
       setRuns([])
