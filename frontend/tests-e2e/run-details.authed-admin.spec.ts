@@ -300,6 +300,10 @@ test.describe('Run Details Drawer', () => {
       'href',
       '/runs/run-full-0001/artifacts/failed-case%2Ftrace.zip',
     );
+    await expect(page.getByTestId('run-artifact-trace-command-0')).toContainText(
+      'npx playwright show-trace failed-case/trace.zip',
+    );
+    await expect(page.getByTestId('run-artifact-trace-copy-0')).toBeVisible();
 
     const screenshotLink = page.getByTestId('run-artifact-link-1');
     await expect(screenshotLink).toContainText('failed-case/screenshot.png');

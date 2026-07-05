@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RunDetailsDrawer } from './RunDetailsDrawer'
@@ -191,6 +191,13 @@ describe('RunDetailsDrawer', () => {
     expect(within(traceGroup).getByTestId('run-artifact-link-0')).toHaveAttribute(
       'href',
       '/runs/run-001/artifacts/failed-case%2Ftrace.zip',
+    )
+    expect(within(traceGroup).getByTestId('run-artifact-trace-command-0')).toHaveTextContent(
+      'npx playwright show-trace failed-case/trace.zip',
+    )
+    fireEvent.click(within(traceGroup).getByTestId('run-artifact-trace-copy-0'))
+    expect(dashboard.current.terminal.copyToClipboard).toHaveBeenCalledWith(
+      'npx playwright show-trace failed-case/trace.zip',
     )
     expect(within(screenshotGroup).getByTestId('run-artifact-link-1')).toHaveTextContent(
       'failed-case/screenshot.png',

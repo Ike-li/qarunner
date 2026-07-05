@@ -103,6 +103,10 @@ function groupRunArtifacts(artifacts: RunArtifact[]) {
   })).filter((group) => group.items.length > 0)
 }
 
+function traceViewerCommand(artifact: RunArtifact): string {
+  return `npx playwright show-trace ${artifact.path}`
+}
+
 /** One case row inside the Diff tab. Clicking it lazily pulls the case's
  *  cross-run outcome history (/cases/history) and paints it as a strip of
  *  coloured cells (oldest→newest); a server-computed flaky verdict shows as a
@@ -852,40 +856,94 @@ export function RunDetailsDrawer() {
                           <div style={{ fontSize: '0.72rem', fontWeight: 700, opacity: 0.72, textTransform: 'uppercase' }}>
                             {d.t(group.labelKey)}
                           </div>
-                          {group.items.map(({ artifact, index }) => (
-                            <a
-                              key={artifact.path}
-                              data-testid={`run-artifact-link-${index}`}
-                              href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
-                              download
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: '0.75rem',
-                                color: 'var(--semi-color-primary)',
-                                textDecoration: 'none',
-                                fontSize: '0.8rem',
-                              }}
-                            >
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
-                                <Download size={13} />
-                                <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
-                              </span>
-                              <span
+                          {group.items.map(({ artifact, index }) => {
+                            const traceCommand = traceViewerCommand(artifact)
+                            return (
+                              <div
+                                key={artifact.path}
                                 style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '0.5rem',
-                                  opacity: 0.65,
-                                  flexShrink: 0,
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.25rem',
                                 }}
                               >
-                                <code>{artifact.content_type}</code>
-                                <span>{formatBytes(artifact.size_bytes)}</span>
-                              </span>
-                            </a>
-                          ))}
+                                <a
+                                  data-testid={`run-artifact-link-${index}`}
+                                  href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
+                                  download
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '0.75rem',
+                                    color: 'var(--semi-color-primary)',
+                                    textDecoration: 'none',
+                                    fontSize: '0.8rem',
+                                  }}
+                                >
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
+                                    <Download size={13} />
+                                    <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
+                                  </span>
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.5rem',
+                                      opacity: 0.65,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <code>{artifact.content_type}</code>
+                                    <span>{formatBytes(artifact.size_bytes)}</span>
+                                  </span>
+                                </a>
+                                {group.key === 'trace' && (
+                                  <div
+                                    data-testid={`run-artifact-trace-command-${index}`}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      gap: '0.75rem',
+                                      border: '1px dashed var(--semi-color-border)',
+                                      borderRadius: 4,
+                                      padding: '0.35rem 0.45rem',
+                                      fontSize: '0.76rem',
+                                      color: 'var(--semi-color-text-1)',
+                                      background: 'var(--semi-color-fill-0)',
+                                    }}
+                                  >
+                                    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
+                                      <span style={{ opacity: 0.65 }}>{d.t('traceViewerCommand')}</span>
+                                      <code style={{ overflowWrap: 'anywhere' }}>{traceCommand}</code>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      data-testid={`run-artifact-trace-copy-${index}`}
+                                      onClick={() => d.terminal.copyToClipboard(traceCommand)}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.25rem',
+                                        color: 'var(--semi-color-primary)',
+                                        border: 'none',
+                                        background: 'transparent',
+                                        cursor: 'pointer',
+                                        fontSize: '0.74rem',
+                                        fontWeight: 700,
+                                        padding: 0,
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      <Copy size={12} />
+                                      <span>{d.t('copyTraceCommand')}</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       ))}
                     </div>
