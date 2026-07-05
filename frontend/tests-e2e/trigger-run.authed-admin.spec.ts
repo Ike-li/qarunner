@@ -2,15 +2,18 @@ import { test, expect } from '@playwright/test';
 
 // Trigger Run modal E2E tests — verifies the modal open/close, form fill,
 // and submit flow using route-mocked backend for determinism.
+// Runs under `chromium-authed-admin`, so storageState supplies the admin session.
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
-
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
+}
+
+async function selectTargetDirectory(page: import('@playwright/test').Page, suite = 'suite_a/') {
+  const testsPathSelect = page.locator('#trigger-tests-path');
+  await testsPathSelect.click();
+  await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: suite }).click();
+  await expect(testsPathSelect).toContainText(suite);
 }
 
 test.describe('Trigger Run modal', () => {
@@ -21,11 +24,13 @@ test.describe('Trigger Run modal', () => {
         await route.fallback();
         return;
       }
-      await route.fulfill({ json: [] });
+      await route.fulfill({ json: { runs: [] } });
     });
     // Mock /suites and /tests so the sidebar loads.
     await page.route('**/suites', async (route) => {
-      await route.fulfill({ json: [] });
+      await route.fulfill({
+        json: [{ name: 'suite_a/', source: 'local', repo_url: null, ref: null }],
+      });
     });
     await page.route('**/tests', async (route) => {
       await route.fulfill({ json: ['suite_a/'] });
@@ -38,7 +43,7 @@ test.describe('Trigger Run modal', () => {
       }
       await route.fulfill({ json: [] });
     });
-    await login(page);
+    await openDashboard(page);
   });
 
   test('open and close the trigger modal', async ({ page }) => {
@@ -97,6 +102,7 @@ test.describe('Trigger Run modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
+    await selectTargetDirectory(page);
     await page.getByTestId('trigger-timeout-input').fill('60');
     await page.getByTestId('trigger-submit-button').click();
 
@@ -120,6 +126,7 @@ test.describe('Trigger Run modal', () => {
     await page.getByTestId('open-trigger-button').click();
     await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
+    await selectTargetDirectory(page);
     await page.getByTestId('trigger-timeout-input').fill('60');
     await page.getByTestId('trigger-submit-button').click();
 
