@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 // spec: specs/ui-test-plan.md §2 — Dashboard Layout and Header
 // Covers stat cards, header, sidebar, language toggle, theme toggle, suite trend.
+// Runs under `chromium-authed-admin`, so storageState supplies the admin session.
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
 const SUITE_A = 'suite_a';
 const SUITE_B = 'suite_b';
 
@@ -11,11 +11,8 @@ const SUITE_B = 'suite_b';
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function login(page: import('@playwright/test').Page) {
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
@@ -48,7 +45,7 @@ test.describe('Dashboard Layout and Header', () => {
   // ── 2.1 Dashboard renders all four stat cards with correct labels ──────────
 
   test('Dashboard renders all four stat cards with correct labels', async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
     // Wait for dashboard to settle
     await expect(page.getByTestId('stat-total')).toBeVisible();
     await expect(page.getByTestId('stat-success-rate')).toBeVisible();
@@ -60,7 +57,7 @@ test.describe('Dashboard Layout and Header', () => {
   // ── 2.2 Header displays user info and control buttons for admin ────────────
 
   test('Header displays user info and control buttons for admin', async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
     await expect(page.getByTestId('profile-username')).toHaveText('admin');
     await expect(page.getByTestId('profile-role')).toHaveText('admin');
     // Admin-specific button
@@ -80,7 +77,7 @@ test.describe('Dashboard Layout and Header', () => {
   test('Sidebar shows All Suites with add-suite button', async ({ page }) => {
     // Mock with empty suites so the "no suites" message appears
     await mockBackend(page, []);
-    await login(page);
+    await openDashboard(page);
     // 'All Suites' heading (the first sidebar item)
     await expect(page.getByText('All Suites')).toBeVisible();
     // Add suite button
@@ -92,7 +89,7 @@ test.describe('Dashboard Layout and Header', () => {
   // ── 2.4 Language toggle in header switches UI language ─────────────────────
 
   test('Language toggle in header switches UI language', async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
     // Button shows "中文" (lang=en) or "EN" (lang=zh) as its visible text
     const langToggle = page.getByRole('button', { name: /中文|EN/ });
     // Initial state: English
@@ -109,7 +106,7 @@ test.describe('Dashboard Layout and Header', () => {
   // ── 2.5 Theme toggle in header switches between dark and light ─────────────
 
   test('Theme toggle in header switches between dark and light', async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
     // Theme toggle has no accessible name — locate by moon/sun icon class
     const themeToggle = page.locator('header button').filter({
       has: page.locator('[class*="lucide-moon"], [class*="lucide-sun"]')
@@ -129,7 +126,7 @@ test.describe('Dashboard Layout and Header', () => {
 
   test('Suite trend sparkline appears when a suite is selected from sidebar', async ({ page }) => {
     await mockBackend(page, [SUITE_A, SUITE_B]);
-    await login(page);
+    await openDashboard(page);
 
     // Mock the trend endpoint before clicking the suite
     await page.route('**/runs/trend*', (route) =>
@@ -166,7 +163,7 @@ test.describe('Dashboard Layout and Header', () => {
 
   test('Suite trend shows insufficient-data hint with fewer than 2 runs', async ({ page }) => {
     await mockBackend(page, [SUITE_A]);
-    await login(page);
+    await openDashboard(page);
 
     // Mock trend endpoint with only 1 data point
     await page.route('**/runs/trend*', (route) =>
@@ -217,7 +214,7 @@ test.describe('Dashboard Layout and Header', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }),
     );
 
-    await login(page);
+    await openDashboard(page);
 
     // While /runs is still loading, the loading state text should be visible
     await expect(page.getByText('Loading execution history...')).toBeVisible({ timeout: 5000 });
@@ -229,7 +226,7 @@ test.describe('Dashboard Layout and Header', () => {
   // ── 2.9 Theme preference persists after page reload ──────────────────────
 
   test('Theme preference persists after page reload', async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
 
     // Locate the theme toggle button (icon-based, no accessible name)
     const themeToggle = page.locator('header button').filter({
@@ -255,7 +252,7 @@ test.describe('Dashboard Layout and Header', () => {
   // ── 2.10 Language preference persists after page reload ───────────────────
 
   test('Language preference persists after page reload', async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
 
     // Click language toggle to switch to Chinese
     const langToggle = page.getByRole('button', { name: /中文|EN/ });
@@ -276,7 +273,7 @@ test.describe('Dashboard Layout and Header', () => {
 
   test('SuiteTrend handles API failure gracefully', async ({ page }) => {
     await mockBackend(page, [SUITE_A]);
-    await login(page);
+    await openDashboard(page);
 
     // Mock the trend endpoint to return 500
     await page.route('**/runs/trend*', (route) =>
@@ -303,7 +300,7 @@ test.describe('Dashboard Layout and Header', () => {
     // mockBackend already returns empty runs, which gives totalRuns=0,
     // completedRuns=[], overallSuccessRate='0'.
     await mockBackend(page, []);
-    await login(page);
+    await openDashboard(page);
 
     // stat-total should show "0" (no "NaN")
     await expect(page.getByTestId('stat-total')).toBeVisible();
