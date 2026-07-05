@@ -104,6 +104,12 @@ export function ProjectSidebar() {
               <span>{d.t('profileLoadErrorDesc')}</span>
             </div>
           )}
+          {d.schedules.scheduleLoadError && (
+            <div className={styles.sidebarEmpty} data-testid="schedule-load-error" role="alert">
+              <p>{d.t('scheduleLoadError')}</p>
+              <span>{d.t('scheduleLoadErrorDesc')}</span>
+            </div>
+          )}
           {d.suites.tests.map((suite) => {
             const isFiltered = d.selectedSuiteFilter === suite
             const suiteRunsCount = d.runs.runs.filter(r => r.tests_path === suite).length

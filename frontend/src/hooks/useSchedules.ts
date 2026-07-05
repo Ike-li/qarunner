@@ -22,18 +22,22 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
   const [schedEnabled, setSchedEnabled] = useState(true)
   const [previewNextRuns, setPreviewNextRuns] = useState<string[]>([])
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [scheduleLoadError, setScheduleLoadError] = useState(false)
 
   // ── fetch ──────────────────────────────────────────────────────────────
 
   const fetchSchedules = useCallback(async () => {
+    setScheduleLoadError(false)
     try {
       const resp = await apiFetch('/schedules')
-      if (resp.ok) {
-        const data = await resp.json()
-        setSchedules(data)
-      }
+      if (!resp.ok) throw new Error(`Schedules request failed: ${resp.status}`)
+      const data = await resp.json()
+      setSchedules(data)
+      setScheduleLoadError(false)
     } catch (err) {
       console.error('Error fetching schedules:', err)
+      setSchedules([])
+      setScheduleLoadError(true)
     }
   }, [apiFetch])
 
@@ -212,6 +216,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     setSchedEnabled,
     previewNextRuns,
     previewError,
+    scheduleLoadError,
     fetchSchedules,
     handleOpenScheduleModal,
     handleSaveSchedule,
@@ -227,6 +232,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
       setSchedEnabled(true)
       setPreviewNextRuns([])
       setPreviewError(null)
+      setScheduleLoadError(false)
     },
   } as const
 }

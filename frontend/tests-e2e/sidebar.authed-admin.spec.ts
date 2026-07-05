@@ -144,6 +144,7 @@ async function mockBackend(
     runs?: { runs: any[] };
     profiles?: any[];
     profilesError?: boolean;
+    schedulesError?: boolean;
     profilesDelete?: boolean;
     triggerRun?: boolean;
     triggerProfile?: boolean;
@@ -157,6 +158,7 @@ async function mockBackend(
     runs,
     profiles,
     profilesError,
+    schedulesError,
     profilesDelete,
     triggerRun,
     triggerProfile,
@@ -297,7 +299,13 @@ async function mockBackend(
   }
 
   // ── Other common endpoints ──────────────────────────────
-  await page.route('**/schedules', (route) => route.fulfill({ json: [] }));
+  if (schedulesError) {
+    await page.route('**/schedules', (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"schedules failed"}' }),
+    );
+  } else {
+    await page.route('**/schedules', (route) => route.fulfill({ json: [] }));
+  }
   await page.route('**/credentials', (route) => route.fulfill({ json: { credentials: [] } }));
   await page.route('**/runs/trend*', (route) => {
     onTrendRequest?.(new URL(route.request().url()));
@@ -364,6 +372,20 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(page.getByText(SUITE_A, { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId('profile-load-error')).toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('profile-load-error')).toContainText(/Unable to load|无法加载/);
+  });
+
+  test('Schedule list load failure shows an error instead of implying no schedules', async ({ page }) => {
+    await mockBackend(page, {
+      suites: [GIT_SUITE],
+      runs: { runs: [] },
+      profiles: [PROFILE_WITH_RUNS],
+      schedulesError: true,
+    });
+    await openDashboard(page);
+
+    await expect(page.getByText('Smoke Tests', { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('schedule-load-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('schedule-load-error')).toContainText(/Unable to load|无法加载/);
   });
 
   // ── 2. Suite update and prepare buttons visible for git suites ─────────────
