@@ -1,18 +1,14 @@
 import { test, expect } from '@playwright/test';
 
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'admin123';
-
-async function login(page: import('@playwright/test').Page) {
+// Runs under `chromium-authed-admin`, so storageState supplies the admin session.
+async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.getByTestId('login-username').fill('admin');
-  await page.getByTestId('login-password').fill(ADMIN_PASSWORD);
-  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
 }
 
 test.describe('Run lifecycle E2E', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page);
+    await openDashboard(page);
   });
 
   test('trigger a run via the modal and see it appear in the table', async ({ page }) => {
