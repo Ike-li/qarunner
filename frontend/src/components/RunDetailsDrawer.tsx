@@ -242,23 +242,27 @@ export function RunDetailsDrawer() {
   const [runArtifacts, setRunArtifacts] = useState<RunArtifact[]>([])
   const [artifactsLoading, setArtifactsLoading] = useState(false)
   const [artifactsError, setArtifactsError] = useState(false)
+  const [artifactsLoaded, setArtifactsLoaded] = useState(false)
 
-  // Fetch the baseline diff lazily — only when the Diff tab is active (and
-  // re-fetch when the selected run changes while it stays active). The cancel
-  // flag drops a stale response if the user switches run/tab mid-flight.
+  // Fetch Playwright runner artifacts lazily — only when the Report tab is
+  // active for a Playwright run. The cancel flag drops a stale response if the
+  // user switches run/tab mid-flight.
   const selectedRunId = d.runs.selectedRun?.id
+  const selectedRunner = d.runs.selectedRun?.runner
   const closeDrawer = d.runs.closeDrawer
   useEffect(() => {
-    if (d.terminal.drawerTab !== 'report' || !selectedRunId) {
+    if (d.terminal.drawerTab !== 'report' || !selectedRunId || selectedRunner !== 'playwright') {
       setRunArtifacts([])
       setArtifactsLoading(false)
       setArtifactsError(false)
+      setArtifactsLoaded(false)
       return
     }
 
     let cancelled = false
     setArtifactsLoading(true)
     setArtifactsError(false)
+    setArtifactsLoaded(false)
     setRunArtifacts([])
     d.apiFetch(`/runs/${selectedRunId}/artifacts`)
       .then((r) => {
@@ -266,19 +270,23 @@ export function RunDetailsDrawer() {
         return r.json()
       })
       .then((data: { artifacts?: RunArtifact[] } | null) => {
-        if (!cancelled) setRunArtifacts(data?.artifacts ?? [])
+        if (!cancelled) {
+          setRunArtifacts(data?.artifacts ?? [])
+          setArtifactsLoaded(true)
+        }
       })
       .catch(() => {
         if (!cancelled) {
           setRunArtifacts([])
           setArtifactsError(true)
+          setArtifactsLoaded(false)
         }
       })
       .finally(() => {
         if (!cancelled) setArtifactsLoading(false)
       })
     return () => { cancelled = true }
-  }, [d.apiFetch, d.terminal.drawerTab, selectedRunId])
+  }, [d.apiFetch, d.terminal.drawerTab, selectedRunId, selectedRunner])
 
   useEffect(() => {
     if (d.terminal.drawerTab !== 'diff' || !selectedRunId) return
@@ -338,6 +346,9 @@ export function RunDetailsDrawer() {
   }
   const caseResults = d.runs.selectedRun?.cases ?? []
   const artifactGroups = groupRunArtifacts(runArtifacts)
+  const showArtifactsSection =
+    selectedRunner === 'playwright' &&
+    (artifactsLoading || artifactsError || artifactsLoaded || runArtifacts.length > 0)
 
   const downloadLogs = (runId: string) => {
     const logText = d.runs.isStreaming
@@ -799,7 +810,7 @@ export function RunDetailsDrawer() {
                   </section>
                 )}
 
-                {(artifactsLoading || artifactsError || runArtifacts.length > 0) && (
+                {showArtifactsSection && (
                   <section data-testid="report-section-artifacts" aria-label={d.t('runnerArtifacts')}>
                     {artifactsLoading && (
                       <span className={styles.terminalPlaceholder} data-testid="run-artifacts-loading">
@@ -811,6 +822,14 @@ export function RunDetailsDrawer() {
                       <div className={styles.summaryPlaceholder} data-testid="run-artifacts-error">
                         <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
                         <p>{d.t('artifactsLoadError')}</p>
+                      </div>
+                    )}
+
+                    {artifactsLoaded && !artifactsLoading && !artifactsError && runArtifacts.length === 0 && (
+                      <div className={styles.summaryPlaceholder} data-testid="run-artifacts-empty">
+                        <Download size={24} style={{ color: '#64748b', marginBottom: '0.75rem' }} />
+                        <p>{d.t('noRunnerArtifacts')}</p>
+                        <span>{d.t('noRunnerArtifactsDesc')}</span>
                       </div>
                     )}
 

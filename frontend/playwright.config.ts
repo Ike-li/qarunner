@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
 const useBundledChromium = process.env.PLAYWRIGHT_USE_BUNDLED_CHROMIUM === 'true';
 const desktopChrome = {
   ...devices['Desktop Chrome'],

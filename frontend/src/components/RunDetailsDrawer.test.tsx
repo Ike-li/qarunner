@@ -131,6 +131,32 @@ describe('RunDetailsDrawer', () => {
     )
   })
 
+  it('does not request runner artifacts for non-playwright runs', async () => {
+    render(<RunDetailsDrawer />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('report-section-summary')).toBeVisible()
+    })
+    expect(dashboard.current.apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('shows an explicit empty artifact state for playwright runs', async () => {
+    dashboard.current.runs.selectedRun = {
+      ...dashboard.current.runs.selectedRun,
+      runner: 'playwright',
+    }
+
+    render(<RunDetailsDrawer />)
+
+    await waitFor(() => {
+      expect(dashboard.current.apiFetch).toHaveBeenCalledWith('/runs/run-001/artifacts')
+    })
+    expect(await screen.findByTestId('run-artifacts-empty')).toHaveTextContent(
+      'noRunnerArtifacts',
+    )
+    expect(screen.queryByTestId('run-artifacts-download-all')).not.toBeInTheDocument()
+  })
+
   it('shows downloadable runner artifacts on the report tab', async () => {
     dashboard.current.runs.selectedRun = {
       ...dashboard.current.runs.selectedRun,

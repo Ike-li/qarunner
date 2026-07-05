@@ -272,7 +272,12 @@ test.describe('Run Details Drawer', () => {
   });
 
   test('Report tab shows downloadable runner artifacts', async ({ page }) => {
-    await mockRunArtifactsRoute(page, RUN_WITH_LOGS_AND_REPORT.id);
+    const playwrightRun = { ...RUN_WITH_LOGS_AND_REPORT, runner: 'playwright' };
+    await page.unroute('**/runs');
+    await page.unroute(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}`);
+    await mockRunsRoute(page, [shallowRunForList(playwrightRun)]);
+    await mockRunDetailRoute(page, playwrightRun.id, playwrightRun);
+    await mockRunArtifactsRoute(page, playwrightRun.id);
 
     await openDrawer(page);
     await page.getByTestId('drawer-tab-report').click();
