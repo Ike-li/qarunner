@@ -107,6 +107,22 @@ const PROFILE_NO_RUNS = {
   env: {},
 };
 
+const PROFILE_NO_RUNS_SAME_SUITE = {
+  id: 'prof-003',
+  name: 'Same Suite Empty Profile',
+  description: null,
+  tests_path: SUITE_A,
+  runner: 'playwright',
+  selected_files: [],
+  selected_markers: [],
+  extra_args: '',
+  executor_mode: 'docker',
+  timeout: null,
+  created_by: 'admin',
+  created_at: '2026-07-03T10:00:00Z',
+  env: {},
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -368,12 +384,31 @@ test.describe('Sidebar Suite Navigation', () => {
 
     const profileNoRuns = page.getByText('No Runs Profile', { exact: true }).first();
     await expect(profileNoRuns).toBeVisible();
+    const profileNoRunsContainer = profileNoRuns.locator('..').locator('..').locator('..');
 
     // Runner tag should show 'playwright'
     await expect(page.getByText(/playwright/).first()).toBeVisible();
 
     // Should show 'No runs' label instead of a pass rate percentage
-    await expect(page.getByText('No runs')).toBeVisible();
+    await expect(profileNoRunsContainer.getByText('No runs', { exact: true })).toBeVisible();
+  });
+
+  test('Profile stats do not fall back to sibling runs in the same suite', async ({ page }) => {
+    await mockBackend(page, {
+      suites: [GIT_SUITE],
+      runs: { runs: RUNS },
+      profiles: [PROFILE_WITH_RUNS, PROFILE_NO_RUNS_SAME_SUITE],
+    });
+    await openDashboard(page);
+    await expect(page.getByTestId('execution-records-title')).toBeVisible();
+
+    const emptyProfileName = page.getByText('Same Suite Empty Profile', { exact: true }).first();
+    await expect(emptyProfileName).toBeVisible();
+
+    const emptyProfileContainer = emptyProfileName.locator('..').locator('..').locator('..');
+    await expect(emptyProfileContainer.getByText('No runs')).toBeVisible();
+    await expect(emptyProfileContainer.getByText(/% Pass/)).toHaveCount(0);
+    await expect(emptyProfileContainer.locator('span[role="button"]')).toHaveCount(0);
   });
 
   // ── 4. Profile instant run button triggers a run ────────────────────────────
