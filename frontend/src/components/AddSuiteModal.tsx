@@ -178,6 +178,13 @@ export function AddSuiteModal({ isOpen, onClose }: AddSuiteModalProps) {
                 </Select.Option>
               ))}
             </Select>
+            {d.credentials.credentialsLoadError && (
+              <Banner
+                type="danger"
+                description={d.t('credentialLoadErrorDesc')}
+                data-testid="credential-load-error"
+              />
+            )}
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <Input
                 size="small"

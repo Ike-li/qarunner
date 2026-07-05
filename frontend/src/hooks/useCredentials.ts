@@ -13,16 +13,20 @@ interface UseCredentialsOpts {
  */
 export function useCredentials({ apiFetch, enabled }: UseCredentialsOpts) {
   const [credentials, setCredentials] = useState<Credential[]>([])
+  const [credentialsLoadError, setCredentialsLoadError] = useState(false)
 
   const fetchCredentials = useCallback(async () => {
+    setCredentialsLoadError(false)
     try {
       const resp = await apiFetch('/credentials')
-      if (resp.ok) {
-        const data = await resp.json()
-        setCredentials(data.credentials)
-      }
+      if (!resp.ok) throw new Error(`Credentials request failed: ${resp.status}`)
+      const data = await resp.json()
+      setCredentials(data.credentials)
+      setCredentialsLoadError(false)
     } catch (err) {
       console.error('Error fetching credentials:', err)
+      setCredentials([])
+      setCredentialsLoadError(true)
     }
   }, [apiFetch])
 
@@ -65,9 +69,13 @@ export function useCredentials({ apiFetch, enabled }: UseCredentialsOpts) {
 
   return {
     credentials,
+    credentialsLoadError,
     fetchCredentials,
     createCredential,
     deleteCredential,
-    _reset: () => setCredentials([]),
+    _reset: () => {
+      setCredentials([])
+      setCredentialsLoadError(false)
+    },
   } as const
 }

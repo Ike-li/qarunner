@@ -213,6 +213,26 @@ test.describe('Suite Management (Add Suite Modal)', () => {
     await expect(page.getByTestId('clone-cred-select')).toContainText('My GitHub Token');
   });
 
+  test('Credential list load failure shows an error on the Git tab', async ({ page }) => {
+    await page.route('**/credentials', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"credentials failed"}' });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.reload();
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+
+    await page.getByTestId('open-add-suite-button').click();
+    await expect(page.getByTestId('add-suite-modal')).toBeAttached();
+    await page.getByTestId('suite-tab-git').click();
+
+    await expect(page.getByTestId('credential-load-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('credential-load-error')).toContainText(/Unable to load|无法加载/);
+    await expect(page.getByTestId('clone-cred-select')).toBeVisible();
+  });
+
   // ── 6.12 Network error during clone shows error feedback ──────────
 
   test('Network error during clone shows error feedback', async ({ page }) => {
