@@ -10,7 +10,7 @@ const desktopChrome = {
  * See https://playwright.dev/docs/test-configuration.
  *
  * Projects:
- *   - chromium               : unauthenticated + legacy UI-login specs
+ *   - chromium               : unauthenticated + login-flow specs
  *                               (no storageState). globalSetup does not affect
  *                               them.
  *   - chromium-authed-admin   : storageState injected from global-setup, matches
@@ -49,7 +49,7 @@ export default defineConfig({
 
   projects: [
     {
-      // Default project: anonymous specs and legacy specs still awaiting migration.
+      // Default project: anonymous specs and login-flow specs that must run without storageState.
       // No storageState — globalSetup's persisted cookies do NOT leak into these.
       name: 'chromium',
       testMatch: /.*\.spec\.ts/,
