@@ -1315,6 +1315,18 @@ class TestPlaywrightRunnerExecution:
             await orch.create(req)
 
     @pytest.mark.asyncio
+    async def test_playwright_selected_file_must_be_spec_file(self):
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            executor_mode="subprocess",
+            selected_files=["README.md"],
+        )
+        with pytest.raises(UnsafeArguments, match="must be a Playwright test file"):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
     async def test_playwright_on_docker_uses_docker_process(self):
         orch = _make_orchestrator(
             collector_preset=CollectResult(

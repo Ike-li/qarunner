@@ -71,6 +71,14 @@ _DANGEROUS_PLAYWRIGHT_FLAGS = frozenset(
         "--global-teardown",
     }
 )
+_PLAYWRIGHT_TEST_SUFFIXES = (
+    ".spec.ts",
+    ".spec.js",
+    ".spec.mjs",
+    ".test.ts",
+    ".test.js",
+    ".test.mjs",
+)
 
 
 # Directory entries never copied into the workspace jail.
@@ -103,6 +111,8 @@ def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") 
             if selected.startswith("-"):
                 raise UnsafeArguments(f"selected file {selected!r} must not start with '-'")
             safe_subpath(tests_dir, selected)
+            if not selected.endswith(_PLAYWRIGHT_TEST_SUFFIXES):
+                raise UnsafeArguments(f"selected file {selected!r} must be a Playwright test file")
             compiled.append(selected)
         return compiled
 
