@@ -37,6 +37,9 @@ export const translations = {
     noRunsTitle: "No runs recorded yet",
     noRunsDesc: "Trigger your first automated pytest run to see full statistics and Allure HTML report analysis.",
     launchFirstRun: "Launch First Run",
+    noFilteredRunsTitle: "No runs match the current filters",
+    noFilteredRunsDesc: "Clear filters to return to the full execution history.",
+    clearRunFilters: "Clear Run Filters",
 
     // Table Columns
     runId: "RUN ID",
@@ -215,6 +218,9 @@ export const translations = {
     noRunsTitle: "暂无运行记录",
     noRunsDesc: "触发您的首次自动化 pytest 运行，以查看完整统计信息和 Allure HTML 报告分析。",
     launchFirstRun: "启动首次运行",
+    noFilteredRunsTitle: "没有匹配当前筛选的运行",
+    noFilteredRunsDesc: "清除筛选以返回完整执行历史。",
+    clearRunFilters: "清除运行筛选",
 
     // Table Columns
     runId: "运行 ID",

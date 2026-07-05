@@ -206,7 +206,15 @@ export function RunsTable() {
     d.setFilterOwner('ALL')
   }
 
+  const clearRunFilters = () => {
+    resetFilters()
+    d.setLogFilterTab('All')
+    d.setSelectedSuiteFilter(null)
+    d.setSelectedProfileFilter(null)
+  }
+
   const isFilterActive = !!(d.searchRunId || d.filterStatus !== 'ALL' || d.filterOwner !== 'ALL')
+  const isFilteredEmpty = d.runs.runs.length > 0 && filteredRuns.length === 0
 
   return (
     <div className={styles.tableCard}>
@@ -329,6 +337,21 @@ export function RunsTable() {
             style={{ marginTop: '1.5rem' }}
           >
             {d.t('launchFirstRun')}
+          </Button>
+        </div>
+      ) : isFilteredEmpty ? (
+        <div className={styles.emptyState} data-testid="filtered-runs-empty">
+          <IconSearch style={{ color: 'var(--semi-color-text-2)', fontSize: '48px' }} />
+          <h3>{d.t('noFilteredRunsTitle')}</h3>
+          <p>{d.t('noFilteredRunsDesc')}</p>
+          <Button
+            theme="solid"
+            type="primary"
+            onClick={clearRunFilters}
+            style={{ marginTop: '1.5rem' }}
+            data-testid="filtered-runs-clear"
+          >
+            {d.t('clearRunFilters')}
           </Button>
         </div>
       ) : (

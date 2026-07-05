@@ -399,6 +399,12 @@ test.describe('Runs Table and Filtering', () => {
 
     // Expect no data rows in the table.
     await expect(page.locator('table tbody tr')).toHaveCount(0);
+    await expect(page.getByTestId('filtered-runs-empty')).toBeVisible();
+    await expect(page.getByTestId('filtered-runs-empty')).toContainText(/No runs match|没有匹配/);
+
+    await page.getByTestId('filtered-runs-clear').click();
+    await expect(page.locator('table tbody tr')).toHaveCount(6);
+    await expect(page.getByTestId('filtered-runs-empty')).toHaveCount(0);
   });
 
   // ── 11. Lock toggle button toggles run lock state ────────────────────
