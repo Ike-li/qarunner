@@ -24,6 +24,7 @@ class PlaywrightRunner:
             "playwright",
             "test",
             "--reporter=junit",
+            f"--output={ctx.results_dir}/playwright-results",
         ]
         # selected_files (spec names) appended as positional args
         cmd.extend(ctx.args)

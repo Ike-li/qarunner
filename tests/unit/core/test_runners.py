@@ -30,6 +30,7 @@ class TestPlaywrightRunner:
             "playwright",
             "test",
             "--reporter=junit",
+            "--output=/artifacts/run-001/results/playwright-results",
             "tests/test_demo.spec.ts",
         ]
 

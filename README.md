@@ -122,6 +122,9 @@ automatically (no token is ever placed in a URL). Therefore:
   `docker build -f Dockerfile.playwright -t qarunner-playwright-executor:latest .`.
   `pytest` runs use the python executor image; `playwright` runs use the
   Playwright executor image and may run with `executor_mode='docker'`.
+  For Playwright, qarunner owns `--reporter=junit` and
+  `--output=<run-results>/playwright-results` so JUnit collection and
+  Playwright artifacts remain under the run's artifact directory.
 - **Playwright external paths**: docker executor containers only get the per-run
   workspace and artifact directory by default. If a Playwright profile needs an
   explicit env directory such as `APP_REPO_PATH=/Users/me/code/app`, set

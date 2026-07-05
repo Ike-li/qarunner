@@ -1227,6 +1227,21 @@ class TestPlaywrightRunnerExecution:
             await orch.create(req)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", ["--reporter=list", "--output=/tmp/escape"])
+    async def test_playwright_platform_owned_output_flags_rejected(self, flag):
+        # The platform owns reporter selection and the output directory so JUnit
+        # collection and Playwright artifacts always land under the run results.
+        orch = _make_orchestrator()
+        req = RunRequest(
+            tests_path="playwright_suite",
+            runner="playwright",
+            executor_mode="subprocess",
+            args=[flag],
+        )
+        with pytest.raises(UnsafeArguments):
+            await orch.create(req)
+
+    @pytest.mark.asyncio
     async def test_playwright_legitimate_flag_allowed(self):
         # Regression guard: benign playwright flags (e.g. --headed) must still pass.
         orch = _make_orchestrator()
@@ -1294,6 +1309,7 @@ class TestPlaywrightRunnerExecution:
             "playwright",
             "test",
             "--reporter=junit",
+            f"--output=/artifacts/{run.id}/results/playwright-results",
             "--headed",
             "test_home.spec.ts",
         ]
@@ -1365,7 +1381,13 @@ class TestPlaywrightRunnerExecution:
 
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.COMPLETED
-        assert captured_cmd == ["npx", "playwright", "test", "--reporter=junit"]
+        assert captured_cmd == [
+            "npx",
+            "playwright",
+            "test",
+            "--reporter=junit",
+            f"--output=/artifacts/{run.id}/results/playwright-results",
+        ]
         assert (
             captured_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"]
             == f"/artifacts/{run.id}/results/junit.xml"

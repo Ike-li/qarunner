@@ -61,14 +61,17 @@ _DANGEROUS_PYTEST_FLAGS = frozenset(
 
 
 # Playwright CLI flags that load/execute arbitrary JS (a config or global
-# setup/teardown module runs as Node code), rejected for the same
-# argv-injection / RCE reason as the pytest flags above.
+# setup/teardown module runs as Node code), or redirect platform-owned outputs.
+# Reporter selection and the artifact output directory are owned by qarunner so
+# JUnit collection and Playwright traces/screenshots/videos land under results/.
 _DANGEROUS_PLAYWRIGHT_FLAGS = frozenset(
     {
         "-c",
         "--config",
         "--global-setup",
         "--global-teardown",
+        "--output",
+        "--reporter",
     }
 )
 _PLAYWRIGHT_TEST_SUFFIXES = (

@@ -222,6 +222,11 @@
 | extra_args | str | 否 | `""` | |
 | env | dict[str,str] | 否 | `{}` | |
 
+`runner=playwright` 时，平台固定使用 `--reporter=junit` 并把
+`--output` 指向本次 run 的 `results/playwright-results`，以保证 JUnit
+采集和 Playwright trace/screenshot/video 等产物都留在 run artifacts 下。
+用户传入的 `--reporter` / `--output` 会按不安全参数返回 `400`。
+
 ### `POST /runs` — 认证
 **异步**：受理后返回初始状态，不代表执行完成。
 - **成功**：`202` `RunResponse`（`status="queued"`）。
