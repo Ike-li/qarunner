@@ -166,6 +166,29 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   }, [selectedRunDetails])
 
   useEffect(() => {
+    if (!selectedRunId) return
+    let cancelled = false
+
+    setSelectedRunDetails(null)
+    setDetailsLoading(true)
+    apiFetch(`/runs/${selectedRunId}`)
+      .then((resp) => (resp.ok ? resp.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setSelectedRunDetails(data)
+      })
+      .catch((err) => {
+        if (!cancelled) console.error('Error fetching run details:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setDetailsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedRunId, apiFetch])
+
+  useEffect(() => {
     if (!selectedRunId) {
       setStreamedStdout('')
       setIsStreaming(false)
@@ -174,7 +197,9 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
     const findRun = (): Run | null | undefined =>
       runsRef.current.find((r) => r.id === selectedRunId) ||
-      selectedRunDetailsRef.current
+      (selectedRunDetailsRef.current?.id === selectedRunId
+        ? selectedRunDetailsRef.current
+        : null)
     const isActive = (r: Run | null | undefined): boolean =>
       r?.status === 'running' || r?.status === 'queued'
 
@@ -240,8 +265,10 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
       return
     }
     const shallowRun = runs.find((r) => r.id === selectedRunId)
+    const selectedDetails =
+      selectedRunDetails?.id === selectedRunId ? selectedRunDetails : null
     const currentStatus =
-      shallowRun?.status || selectedRunDetails?.status || null
+      shallowRun?.status || selectedDetails?.status || null
     const wasActive =
       lastStatusRef.current === 'running' || lastStatusRef.current === 'queued'
     const isInactive =
@@ -268,9 +295,8 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
         (r) => r.status === 'queued' || r.status === 'running',
       )
       const activeSelectedRun =
-        currentDetails ||
         currentRuns.find((r) => r.id === currentSelectedId) ||
-        null
+        (currentDetails?.id === currentSelectedId ? currentDetails : null)
       const isSelectedActive =
         activeSelectedRun &&
         (activeSelectedRun.status === 'queued' ||
@@ -298,7 +324,9 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   // ── derived ────────────────────────────────────────────────────────────
 
   const selectedRun =
-    selectedRunDetails || runs.find((r) => r.id === selectedRunId) || null
+    (selectedRunDetails?.id === selectedRunId ? selectedRunDetails : null) ||
+    runs.find((r) => r.id === selectedRunId) ||
+    null
 
   const completedRuns = runs.filter((r) => r.status === 'completed')
   const runStats = summarizeRuns(runs)

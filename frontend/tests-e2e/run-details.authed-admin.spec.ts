@@ -48,6 +48,15 @@ suite_integration/test_ui.py::test_interaction FAILED
 /workspace/suite_integration/conftest.py:42: UserWarning: Some fixture is deprecated
 ========================= 2 failed, 8 passed in 5.00s =========================`,
   stderr: null,
+  cases: [
+    {
+      suite: 'suite_integration/test_auth.py',
+      name: 'test_login',
+      status: 'failed',
+      duration_ms: 1200,
+      message: 'AssertionError: expected 200 got 401',
+    },
+  ],
   locked: false,
 };
 
@@ -57,6 +66,7 @@ const RUN_NO_LOGS = {
   report: null,
   stdout: null,
   stderr: null,
+  cases: [],
   error: null,
   summary: { total: 10, passed: 10, failed: 0, skipped: 0, error: 0, duration_ms: 1000, pass_rate: 1.0 },
   passed: true,
@@ -71,6 +81,7 @@ const RUN_RUNNING = {
   report: null,
   finished_at: null,
   exit_code: null,
+  cases: [],
   locked: true,
 };
 
@@ -135,6 +146,10 @@ async function mockRunsRoute(page: import('@playwright/test').Page, runsArray: u
   });
 }
 
+function shallowRunForList<T extends object>(run: T) {
+  return { ...run, stdout: null, stderr: null, cases: [] };
+}
+
 async function mockRunDetailRoute(page: import('@playwright/test').Page, runId: string, runData: unknown) {
   await page.route(`**/runs/${runId}`, async (route) => {
     if (route.request().method() === 'GET') {
@@ -159,8 +174,8 @@ async function openDrawer(page: import('@playwright/test').Page) {
 
 test.describe('Run Details Drawer', () => {
   test.beforeEach(async ({ page }) => {
-    // Default mock: a single completed run with logs and report.
-    await mockRunsRoute(page, [RUN_WITH_LOGS_AND_REPORT]);
+    // Default mock: /runs is a shallow list; /runs/{id} carries logs + case results.
+    await mockRunsRoute(page, [shallowRunForList(RUN_WITH_LOGS_AND_REPORT)]);
     await mockRunDetailRoute(page, RUN_WITH_LOGS_AND_REPORT.id, RUN_WITH_LOGS_AND_REPORT);
     await openDashboard(page);
   });
@@ -211,6 +226,12 @@ test.describe('Run Details Drawer', () => {
     // Verify report action buttons are present.
     await expect(page.getByTestId('report-fullscreen-button')).toBeVisible();
     await expect(page.getByTestId('report-new-window-link')).toBeVisible();
+
+    // Case results live on GET /runs/{id}, not the shallow GET /runs list.
+    await expect(page.getByTestId('run-case-results')).toBeVisible();
+    await expect(page.getByTestId('run-case-result-0')).toContainText(
+      'suite_integration/test_auth.py::test_login',
+    );
   });
 
   // 4. Diff tab shows cross-run comparison buckets
