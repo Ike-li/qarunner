@@ -167,6 +167,7 @@ export function RunDetailsDrawer() {
   const dialogRef = useDialogA11y({ isOpen: !!d.runs.selectedRun, onClose })
   const [runDiff, setRunDiff] = useState<RunDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  const [diffError, setDiffError] = useState(false)
 
   // Fetch the baseline diff lazily — only when the Diff tab is active (and
   // re-fetch when the selected run changes while it stays active). The cancel
@@ -177,11 +178,20 @@ export function RunDetailsDrawer() {
     if (d.terminal.drawerTab !== 'diff' || !selectedRunId) return
     let cancelled = false
     setDiffLoading(true)
+    setDiffError(false)
     setRunDiff(null)
     d.apiFetch(`/runs/${selectedRunId}/diff`)
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (!r.ok) throw new Error(`Diff request failed: ${r.status}`)
+        return r.json()
+      })
       .then((data) => { if (!cancelled) setRunDiff(data) })
-      .catch(() => { if (!cancelled) setRunDiff(null) })
+      .catch(() => {
+        if (!cancelled) {
+          setRunDiff(null)
+          setDiffError(true)
+        }
+      })
       .finally(() => { if (!cancelled) setDiffLoading(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -717,6 +727,12 @@ export function RunDetailsDrawer() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {diffLoading ? (
                   <span className={styles.terminalPlaceholder}>{d.t('diffLoading')}</span>
+                ) : diffError ? (
+                  <div className={styles.summaryPlaceholder} data-testid="diff-error">
+                    <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
+                    <p>{d.t('diffLoadError')}</p>
+                    <span>{d.t('diffLoadErrorDesc')}</span>
+                  </div>
                 ) : !runDiff || runDiff.baseline === null ? (
                   <div className={styles.summaryPlaceholder} data-testid="diff-empty-baseline">
                     <GitCompare size={24} style={{ color: '#64748b', marginBottom: '0.75rem' }} />

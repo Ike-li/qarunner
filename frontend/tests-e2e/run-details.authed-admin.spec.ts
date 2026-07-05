@@ -579,9 +579,11 @@ test.describe('Run Details Drawer', () => {
     await openDrawer(page);
     await page.getByTestId('drawer-tab-diff').click();
 
-    // When the fetch returns a non-OK response, the component sets runDiff to
-    // null, which triggers the diff-empty-baseline placeholder.
-    await expect(page.getByTestId('diff-empty-baseline')).toBeVisible({ timeout: 5000 });
+    // API failures are different from "no comparable baseline"; operators need
+    // to know the comparison failed instead of trusting an empty-baseline state.
+    await expect(page.getByTestId('diff-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('diff-error')).toContainText(/Unable to load|无法加载/);
+    await expect(page.getByTestId('diff-empty-baseline')).toHaveCount(0);
 
     // The loading indicator should have cleared.
     await expect(page.locator('[role="dialog"]')).not.toContainText('Loading baseline diff...');
