@@ -167,6 +167,13 @@ describe('RunDetailsDrawer', () => {
     })
 
     expect(await screen.findByTestId('run-artifacts')).toBeVisible()
+    expect(screen.getByTestId('run-artifacts-download-all')).toHaveTextContent(
+      'downloadAllArtifacts',
+    )
+    expect(screen.getByTestId('run-artifacts-download-all')).toHaveAttribute(
+      'href',
+      '/runs/run-001/artifacts.zip',
+    )
     const traceGroup = screen.getByTestId('run-artifact-group-trace')
     const screenshotGroup = screen.getByTestId('run-artifact-group-screenshot')
     const videoGroup = screen.getByTestId('run-artifact-group-video')

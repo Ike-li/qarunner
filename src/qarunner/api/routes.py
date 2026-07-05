@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import logging
 import mimetypes
 import os
@@ -14,6 +15,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -1428,6 +1430,18 @@ def _artifact_content_type(path: Path) -> str:
     return content_type or "application/octet-stream"
 
 
+def _iter_run_artifact_files(artifact_root: Path) -> list[tuple[Path, str]]:
+    """Return safe artifact files as ``(path, relative_posix_path)`` tuples."""
+    artifact_root_resolved = artifact_root.resolve()
+    artifacts: list[tuple[Path, str]] = []
+    for candidate in sorted(artifact_root.rglob("*")):
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(artifact_root_resolved) or not candidate.is_file():
+            continue
+        artifacts.append((candidate, candidate.relative_to(artifact_root).as_posix()))
+    return artifacts
+
+
 @router.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: str,
@@ -1612,20 +1626,46 @@ async def list_run_artifacts(
     if not artifact_root.is_dir():
         return RunArtifactListResponse()
 
-    artifact_root_resolved = artifact_root.resolve()
     artifacts: list[RunArtifactResponse] = []
-    for candidate in sorted(artifact_root.rglob("*")):
-        resolved = candidate.resolve()
-        if not resolved.is_relative_to(artifact_root_resolved) or not candidate.is_file():
-            continue
+    for candidate, relative_path in _iter_run_artifact_files(artifact_root):
         artifacts.append(
             RunArtifactResponse(
-                path=candidate.relative_to(artifact_root).as_posix(),
+                path=relative_path,
                 size_bytes=candidate.stat().st_size,
                 content_type=_artifact_content_type(candidate),
             )
         )
     return RunArtifactListResponse(artifacts=artifacts)
+
+
+@router.get("/runs/{run_id}/artifacts.zip")
+async def download_run_artifacts_archive(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Download all runner artifacts for a run as a zip archive."""
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+
+    artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
+    if not artifact_root.is_dir():
+        raise HTTPException(status_code=404, detail="Artifacts not available")
+
+    payload = io.BytesIO()
+    with ZipFile(payload, mode="w", compression=ZIP_DEFLATED) as archive:
+        for artifact_file, relative_path in _iter_run_artifact_files(artifact_root):
+            archive.write(artifact_file, arcname=relative_path)
+
+    return Response(
+        content=payload.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{run_id}-artifacts.zip"'},
+    )
 
 
 @router.get("/runs/{run_id}/artifacts/{path:path}")

@@ -258,6 +258,12 @@
 - **成功**：`200` `{"artifacts": [{"path": "...", "size_bytes": 123, "content_type": "application/zip"}, ...]}`；没有产物目录时返回空数组。
 - **错误**：`404`（run 不存在）· `403`（他人）。
 
+### `GET /runs/{run_id}/artifacts.zip` — owner
+- 将本次 run 的 runner 产物打包为一个 zip 下载；zip 内容与列表接口使用同一套安全过滤，只包含
+  `results/playwright-results` 下的普通文件，越界 symlink 不会进入归档。
+- **成功**：`200`，`Content-Type: application/zip`，`Content-Disposition: attachment; filename="{run_id}-artifacts.zip"`。
+- **错误**：`404`（run 不存在 / 产物目录不存在）· `403`（他人）。
+
 ### `GET /runs/{run_id}/artifacts/{path}` — owner
 - 路径参数：`path` 为列表接口返回的相对路径。
 - **成功**：`200` 文件。

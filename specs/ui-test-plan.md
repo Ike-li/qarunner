@@ -475,6 +475,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: trace / screenshot / video / other artifacts should be grouped by type
     - expect: trace artifacts should appear before screenshot, video, and other artifacts
     - expect: artifact links should show relative paths, MIME types, and sizes
+    - expect: download-all action should download `/runs/{run_id}/artifacts.zip`
     - expect: each artifact link should download from `/runs/{run_id}/artifacts/{path}`
 
 #### 5.5. Diff tab shows cross-run comparison buckets

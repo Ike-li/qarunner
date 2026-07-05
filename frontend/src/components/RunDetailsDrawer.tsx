@@ -816,11 +816,31 @@ export function RunDetailsDrawer() {
                       gap: '0.5rem',
                     }}
                   >
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                      <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('runnerArtifacts')}</h4>
-                      <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>
-                        {d.t('runnerArtifactsDesc')}
-                      </span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                        <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('runnerArtifacts')}</h4>
+                        <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>
+                          {d.t('runnerArtifactsDesc')}
+                        </span>
+                      </div>
+                      <a
+                        data-testid="run-artifacts-download-all"
+                        href={`/runs/${d.runs.selectedRun!.id}/artifacts.zip`}
+                        download
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          color: 'var(--semi-color-primary)',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          textDecoration: 'none',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Download size={13} />
+                        <span>{d.t('downloadAllArtifacts')}</span>
+                      </a>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                       {artifactGroups.map((group) => (

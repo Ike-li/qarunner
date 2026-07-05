@@ -278,6 +278,11 @@ test.describe('Run Details Drawer', () => {
     await page.getByTestId('drawer-tab-report').click();
 
     await expect(page.getByTestId('run-artifacts')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('run-artifacts-download-all')).toHaveText(/Download all|下载全部/);
+    await expect(page.getByTestId('run-artifacts-download-all')).toHaveAttribute(
+      'href',
+      '/runs/run-full-0001/artifacts.zip',
+    );
     const traceGroup = page.getByTestId('run-artifact-group-trace');
     const screenshotGroup = page.getByTestId('run-artifact-group-screenshot');
     const videoGroup = page.getByTestId('run-artifact-group-video');

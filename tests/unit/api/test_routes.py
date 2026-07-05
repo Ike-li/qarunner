@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from zipfile import ZipFile
 
 import pytest
 from fastapi import FastAPI
@@ -895,6 +896,75 @@ def test_download_run_artifact_missing_file(tmp_path: Path) -> None:
         resp = client.get("/runs/pw-run/artifacts/missing.zip")
 
     assert resp.status_code == 404
+
+
+def test_download_run_artifacts_archive_success(tmp_path: Path) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    nested = artifact_dir / "failed-case"
+    nested.mkdir()
+    (nested / "trace.zip").write_bytes(b"trace-data")
+    (nested / "screenshot.png").write_bytes(b"png-data")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    (artifact_dir / "escape").symlink_to(secret)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts.zip")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert resp.headers["content-disposition"] == ('attachment; filename="pw-run-artifacts.zip"')
+    archive_path = tmp_path / "artifacts.zip"
+    archive_path.write_bytes(resp.content)
+    with ZipFile(archive_path) as archive:
+        assert archive.namelist() == [
+            "failed-case/screenshot.png",
+            "failed-case/trace.zip",
+        ]
+        assert archive.read("failed-case/trace.zip") == b"trace-data"
+        assert b"TOPSECRET" not in resp.content
+
+
+def test_download_run_artifacts_archive_missing_dir_returns_404(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(
+        container.store,
+        id="pw-run",
+        runner="playwright",
+        status=RunStatus.COMPLETED,
+    )
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts.zip")
+
+    assert resp.status_code == 404
+
+
+def test_download_run_artifacts_archive_run_not_found(tmp_path: Path) -> None:
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path / "artifacts")))
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/missing/artifacts.zip")
+
+    assert resp.status_code == 404
+
+
+def test_download_run_artifacts_archive_non_owner_forbidden(tmp_path: Path) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    (artifact_dir / "trace.zip").write_bytes(b"trace")
+    run = container.store._runs["pw-run"]
+    container.store._runs["pw-run"] = run.model_copy(update={"created_by": "alice"})
+
+    app = create_app(container)
+    _override_user(app, "bob", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/pw-run/artifacts.zip")
+
+    assert resp.status_code == 403
 
 
 # ── object-level authorization (SEC-4) ─────────────────────────────────
