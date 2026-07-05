@@ -1391,10 +1391,12 @@ async def get_run(
         return stdout_val, stderr_val
 
     stdout_content, stderr_content = await asyncio.to_thread(_read_logs, stdout_file, stderr_file)
+    cases = await container.store.get_cases_for_run(run_id)
 
     res = run_to_response(run)
     res.stdout = stdout_content
     res.stderr = stderr_content
+    res.cases = cases
     return res
 
 

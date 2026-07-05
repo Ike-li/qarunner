@@ -594,6 +594,33 @@ def test_get_run_found() -> None:
     assert resp.json()["id"] == "abc"
 
 
+def test_get_run_includes_persisted_case_results() -> None:
+    container = _make_container()
+    _make_run_in_store(container.store, id="with-cases")
+    container.store._cases["with-cases"] = [
+        TestCaseResult(
+            suite="checkout",
+            name="test_guest_checkout",
+            status="failed",
+            duration_ms=456,
+            message="Expected confirmation",
+        )
+    ]
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/with-cases")
+    assert resp.status_code == 200
+    assert resp.json()["cases"] == [
+        {
+            "suite": "checkout",
+            "name": "test_guest_checkout",
+            "status": "failed",
+            "duration_ms": 456,
+            "message": "Expected confirmation",
+        }
+    ]
+
+
 def test_get_run_not_found() -> None:
     container = _make_container()
     app = create_app(container)

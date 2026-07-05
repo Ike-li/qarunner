@@ -1,0 +1,122 @@
+import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { RunDetailsDrawer } from './RunDetailsDrawer'
+
+const dashboard = vi.hoisted(() => ({ current: {} as any }))
+
+vi.mock('@douyinfe/semi-ui', async () => {
+  const React = await import('react')
+  const Tabs = ({ children }: { children: React.ReactNode }) =>
+    React.createElement('div', {}, children)
+  ;(Tabs as any).TabPane = ({ tab }: { tab: React.ReactNode }) =>
+    React.createElement('div', {}, tab)
+  return {
+    SideSheet: ({
+      visible,
+      title,
+      children,
+    }: {
+      visible: boolean
+      title: React.ReactNode
+      children: React.ReactNode
+    }) => (visible ? React.createElement('div', {}, title, children) : null),
+    Tabs,
+  }
+})
+
+vi.mock('../hooks/DashboardContext', () => ({
+  useDashboard: () => dashboard.current,
+}))
+
+function makeDashboard() {
+  const selectedRun = {
+    id: 'run-001',
+    status: 'completed',
+    runner: 'pytest',
+    created_by: 'alice',
+    tests_path: 'checkout',
+    args: [],
+    executor_mode: 'docker',
+    summary: {
+      total: 2,
+      passed: 1,
+      failed: 1,
+      skipped: 0,
+      error: 0,
+      duration_ms: 789,
+      pass_rate: 0.5,
+    },
+    report: null,
+    exit_code: 1,
+    error: null,
+    passed: false,
+    created_at: '2026-07-01T00:00:00Z',
+    started_at: '2026-07-01T00:00:01Z',
+    finished_at: '2026-07-01T00:00:02Z',
+    stdout: null,
+    stderr: null,
+    locked: true,
+    cases: [
+      {
+        suite: 'checkout',
+        name: 'test_guest_checkout',
+        status: 'failed',
+        duration_ms: 456,
+        message: 'Expected confirmation',
+      },
+    ],
+  }
+
+  return {
+    lang: 'en',
+    t: (key: string) => key,
+    apiFetch: vi.fn(),
+    terminalRef: { current: null },
+    runs: {
+      selectedRun,
+      selectedRunDetails: selectedRun,
+      detailsLoading: false,
+      streamedStdout: '',
+      isStreaming: false,
+      closeDrawer: vi.fn(),
+      handleCancelRun: vi.fn(),
+      handleRerunRun: vi.fn(),
+      handleDeleteRun: vi.fn(),
+    },
+    terminal: {
+      drawerTab: 'report',
+      setDrawerTab: vi.fn(),
+      getFilteredLogs: (value: string) => value,
+      renderFormattedLogs: (value: string) => value,
+      copyToClipboard: vi.fn(),
+      copySuccess: false,
+      isTerminalFullscreen: false,
+      setIsTerminalFullscreen: vi.fn(),
+      isReportFullscreen: false,
+      setIsReportFullscreen: vi.fn(),
+      isTerminalHeightExpanded: false,
+      terminalFontSize: 13,
+    },
+  }
+}
+
+describe('RunDetailsDrawer', () => {
+  beforeEach(() => {
+    dashboard.current = makeDashboard()
+  })
+
+  it('shows persisted case results on the report tab', () => {
+    render(<RunDetailsDrawer />)
+
+    expect(screen.getByTestId('run-case-results')).toBeVisible()
+    expect(screen.getByTestId('run-case-result-0')).toHaveTextContent(
+      'checkout::test_guest_checkout',
+    )
+    expect(screen.getByTestId('run-case-result-0')).toHaveTextContent('failed')
+    expect(screen.getByTestId('run-case-result-0')).toHaveTextContent('456ms')
+    expect(screen.getByTestId('run-case-result-0')).toHaveTextContent(
+      'Expected confirmation',
+    )
+  })
+})

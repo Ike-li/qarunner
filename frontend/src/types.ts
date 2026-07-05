@@ -35,6 +35,7 @@ export interface Run {
   finished_at: string | null
   stdout?: string | null
   stderr?: string | null
+  cases?: TestCaseResult[]
   locked?: boolean
 }
 

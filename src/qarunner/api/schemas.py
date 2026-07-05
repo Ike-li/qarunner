@@ -14,6 +14,7 @@ from qarunner.models import (
     ReportRef,
     Run,
     RunStatus,
+    TestCaseResult,
     TestProfile,
     TestSchedule,
     TestSummary,
@@ -94,6 +95,7 @@ class RunResponse(BaseModel):
     finished_at: datetime | None = None
     stdout: str | None = None
     stderr: str | None = None
+    cases: list[TestCaseResult] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     locked: bool = False
 

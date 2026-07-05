@@ -44,6 +44,13 @@ const CASE_TONE_COLOR: Record<CaseTone, string> = {
   skip: '#64748b',
 }
 
+const CASE_STATUS_COLOR: Record<TestCaseResult['status'], string> = {
+  passed: '#10b981',
+  failed: '#ef4444',
+  error: '#b91c1c',
+  skipped: '#64748b',
+}
+
 /** One case row inside the Diff tab. Clicking it lazily pulls the case's
  *  cross-run outcome history (/cases/history) and paints it as a strip of
  *  coloured cells (oldest→newest); a server-computed flaky verdict shows as a
@@ -211,6 +218,7 @@ export function RunDetailsDrawer() {
     if (!isoStr) return '-'
     return new Date(isoStr).toLocaleString()
   }
+  const caseResults = d.runs.selectedRun?.cases ?? []
 
   const downloadLogs = (runId: string) => {
     const logText = d.runs.isStreaming
@@ -598,6 +606,60 @@ export function RunDetailsDrawer() {
                     <Activity size={24} className={styles.pulseIcon} style={{ color: '#06b6d4', marginBottom: '0.75rem' }} />
                     <p>{d.t('execInProgress')}</p>
                     <span>{d.t('execInProgressDesc')}</span>
+                  </div>
+                )}
+
+                {caseResults.length > 0 && (
+                  <div
+                    data-testid="run-case-results"
+                    style={{
+                      border: '1px solid var(--semi-color-border)',
+                      borderRadius: 4,
+                      padding: '0.65rem 0.75rem',
+                      marginBottom: '0.75rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{d.t('caseResults')}</h4>
+                      <span style={{ fontSize: '0.75rem', opacity: 0.65 }}>{caseResults.length}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {caseResults.map((caseResult, index) => {
+                        const label = caseResult.suite
+                          ? `${caseResult.suite}::${caseResult.name}`
+                          : caseResult.name
+                        return (
+                          <div
+                            key={`${caseResult.suite}:${caseResult.name}:${index}`}
+                            data-testid={`run-case-result-${index}`}
+                            style={{
+                              borderTop: index === 0 ? 'none' : '1px solid var(--semi-color-border)',
+                              paddingTop: index === 0 ? 0 : '0.4rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.25rem',
+                              fontSize: '0.8rem',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              <code>{label}</code>
+                              <span style={{ color: CASE_STATUS_COLOR[caseResult.status], fontWeight: 600 }}>
+                                {caseResult.status}
+                              </span>
+                              <span style={{ opacity: 0.7 }}>{formatDuration(caseResult.duration_ms)}</span>
+                            </div>
+                            {caseResult.message && (
+                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', opacity: 0.7 }}>
+                                {caseResult.message}
+                              </pre>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 )}
 
