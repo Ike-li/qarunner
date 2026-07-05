@@ -4,6 +4,7 @@ import type { Run } from './types'
 
 const BASE_FILTERS: RunFilters = {
   suiteFilter: '',
+  profileFilter: '',
   logFilterTab: 'All',
   searchRunId: '',
   filterStatus: 'ALL',
@@ -32,9 +33,9 @@ function run(overrides: Partial<Run>): Run {
 }
 
 const RUNS: Run[] = [
-  run({ id: 'run-alpha', status: 'completed', created_by: 'admin', tests_path: 'suite_a/' }),
+  run({ id: 'run-alpha', status: 'completed', created_by: 'admin', tests_path: 'suite_a/', profile_id: 'profile-a' }),
   run({ id: 'run-beta', status: 'failed', created_by: 'alice', tests_path: 'suite_b/' }),
-  run({ id: 'run-gamma', status: 'completed', created_by: 'admin', tests_path: 'suite_a/' }),
+  run({ id: 'run-gamma', status: 'completed', created_by: 'admin', tests_path: 'suite_a/', profile_id: 'profile-b' }),
   run({ id: 'run-delta', status: 'queued', created_by: 'system:schedule', tests_path: 'suite_c/' }),
 ]
 
@@ -52,6 +53,14 @@ describe('filterRuns', () => {
 
     it('returns empty when suite does not match', () => {
       expect(filterRuns(RUNS, { ...BASE_FILTERS, suiteFilter: 'nonexistent/' })).toHaveLength(0)
+    })
+  })
+
+  describe('profileFilter', () => {
+    it('filters by profile_id', () => {
+      const result = filterRuns(RUNS, { ...BASE_FILTERS, profileFilter: 'profile-a' })
+      expect(result).toHaveLength(1)
+      expect(result[0].id).toBe('run-alpha')
     })
   })
 

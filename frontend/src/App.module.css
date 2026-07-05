@@ -2447,6 +2447,12 @@
   transition: all 0.15s ease;
 }
 
+.nestedProfileItemActive {
+  background: var(--semi-color-primary-light-default);
+  border-color: var(--semi-color-primary);
+  color: var(--semi-color-primary);
+}
+
 .nestedProfileMainRow {
   display: flex;
   align-items: center;
@@ -4076,4 +4082,3 @@
 *:focus:not(:focus-visible) {
   outline: none;
 }
-

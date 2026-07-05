@@ -145,9 +145,20 @@ async function mockBackend(
     profilesDelete?: boolean;
     triggerRun?: boolean;
     triggerProfile?: boolean;
+    trend?: any;
+    onTrendRequest?: (url: URL) => void;
   } = {},
 ) {
-  const { suites, runs, profiles, profilesDelete, triggerRun, triggerProfile } = options;
+  const {
+    suites,
+    runs,
+    profiles,
+    profilesDelete,
+    triggerRun,
+    triggerProfile,
+    trend,
+    onTrendRequest,
+  } = options;
 
   // ── /runs ────────────────────────────────────────────
   if (runs) {
@@ -276,9 +287,10 @@ async function mockBackend(
   // ── Other common endpoints ──────────────────────────────
   await page.route('**/schedules', (route) => route.fulfill({ json: [] }));
   await page.route('**/credentials', (route) => route.fulfill({ json: { credentials: [] } }));
-  await page.route('**/runs/trend*', (route) =>
-    route.fulfill({ json: { tests_path: '', points: [] } }),
-  );
+  await page.route('**/runs/trend*', (route) => {
+    onTrendRequest?.(new URL(route.request().url()));
+    return route.fulfill({ json: trend ?? { tests_path: '', points: [] } });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +421,37 @@ test.describe('Sidebar Suite Navigation', () => {
     await expect(emptyProfileContainer.getByText('No runs')).toBeVisible();
     await expect(emptyProfileContainer.getByText(/% Pass/)).toHaveCount(0);
     await expect(emptyProfileContainer.locator('span[role="button"]')).toHaveCount(0);
+  });
+
+  test('Clicking a profile filters runs and trend to that profile', async ({ page }) => {
+    let trendRequestUrl: URL | null = null;
+    await mockBackend(page, {
+      suites: [GIT_SUITE],
+      runs: { runs: RUNS },
+      profiles: [PROFILE_WITH_RUNS],
+      trend: {
+        tests_path: SUITE_A,
+        points: [
+          { run_id: 'run-001', created_at: '2026-07-01T10:00:00Z', pass_rate: 0.8, total: 10, passed: 8, failed: 2 },
+          { run_id: 'run-004', created_at: '2026-07-03T10:00:00Z', pass_rate: 1.0, total: 10, passed: 10, failed: 0 },
+        ],
+      },
+      onTrendRequest: (url) => {
+        trendRequestUrl = url;
+      },
+    });
+    await openDashboard(page);
+    await expect(page.getByTestId('execution-records-title')).toBeVisible();
+
+    const tableRows = page.locator('table tbody tr');
+    await expect(tableRows).toHaveCount(3);
+
+    await page.getByText('Smoke Tests', { exact: true }).first().click();
+
+    await expect(tableRows).toHaveCount(1);
+    await expect(tableRows.first()).toContainText('run-001'.slice(0, 8));
+    await expect(page.getByTestId('suite-trend')).toBeVisible({ timeout: 5000 });
+    expect(trendRequestUrl?.searchParams.get('profile_id')).toBe('prof-001');
   });
 
   // ── 4. Profile instant run button triggers a run ────────────────────────────

@@ -2,6 +2,7 @@ import type { Run } from './types'
 
 export interface RunFilters {
   suiteFilter: string | null
+  profileFilter: string | null
   logFilterTab: string
   searchRunId: string
   filterStatus: string
@@ -15,6 +16,7 @@ export interface RunFilters {
 export function filterRuns(runs: Run[], filters: RunFilters): Run[] {
   return runs.filter((r) => {
     if (filters.suiteFilter && r.tests_path !== filters.suiteFilter) return false
+    if (filters.profileFilter && r.profile_id !== filters.profileFilter) return false
     if (filters.logFilterTab === 'Manual' && r.created_by === 'system:schedule') return false
     if (filters.logFilterTab === 'Scheduled' && r.created_by !== 'system:schedule') return false
     if (filters.searchRunId && !r.id.toLowerCase().includes(filters.searchRunId.toLowerCase())) return false

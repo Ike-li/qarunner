@@ -287,7 +287,7 @@
 
 #### `GET /runs/trend` — 认证（非 admin 静默过滤）
 某套件的跨 run 通过率趋势。
-- 查询参数：`tests_path`（必填）· `limit`（默认 `50`）。
+- 查询参数：`tests_path`（必填）· `profile_id`（可选，限定一个 saved profile）· `limit`（默认 `50`）。
 - 仅纳入**同 `tests_path`、`COMPLETED`、且带 summary** 的 run；点按 `created_at` **升序**（oldest-first），取最近 `limit` 个。
 - **成功**：`200` `RunTrendResponse`（`{tests_path, points: [TrendPoint]}`，见 §八）。空历史 → `points: []`。
 - 非 admin 只统计自己的 run。

@@ -32,6 +32,7 @@ export function RunsTable() {
   const filteredRuns = useMemo(
     () => filterRuns(d.runs.runs, {
       suiteFilter: d.selectedSuiteFilter,
+      profileFilter: d.selectedProfileFilter,
       logFilterTab: d.logFilterTab,
       searchRunId: d.searchRunId,
       filterStatus: d.filterStatus,
@@ -40,6 +41,7 @@ export function RunsTable() {
     [
       d.runs.runs,
       d.selectedSuiteFilter,
+      d.selectedProfileFilter,
       d.logFilterTab,
       d.searchRunId,
       d.filterStatus,

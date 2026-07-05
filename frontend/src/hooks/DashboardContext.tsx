@@ -49,6 +49,8 @@ interface DashboardCtx {
   setIsUserModalOpen: (v: boolean) => void
   selectedSuiteFilter: string | null
   setSelectedSuiteFilter: (v: string | null) => void
+  selectedProfileFilter: string | null
+  setSelectedProfileFilter: (v: string | null) => void
   logFilterTab: 'All' | 'Manual' | 'Scheduled'
   setLogFilterTab: (v: 'All' | 'Manual' | 'Scheduled') => void
   searchRunId: string
@@ -94,6 +96,7 @@ export function DashboardProvider({
   const [isAddSuiteModalOpen, setIsAddSuiteModalOpen] = useState(false)
   const [isUserModalOpen, setIsUserModalOpen] = useState(false)
   const [selectedSuiteFilter, setSelectedSuiteFilter] = useState<string | null>(null)
+  const [selectedProfileFilter, setSelectedProfileFilter] = useState<string | null>(null)
   const [logFilterTab, setLogFilterTab] = useState<'All' | 'Manual' | 'Scheduled'>('All')
   const [searchRunId, setSearchRunId] = useState('')
   const [filterStatus, setFilterStatus] = useState('ALL')
@@ -111,6 +114,7 @@ export function DashboardProvider({
   const clearSession = useCallback(() => {
     for (const fn of resetFnsRef.current) fn()
     setSelectedSuiteFilter(null)
+    setSelectedProfileFilter(null)
     setIsTriggerModalOpen(false)
     setIsAddSuiteModalOpen(false)
     setIsUserModalOpen(false)
@@ -217,6 +221,7 @@ export function DashboardProvider({
         isAddSuiteModalOpen, setIsAddSuiteModalOpen,
         isUserModalOpen, setIsUserModalOpen,
         selectedSuiteFilter, setSelectedSuiteFilter,
+        selectedProfileFilter, setSelectedProfileFilter,
         logFilterTab, setLogFilterTab,
         searchRunId, setSearchRunId,
         filterStatus, setFilterStatus,

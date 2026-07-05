@@ -1107,6 +1107,50 @@ def test_runs_trend_admin_sees_all_owners() -> None:
     assert [p["run_id"] for p in resp.json()["points"]] == ["a", "b"]  # both owners
 
 
+def test_runs_trend_can_be_profile_scoped() -> None:
+    container = _make_container()
+    summ = TestSummary(total=4, passed=4, failed=0, skipped=0, error=0, duration_ms=1)
+    _make_run_in_store(
+        container.store,
+        id="profile-a-old",
+        created_by="alice",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW,
+        summary=summ,
+        profile_id="profile-a",
+    )
+    _make_run_in_store(
+        container.store,
+        id="profile-b",
+        created_by="alice",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=1),
+        summary=summ,
+        profile_id="profile-b",
+    )
+    _make_run_in_store(
+        container.store,
+        id="profile-a-new",
+        created_by="alice",
+        tests_path="s",
+        status=RunStatus.COMPLETED,
+        created_at=NOW + timedelta(minutes=2),
+        summary=summ,
+        profile_id="profile-a",
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=s&profile_id=profile-a")
+    assert resp.status_code == 200
+    assert [p["run_id"] for p in resp.json()["points"]] == [
+        "profile-a-old",
+        "profile-a-new",
+    ]
+
+
 def test_runs_trend_empty_for_unknown_suite() -> None:
     container = _make_container()
     app = create_app(container)

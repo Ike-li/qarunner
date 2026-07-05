@@ -14,6 +14,7 @@ const H = 48
 export function SuiteTrend() {
   const d = useDashboard()
   const suite = d.selectedSuiteFilter
+  const profileId = d.selectedProfileFilter
   const [trend, setTrend] = useState<RunTrend | null>(null)
 
   // Fetch when the filtered suite changes; cancel guard drops a stale response.
@@ -24,13 +25,15 @@ export function SuiteTrend() {
     }
     let cancelled = false
     setTrend(null)
-    d.apiFetch(`/runs/trend?tests_path=${encodeURIComponent(suite)}&limit=50`)
+    const qs = new URLSearchParams({ tests_path: suite, limit: '50' })
+    if (profileId) qs.set('profile_id', profileId)
+    d.apiFetch(`/runs/trend?${qs.toString()}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => { if (!cancelled) setTrend(data) })
       .catch(() => { if (!cancelled) setTrend(null) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [suite])
+  }, [suite, profileId])
 
   if (!suite) return null
 

@@ -1279,6 +1279,7 @@ async def list_runs(
 async def get_runs_trend(
     request: Request,
     tests_path: str,
+    profile_id: str | None = None,
     limit: int = 50,
     current_user: User = Depends(get_current_user),
 ) -> RunTrendResponse:
@@ -1292,6 +1293,8 @@ async def get_runs_trend(
     runs = await container.store.list()
     if current_user.role != UserRole.ADMIN:
         runs = [r for r in runs if r.created_by == current_user.username]
+    if profile_id is not None:
+        runs = [r for r in runs if r.profile_id == profile_id]
     points = trend.trend_points(runs, tests_path, limit)
     return RunTrendResponse(tests_path=tests_path, points=points)
 

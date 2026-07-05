@@ -61,8 +61,14 @@ export function ProjectSidebar() {
           className={`${styles.sidebarItem} ${d.selectedSuiteFilter === null ? styles.sidebarItemActive : ''}`}
           role="button"
           tabIndex={0}
-          onClick={() => d.setSelectedSuiteFilter(null)}
-          onKeyDown={activateOnKey(() => d.setSelectedSuiteFilter(null))}
+          onClick={() => {
+            d.setSelectedSuiteFilter(null)
+            d.setSelectedProfileFilter(null)
+          }}
+          onKeyDown={activateOnKey(() => {
+            d.setSelectedSuiteFilter(null)
+            d.setSelectedProfileFilter(null)
+          })}
         >
           <div className={styles.sidebarItemMain}>
             <IconActivity style={{ color: d.selectedSuiteFilter === null ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
@@ -100,8 +106,14 @@ export function ProjectSidebar() {
                   className={`${styles.sidebarItemRow} ${isFiltered ? styles.sidebarItemRowActive : ''}`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => d.setSelectedSuiteFilter(suite)}
-                  onKeyDown={activateOnKey(() => d.setSelectedSuiteFilter(suite))}
+                  onClick={() => {
+                    d.setSelectedSuiteFilter(suite)
+                    d.setSelectedProfileFilter(null)
+                  }}
+                  onKeyDown={activateOnKey(() => {
+                    d.setSelectedSuiteFilter(suite)
+                    d.setSelectedProfileFilter(null)
+                  })}
                 >
                   <div className={styles.sidebarItemMain}>
                     <IconFolder style={{ color: isFiltered ? 'var(--semi-color-primary)' : 'var(--semi-color-text-2)', marginRight: '8px' }} />
@@ -184,7 +196,12 @@ export function ProjectSidebar() {
                         data-testid={`suite-remove-${suite}`}
                         icon={<IconDelete style={{ fontSize: '10px' }} />}
                         aria-label={d.lang === 'zh' ? '移除套件' : 'Remove suite'}
-                        onClick={() => d.suites.handleDeleteSuite(suite, () => { if (d.selectedSuiteFilter===suite) d.setSelectedSuiteFilter(null) })}
+                        onClick={() => d.suites.handleDeleteSuite(suite, () => {
+                          if (d.selectedSuiteFilter===suite) {
+                            d.setSelectedSuiteFilter(null)
+                            d.setSelectedProfileFilter(null)
+                          }
+                        })}
                         style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                       />
                     </Tooltip>
@@ -196,6 +213,7 @@ export function ProjectSidebar() {
                     {suiteProfiles.map(profile => {
                       const existingSched = d.schedules.schedules.find(s => s.profile_id === profile.id);
                       const isSchedActive = existingSched?.enabled;
+                      const isProfileFiltered = d.selectedProfileFilter === profile.id;
 
                       // Compute dynamic run statistics
                       const profileRuns = d.runs.runs.filter((r) => r.profile_id === profile.id)
@@ -256,10 +274,27 @@ export function ProjectSidebar() {
                       });
 
                       return (
-                        <div key={profile.id} className={styles.nestedProfileItem} title={profile.description || ''}>
+                        <div
+                          key={profile.id}
+                          className={`${styles.nestedProfileItem} ${isProfileFiltered ? styles.nestedProfileItemActive : ''}`}
+                          title={profile.description || ''}
+                          data-testid={`profile-filter-${profile.id}`}
+                        >
                           {/* Row 1: Profile Main Info and Actions */}
                           <div className={styles.nestedProfileMainRow}>
-                            <div className={styles.nestedProfileInfo}>
+                            <div
+                              className={styles.nestedProfileInfo}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                d.setSelectedSuiteFilter(profile.tests_path)
+                                d.setSelectedProfileFilter(profile.id)
+                              }}
+                              onKeyDown={activateOnKey(() => {
+                                d.setSelectedSuiteFilter(profile.tests_path)
+                                d.setSelectedProfileFilter(profile.id)
+                              })}
+                            >
                               <IconSetting style={{ fontSize: '12px', color: 'var(--semi-color-text-2)', marginRight: '4px' }} />
                               <span className={styles.nestedProfileName}>{profile.name}</span>
                               <Tag
@@ -283,7 +318,7 @@ export function ProjectSidebar() {
                                 </Tooltip>
                               )}
                             </div>
-                            <div className={styles.nestedProfileActions}>
+                            <div className={styles.nestedProfileActions} onClick={(e) => e.stopPropagation()}>
                               <Tooltip content={d.lang === 'zh' ? '立即执行' : 'Instant Run'}>
                                 <Button
                                   size="small"
@@ -325,7 +360,11 @@ export function ProjectSidebar() {
                                   type="danger"
                                   icon={<IconDelete style={{ fontSize: '10px' }} />}
                                   aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                                  onClick={(e) => { d.profiles.handleDeleteProfile(profile.id, e); if (d.form.selectedProfileId===profile.id) d.form.setSelectedProfileId('') }}
+                                  onClick={(e) => {
+                                    d.profiles.handleDeleteProfile(profile.id, e);
+                                    if (d.form.selectedProfileId===profile.id) d.form.setSelectedProfileId('')
+                                    if (d.selectedProfileFilter===profile.id) d.setSelectedProfileFilter(null)
+                                  }}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
                               </Tooltip>
