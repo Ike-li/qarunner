@@ -8,6 +8,13 @@
 
 import { test, expect } from '@playwright/test';
 
+const baseUrl = process.env.BASE_URL || 'http://localhost:5173';
+const backendUrl =
+  process.env.E2E_BACKEND_URL ||
+  (new URL(baseUrl).hostname === 'frontend'
+    ? 'http://backend:8000'
+    : 'http://localhost:8000');
+
 // ── R-UI-1.1  Anonymous sees only the login screen ────────────────────────
 
 test.describe('R-UI-1 anonymous login page', () => {
@@ -49,8 +56,9 @@ test.describe('R-API-5 anonymous API', () => {
     expect(badLogin.status()).toBe(401);
 
     // GET /health is on the backend (:8000) and not proxied through Vite,
-    // so we verify it directly.
-    const healthResp = await page.request.get('http://localhost:8000/health');
+    // so we verify it directly. In the official Playwright Docker network the
+    // backend service is reachable as `backend`, not container-local localhost.
+    const healthResp = await page.request.get(`${backendUrl}/health`);
     expect(healthResp.status()).toBe(200);
     const body = await healthResp.json();
     expect(body.status).toBe('ok');
