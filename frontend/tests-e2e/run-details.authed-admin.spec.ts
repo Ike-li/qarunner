@@ -124,8 +124,8 @@ const FLAKY_HISTORY = {
 
 const RUN_ARTIFACTS = {
   artifacts: [
-    { path: 'failed-case/trace.zip', size_bytes: 1024 },
-    { path: 'failed-case/screenshot.png', size_bytes: 2048 },
+    { path: 'failed-case/trace.zip', size_bytes: 1024, content_type: 'application/zip' },
+    { path: 'failed-case/screenshot.png', size_bytes: 2048, content_type: 'image/png' },
   ],
 };
 
@@ -278,6 +278,7 @@ test.describe('Run Details Drawer', () => {
     await expect(page.getByTestId('run-artifacts')).toBeVisible({ timeout: 5000 });
     const traceLink = page.getByTestId('run-artifact-link-0');
     await expect(traceLink).toContainText('failed-case/trace.zip');
+    await expect(traceLink).toContainText('application/zip');
     await expect(traceLink).toContainText('1 KB');
     await expect(traceLink).toHaveAttribute(
       'href',
@@ -286,6 +287,7 @@ test.describe('Run Details Drawer', () => {
 
     const screenshotLink = page.getByTestId('run-artifact-link-1');
     await expect(screenshotLink).toContainText('failed-case/screenshot.png');
+    await expect(screenshotLink).toContainText('image/png');
     await expect(screenshotLink).toContainText('2 KB');
   });
 

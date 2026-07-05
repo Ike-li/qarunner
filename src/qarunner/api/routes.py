@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import mimetypes
 import os
 import re
 import stat
@@ -1421,6 +1422,12 @@ def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path:
     return Path(artifacts_root) / run_id / "results" / "playwright-results"
 
 
+def _artifact_content_type(path: Path) -> str:
+    """Best-effort browser hint for downloadable runner artifacts."""
+    content_type, _encoding = mimetypes.guess_type(path.name)
+    return content_type or "application/octet-stream"
+
+
 @router.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: str,
@@ -1615,6 +1622,7 @@ async def list_run_artifacts(
             RunArtifactResponse(
                 path=candidate.relative_to(artifact_root).as_posix(),
                 size_bytes=candidate.stat().st_size,
+                content_type=_artifact_content_type(candidate),
             )
         )
     return RunArtifactListResponse(artifacts=artifacts)

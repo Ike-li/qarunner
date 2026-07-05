@@ -796,7 +796,18 @@ export function RunDetailsDrawer() {
                             <Download size={13} />
                             <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
                           </span>
-                          <span style={{ opacity: 0.65, flexShrink: 0 }}>{formatBytes(artifact.size_bytes)}</span>
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              opacity: 0.65,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <code>{artifact.content_type}</code>
+                            <span>{formatBytes(artifact.size_bytes)}</span>
+                          </span>
                         </a>
                       ))}
                     </div>

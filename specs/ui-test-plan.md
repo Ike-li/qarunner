@@ -472,7 +472,7 @@ qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 
     - expect: Drawer is open
   2. Click drawer-tab-report
     - expect: run-artifacts section should be visible
-    - expect: trace / screenshot / video artifact links should show relative paths and sizes
+    - expect: trace / screenshot / video artifact links should show relative paths, MIME types, and sizes
     - expect: each artifact link should download from `/runs/{run_id}/artifacts/{path}`
 
 #### 5.5. Diff tab shows cross-run comparison buckets

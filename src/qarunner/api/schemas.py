@@ -112,6 +112,7 @@ class RunArtifactResponse(BaseModel):
 
     path: str
     size_bytes: int
+    content_type: str
 
 
 class RunArtifactListResponse(BaseModel):

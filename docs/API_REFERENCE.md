@@ -255,7 +255,7 @@
 ### `GET /runs/{run_id}/artifacts` — owner
 - 列出本次 run 的 Playwright trace / screenshot / video 等 runner 产物；只返回
   `results/playwright-results` 下的普通文件，越界 symlink 会被忽略。
-- **成功**：`200` `{"artifacts": [{"path": "...", "size_bytes": 123}, ...]}`；没有产物目录时返回空数组。
+- **成功**：`200` `{"artifacts": [{"path": "...", "size_bytes": 123, "content_type": "application/zip"}, ...]}`；没有产物目录时返回空数组。
 - **错误**：`404`（run 不存在）· `403`（他人）。
 
 ### `GET /runs/{run_id}/artifacts/{path}` — owner

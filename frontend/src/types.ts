@@ -43,6 +43,7 @@ export interface Run {
 export interface RunArtifact {
   path: string
   size_bytes: number
+  content_type: string
 }
 
 export interface TestCaseResult {

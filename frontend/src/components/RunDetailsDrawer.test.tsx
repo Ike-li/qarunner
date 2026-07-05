@@ -134,8 +134,16 @@ describe('RunDetailsDrawer', () => {
       new Response(
         JSON.stringify({
           artifacts: [
-            { path: 'failed-case/trace.zip', size_bytes: 1024 },
-            { path: 'failed-case/screenshot.png', size_bytes: 2048 },
+            {
+              path: 'failed-case/trace.zip',
+              size_bytes: 1024,
+              content_type: 'application/zip',
+            },
+            {
+              path: 'failed-case/screenshot.png',
+              size_bytes: 2048,
+              content_type: 'image/png',
+            },
           ],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -152,6 +160,7 @@ describe('RunDetailsDrawer', () => {
     expect(screen.getByTestId('run-artifact-link-0')).toHaveTextContent(
       'failed-case/trace.zip',
     )
+    expect(screen.getByTestId('run-artifact-link-0')).toHaveTextContent('application/zip')
     expect(screen.getByTestId('run-artifact-link-0')).toHaveAttribute(
       'href',
       '/runs/run-001/artifacts/failed-case%2Ftrace.zip',
@@ -159,5 +168,6 @@ describe('RunDetailsDrawer', () => {
     expect(screen.getByTestId('run-artifact-link-1')).toHaveTextContent(
       'failed-case/screenshot.png',
     )
+    expect(screen.getByTestId('run-artifact-link-1')).toHaveTextContent('image/png')
   })
 })

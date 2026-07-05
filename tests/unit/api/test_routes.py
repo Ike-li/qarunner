@@ -785,6 +785,7 @@ def test_list_run_artifacts_returns_playwright_files(tmp_path: Path) -> None:
     nested.mkdir()
     (nested / "trace.zip").write_bytes(b"trace-data")
     (nested / "screenshot.png").write_bytes(b"png-data")
+    (artifact_dir / "raw-artifact").write_bytes(b"raw")
     (artifact_dir / "empty-dir").mkdir()
     secret = tmp_path / "secret.txt"
     secret.write_text("TOPSECRET")
@@ -797,8 +798,13 @@ def test_list_run_artifacts_returns_playwright_files(tmp_path: Path) -> None:
     assert resp.status_code == 200
     assert resp.json() == {
         "artifacts": [
-            {"path": "failed-case/screenshot.png", "size_bytes": 8},
-            {"path": "failed-case/trace.zip", "size_bytes": 10},
+            {"path": "failed-case/screenshot.png", "size_bytes": 8, "content_type": "image/png"},
+            {
+                "path": "failed-case/trace.zip",
+                "size_bytes": 10,
+                "content_type": "application/zip",
+            },
+            {"path": "raw-artifact", "size_bytes": 3, "content_type": "application/octet-stream"},
         ]
     }
 
