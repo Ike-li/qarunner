@@ -2,8 +2,11 @@ import { test, expect } from '@playwright/test';
 
 // FE-5 Stage E: selectors target stable data-testid hooks instead of CSS-module
 // class substrings / display copy, so a11y structural tweaks no longer break e2e.
+//
+// Runs under the default `chromium` project intentionally: these are anonymous
+// login-entry smoke tests and must not receive the authed storageState.
 
-test.describe('qarunner Premium UI E2E Tests', () => {
+test.describe('qarunner unauthenticated login smoke', () => {
   // Run before each test
   test.beforeEach(async ({ page }) => {
     // Navigate to the base URL
