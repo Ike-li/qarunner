@@ -428,6 +428,14 @@ export function RunDetailsDrawer() {
               />
             </Tabs>
 
+            {d.runs.detailsError && (
+              <div className={styles.summaryPlaceholder} data-testid="run-details-error" role="alert">
+                <AlertTriangle size={28} />
+                <p>{d.t('runDetailsLoadError')}</p>
+                <span>{d.t('runDetailsLoadErrorDesc')}</span>
+              </div>
+            )}
+
             {d.terminal.drawerTab === 'logs' && (
               <>
                 {/* Terminal Console Logs */}
@@ -488,7 +496,11 @@ export function RunDetailsDrawer() {
                     ref={d.terminalRef}
                     style={{ fontSize: `${d.terminal.terminalFontSize}px` }}
                   >
-                    {d.runs.isStreaming ? (
+                    {d.runs.detailsError ? (
+                      <span className={styles.terminalPlaceholder}>
+                        {d.t('runDetailsLoadError')}
+                      </span>
+                    ) : d.runs.isStreaming ? (
                       filteredStreamed ? (
                         <pre className={styles.stdoutPre}>{d.terminal.renderFormattedLogs(filteredStreamed)}</pre>
                       ) : d.runs.streamedStdout ? (

@@ -67,6 +67,8 @@ export const translations = {
     // Run Details Drawer
     executionDetails: "Execution Details",
     id: "ID",
+    runDetailsLoadError: "Unable to load run details.",
+    runDetailsLoadErrorDesc: "Retry by reopening the drawer or refreshing before trusting logs and case details.",
     allTestsPassed: "ALL TESTS PASSED",
     suiteFailed: "SUITE FAILED",
     runner: "Runner",
@@ -251,6 +253,8 @@ export const translations = {
     // Run Details Drawer
     executionDetails: "执行详细信息",
     id: "ID",
+    runDetailsLoadError: "无法加载运行详情。",
+    runDetailsLoadErrorDesc: "请重新打开抽屉或刷新后再判断日志与用例详情。",
     allTestsPassed: "全部测试通过",
     suiteFailed: "套件执行失败",
     runner: "运行器",

@@ -209,6 +209,24 @@ test.describe('Run Details Drawer', () => {
     await expect(page.locator('[role="dialog"] button', { hasText: 'Fullscreen' })).toBeVisible();
   });
 
+  test('Run detail load failure shows an error state instead of no logs', async ({ page }) => {
+    await page.route(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}`, async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"detail failed"}' });
+      } else {
+        await route.fallback();
+      }
+    });
+    await page.reload();
+    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+
+    await openDrawer(page);
+
+    await expect(page.getByTestId('run-details-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('run-details-error')).toContainText(/Unable to load|无法加载/);
+    await expect(page.locator('[role="dialog"]')).not.toContainText(/No console logs available|无控制台日志/);
+  });
+
   // 3. Report tab shows summary bar and report buttons
   test('Report tab shows summary bar and report buttons', async ({ page }) => {
     await openDrawer(page);

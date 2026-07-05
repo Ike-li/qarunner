@@ -19,6 +19,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRunDetails, setSelectedRunDetails] = useState<Run | null>(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
+  const [detailsError, setDetailsError] = useState(false)
   const [streamedStdout, setStreamedStdout] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
 
@@ -41,14 +42,17 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const fetchSelectedRunDetails = useCallback(
     async (runId: string) => {
       setDetailsLoading(true)
+      setDetailsError(false)
       try {
         const resp = await apiFetch(`/runs/${runId}`)
-        if (resp.ok) {
-          const data = await resp.json()
-          setSelectedRunDetails(data)
-        }
+        if (!resp.ok) throw new Error(`Run details request failed: ${resp.status}`)
+        const data = await resp.json()
+        setSelectedRunDetails(data)
+        setDetailsError(false)
       } catch (err) {
         console.error('Error fetching run details:', err)
+        setSelectedRunDetails((prev) => (prev?.id === runId ? null : prev))
+        setDetailsError(true)
       } finally {
         setDetailsLoading(false)
       }
@@ -171,13 +175,24 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
     setSelectedRunDetails(null)
     setDetailsLoading(true)
+    setDetailsError(false)
     apiFetch(`/runs/${selectedRunId}`)
-      .then((resp) => (resp.ok ? resp.json() : null))
+      .then((resp) => {
+        if (!resp.ok) throw new Error(`Run details request failed: ${resp.status}`)
+        return resp.json()
+      })
       .then((data) => {
-        if (!cancelled && data) setSelectedRunDetails(data)
+        if (!cancelled) {
+          setSelectedRunDetails(data)
+          setDetailsError(false)
+        }
       })
       .catch((err) => {
-        if (!cancelled) console.error('Error fetching run details:', err)
+        if (!cancelled) {
+          console.error('Error fetching run details:', err)
+          setSelectedRunDetails(null)
+          setDetailsError(true)
+        }
       })
       .finally(() => {
         if (!cancelled) setDetailsLoading(false)
@@ -336,6 +351,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const closeDrawer = useCallback(() => {
     setSelectedRunId(null)
     setSelectedRunDetails(null)
+    setDetailsError(false)
     setStreamedStdout('')
     setIsStreaming(false)
   }, [])
@@ -349,6 +365,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     selectedRunDetails,
     closeDrawer,
     detailsLoading,
+    detailsError,
     streamedStdout,
     isStreaming,
     selectedRun,
@@ -377,6 +394,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
       setSelectedRunId(null)
       setSelectedRunDetails(null)
       setDetailsLoading(false)
+      setDetailsError(false)
       setStreamedStdout('')
       setIsStreaming(false)
     },
