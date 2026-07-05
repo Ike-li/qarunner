@@ -124,8 +124,10 @@ const FLAKY_HISTORY = {
 
 const RUN_ARTIFACTS = {
   artifacts: [
-    { path: 'failed-case/trace.zip', size_bytes: 1024, content_type: 'application/zip' },
     { path: 'failed-case/screenshot.png', size_bytes: 2048, content_type: 'image/png' },
+    { path: 'failed-case/video.webm', size_bytes: 4096, content_type: 'video/webm' },
+    { path: 'failed-case/trace.zip', size_bytes: 1024, content_type: 'application/zip' },
+    { path: 'metadata.json', size_bytes: 128, content_type: 'application/json' },
   ],
 };
 
@@ -276,6 +278,15 @@ test.describe('Run Details Drawer', () => {
     await page.getByTestId('drawer-tab-report').click();
 
     await expect(page.getByTestId('run-artifacts')).toBeVisible({ timeout: 5000 });
+    const traceGroup = page.getByTestId('run-artifact-group-trace');
+    const screenshotGroup = page.getByTestId('run-artifact-group-screenshot');
+    const videoGroup = page.getByTestId('run-artifact-group-video');
+    const otherGroup = page.getByTestId('run-artifact-group-other');
+    await expect(traceGroup).toBeVisible();
+    await expect(screenshotGroup).toBeVisible();
+    await expect(videoGroup).toBeVisible();
+    await expect(otherGroup).toBeVisible();
+
     const traceLink = page.getByTestId('run-artifact-link-0');
     await expect(traceLink).toContainText('failed-case/trace.zip');
     await expect(traceLink).toContainText('application/zip');
@@ -289,6 +300,9 @@ test.describe('Run Details Drawer', () => {
     await expect(screenshotLink).toContainText('failed-case/screenshot.png');
     await expect(screenshotLink).toContainText('image/png');
     await expect(screenshotLink).toContainText('2 KB');
+
+    await expect(page.getByTestId('run-artifact-link-2')).toContainText('failed-case/video.webm');
+    await expect(page.getByTestId('run-artifact-link-3')).toContainText('metadata.json');
   });
 
   // 4. Diff tab shows cross-run comparison buckets

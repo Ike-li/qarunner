@@ -11,6 +11,7 @@ import { diffBuckets, diffIsEmpty, type DiffTone } from '../runDiff'
 import { caseCells, type CaseTone } from '../runCaseHistory'
 import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
+import type { TranslationKey } from '../i18n'
 import type { CaseHistory, RunArtifact, RunDiff, TestCaseResult } from '../types'
 
 const DIFF_TONE_COLOR: Record<DiffTone, string> = {
@@ -55,6 +56,51 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes % 1024 === 0 ? 0 : 1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+type ArtifactGroupKey = 'trace' | 'screenshot' | 'video' | 'other'
+
+const ARTIFACT_GROUPS: Array<{ key: ArtifactGroupKey; labelKey: TranslationKey }> = [
+  { key: 'trace', labelKey: 'artifactGroupTrace' },
+  { key: 'screenshot', labelKey: 'artifactGroupScreenshot' },
+  { key: 'video', labelKey: 'artifactGroupVideo' },
+  { key: 'other', labelKey: 'artifactGroupOther' },
+]
+
+const ARTIFACT_GROUP_ORDER: Record<ArtifactGroupKey, number> = {
+  trace: 0,
+  screenshot: 1,
+  video: 2,
+  other: 3,
+}
+
+function artifactGroupKey(artifact: RunArtifact): ArtifactGroupKey {
+  const path = artifact.path.toLowerCase()
+  const contentType = artifact.content_type.toLowerCase()
+  if (path.endsWith('trace.zip') || path.includes('/trace.')) return 'trace'
+  if (
+    contentType.startsWith('image/') ||
+    /\.(png|jpe?g|webp)$/.test(path)
+  ) return 'screenshot'
+  if (contentType.startsWith('video/') || /\.(webm|mp4)$/.test(path)) return 'video'
+  return 'other'
+}
+
+function groupRunArtifacts(artifacts: RunArtifact[]) {
+  const sorted = artifacts
+    .map((artifact) => ({ artifact, group: artifactGroupKey(artifact) }))
+    .sort((a, b) => {
+      const groupDelta = ARTIFACT_GROUP_ORDER[a.group] - ARTIFACT_GROUP_ORDER[b.group]
+      if (groupDelta !== 0) return groupDelta
+      return a.artifact.path.localeCompare(b.artifact.path)
+    })
+
+  return ARTIFACT_GROUPS.map((group) => ({
+    ...group,
+    items: sorted
+      .map((item, index) => ({ ...item, index }))
+      .filter((item) => item.group === group.key),
+  })).filter((group) => group.items.length > 0)
 }
 
 /** One case row inside the Diff tab. Clicking it lazily pulls the case's
@@ -287,6 +333,7 @@ export function RunDetailsDrawer() {
     return new Date(isoStr).toLocaleString()
   }
   const caseResults = d.runs.selectedRun?.cases ?? []
+  const artifactGroups = groupRunArtifacts(runArtifacts)
 
   const downloadLogs = (runId: string) => {
     const logText = d.runs.isStreaming
@@ -775,40 +822,51 @@ export function RunDetailsDrawer() {
                         {d.t('runnerArtifactsDesc')}
                       </span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                      {runArtifacts.map((artifact, index) => (
-                        <a
-                          key={artifact.path}
-                          data-testid={`run-artifact-link-${index}`}
-                          href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
-                          download
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '0.75rem',
-                            color: 'var(--semi-color-primary)',
-                            textDecoration: 'none',
-                            fontSize: '0.8rem',
-                          }}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      {artifactGroups.map((group) => (
+                        <div
+                          key={group.key}
+                          data-testid={`run-artifact-group-${group.key}`}
+                          style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}
                         >
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
-                            <Download size={13} />
-                            <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
-                          </span>
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.5rem',
-                              opacity: 0.65,
-                              flexShrink: 0,
-                            }}
-                          >
-                            <code>{artifact.content_type}</code>
-                            <span>{formatBytes(artifact.size_bytes)}</span>
-                          </span>
-                        </a>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, opacity: 0.72, textTransform: 'uppercase' }}>
+                            {d.t(group.labelKey)}
+                          </div>
+                          {group.items.map(({ artifact, index }) => (
+                            <a
+                              key={artifact.path}
+                              data-testid={`run-artifact-link-${index}`}
+                              href={`/runs/${d.runs.selectedRun!.id}/artifacts/${encodeURIComponent(artifact.path)}`}
+                              download
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '0.75rem',
+                                color: 'var(--semi-color-primary)',
+                                textDecoration: 'none',
+                                fontSize: '0.8rem',
+                              }}
+                            >
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
+                                <Download size={13} />
+                                <code style={{ overflowWrap: 'anywhere' }}>{artifact.path}</code>
+                              </span>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  opacity: 0.65,
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <code>{artifact.content_type}</code>
+                                <span>{formatBytes(artifact.size_bytes)}</span>
+                              </span>
+                            </a>
+                          ))}
+                        </div>
                       ))}
                     </div>
                   </div>

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RunDetailsDrawer } from './RunDetailsDrawer'
@@ -135,14 +135,24 @@ describe('RunDetailsDrawer', () => {
         JSON.stringify({
           artifacts: [
             {
+              path: 'failed-case/screenshot.png',
+              size_bytes: 2048,
+              content_type: 'image/png',
+            },
+            {
+              path: 'failed-case/video.webm',
+              size_bytes: 4096,
+              content_type: 'video/webm',
+            },
+            {
               path: 'failed-case/trace.zip',
               size_bytes: 1024,
               content_type: 'application/zip',
             },
             {
-              path: 'failed-case/screenshot.png',
-              size_bytes: 2048,
-              content_type: 'image/png',
+              path: 'metadata.json',
+              size_bytes: 128,
+              content_type: 'application/json',
             },
           ],
         }),
@@ -157,17 +167,35 @@ describe('RunDetailsDrawer', () => {
     })
 
     expect(await screen.findByTestId('run-artifacts')).toBeVisible()
-    expect(screen.getByTestId('run-artifact-link-0')).toHaveTextContent(
+    const traceGroup = screen.getByTestId('run-artifact-group-trace')
+    const screenshotGroup = screen.getByTestId('run-artifact-group-screenshot')
+    const videoGroup = screen.getByTestId('run-artifact-group-video')
+    const otherGroup = screen.getByTestId('run-artifact-group-other')
+
+    expect(traceGroup.compareDocumentPosition(screenshotGroup)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    expect(within(traceGroup).getByTestId('run-artifact-link-0')).toHaveTextContent(
       'failed-case/trace.zip',
     )
-    expect(screen.getByTestId('run-artifact-link-0')).toHaveTextContent('application/zip')
-    expect(screen.getByTestId('run-artifact-link-0')).toHaveAttribute(
+    expect(within(traceGroup).getByTestId('run-artifact-link-0')).toHaveTextContent(
+      'application/zip',
+    )
+    expect(within(traceGroup).getByTestId('run-artifact-link-0')).toHaveAttribute(
       'href',
       '/runs/run-001/artifacts/failed-case%2Ftrace.zip',
     )
-    expect(screen.getByTestId('run-artifact-link-1')).toHaveTextContent(
+    expect(within(screenshotGroup).getByTestId('run-artifact-link-1')).toHaveTextContent(
       'failed-case/screenshot.png',
     )
-    expect(screen.getByTestId('run-artifact-link-1')).toHaveTextContent('image/png')
+    expect(within(screenshotGroup).getByTestId('run-artifact-link-1')).toHaveTextContent(
+      'image/png',
+    )
+    expect(within(videoGroup).getByTestId('run-artifact-link-2')).toHaveTextContent(
+      'failed-case/video.webm',
+    )
+    expect(within(otherGroup).getByTestId('run-artifact-link-3')).toHaveTextContent(
+      'metadata.json',
+    )
   })
 })
