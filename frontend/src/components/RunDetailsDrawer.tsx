@@ -61,6 +61,7 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
   const [expanded, setExpanded] = useState(false)
   const [history, setHistory] = useState<CaseHistory | null>(null)
   const [loading, setLoading] = useState(false)
+  const [historyError, setHistoryError] = useState(false)
   const c = caseResult
   const testsPath = d.runs.selectedRun?.tests_path
   const profileId = d.runs.selectedRun?.profile_id
@@ -71,12 +72,22 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
     setExpanded(next)
     if (next && history === null && !loading && testsPath) {
       setLoading(true)
+      setHistoryError(false)
       const qs = new URLSearchParams({ tests_path: testsPath, suite: c.suite, name: c.name })
       if (profileId) qs.set('profile_id', profileId)
       d.apiFetch(`/cases/history?${qs.toString()}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data: CaseHistory | null) => setHistory(data))
-        .catch(() => setHistory(null))
+        .then((r) => {
+          if (!r.ok) throw new Error(`Case history request failed: ${r.status}`)
+          return r.json()
+        })
+        .then((data: CaseHistory | null) => {
+          setHistory(data)
+          setHistoryError(false)
+        })
+        .catch(() => {
+          setHistory(null)
+          setHistoryError(true)
+        })
         .finally(() => setLoading(false))
     }
   }
@@ -119,6 +130,10 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
         <div data-testid="case-history" style={{ marginTop: '0.35rem', paddingLeft: '1rem' }}>
           {loading ? (
             <span style={{ opacity: 0.6 }}>{d.t('caseHistoryLoading')}</span>
+          ) : historyError ? (
+            <span data-testid="case-history-error" style={{ opacity: 0.75, color: '#f59e0b' }}>
+              {d.t('caseHistoryLoadError')}
+            </span>
           ) : !history || cells.length === 0 ? (
             <span style={{ opacity: 0.6 }}>{d.t('caseHistoryEmpty')}</span>
           ) : (

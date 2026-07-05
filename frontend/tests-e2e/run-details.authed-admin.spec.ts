@@ -298,6 +298,25 @@ test.describe('Run Details Drawer', () => {
     await expect(page.getByTestId('flaky-badge').first()).toBeVisible();
   });
 
+  test('Diff case history shows an error state when history API fails', async ({ page }) => {
+    await page.route(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}/diff`, async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(DIFF_WITH_BASELINE) });
+    });
+    await page.route('**/cases/history*', async (route) => {
+      await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"history failed"}' });
+    });
+
+    await openDrawer(page);
+    await page.getByTestId('drawer-tab-diff').click();
+    await expect(page.getByTestId('diff-bucket-new_failures')).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('diff-case-toggle').first().click();
+
+    await expect(page.getByTestId('case-history-error').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('case-history-error').first()).toContainText(/Unable to load|无法加载/);
+    await expect(page.getByTestId('flaky-badge')).toHaveCount(0);
+  });
+
   // 6. Re-run button is visible for completed runs
   test('Re-run button is visible for completed runs', async ({ page }) => {
     await openDrawer(page);
