@@ -1,7 +1,7 @@
 // Shared API helpers for the E2E suite: data setup + teardown + run polling.
 //
 // Replaces the scattered inline `getAuthToken`/`createProfile`/`createSchedule`
-// copies living in schedule.spec.ts / schedule-mgmt.spec.ts / schedule-trigger.spec.ts
+// copies that used to live in schedule*.spec.ts before the authed project migration
 // (project rule CLAUDE.md §1.3 — no parallel implementations).
 //
 // All requests go through the Vite dev proxy (BASE_URL, default 5173), sharing the
