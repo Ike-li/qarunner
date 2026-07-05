@@ -9,6 +9,12 @@ import { useDialogA11y } from '../hooks/useDialogA11y'
  *  tree, marker chips, executor mode, env-var grid, and save-as-profile form. */
 export function TriggerRunModal() {
   const d = useDashboard()
+  const isPlaywrightRunner = d.form.selectedRunner === 'playwright'
+  const argsLabelKey = isPlaywrightRunner ? 'playwrightArgsLabel' : 'pytestArgsLabel'
+  const argsPlaceholderKey = isPlaywrightRunner
+    ? 'playwrightArgsPlaceholder'
+    : 'pytestArgsPlaceholder'
+  const argsHelpKey = isPlaywrightRunner ? 'playwrightArgsHelp' : 'pytestArgsHelp'
 
   const onClose = () => d.setIsTriggerModalOpen(false)
   const dialogRef = useDialogA11y({ isOpen: d.isTriggerModalOpen, onClose })
@@ -227,18 +233,18 @@ export function TriggerRunModal() {
           </div>
         )}
 
-        {/* Pytest Arguments */}
+        {/* Runner Arguments */}
         <div className={styles.formField}>
-          <label className={styles.label} htmlFor="trigger-args">{d.t('pytestArgsLabel')}</label>
+          <label className={styles.label} htmlFor="trigger-args">{d.t(argsLabelKey)}</label>
           <Input
             id="trigger-args"
             data-testid="trigger-args-input"
-            placeholder={d.t('pytestArgsPlaceholder')}
+            placeholder={d.t(argsPlaceholderKey)}
             value={d.form.customArgs}
             onChange={(val) => d.form.setCustomArgs(val)}
           />
           <span className={styles.fieldHelp}>
-            {d.t('pytestArgsHelp')}
+            {d.t(argsHelpKey)}
           </span>
         </div>
 

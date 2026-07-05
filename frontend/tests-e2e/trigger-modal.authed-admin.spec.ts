@@ -78,6 +78,23 @@ test.describe('Trigger Run Modal', () => {
     await expect(options.filter({ hasText: 'playwright' })).toBeVisible();
   });
 
+  test('Runner select updates argument field copy for Playwright', async ({ page }) => {
+    await page.getByTestId('open-trigger-button').click();
+    await expect(page.getByTestId('trigger-modal')).toBeVisible();
+    await expect(page.getByText('Pytest Arguments')).toBeVisible();
+
+    const runnerSelect = page.getByTestId('trigger-runner-select');
+    await runnerSelect.click();
+    const options = page.locator('.semi-select-option-list .semi-select-option');
+    await options.filter({ hasText: 'playwright' }).click();
+
+    await expect(page.getByText('Playwright Arguments')).toBeVisible();
+    await expect(page.getByTestId('trigger-args-input')).toHaveAttribute(
+      'placeholder',
+      'e.g. --project=chromium --grep @smoke',
+    );
+  });
+
   // ── Test 3 ────────────────────────────────────────────────────────────
   test('Fill args and timeout fields and verify values persist', async ({ page }) => {
     // 1. Open trigger modal
