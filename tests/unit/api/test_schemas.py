@@ -34,7 +34,7 @@ def _make_run(**overrides: object) -> Run:
 
 
 def test_run_to_response_copies_fields() -> None:
-    run = _make_run()
+    run = _make_run(profile_id="profile-001")
     resp = run_to_response(run)
 
     assert isinstance(resp, RunResponse)
@@ -51,6 +51,7 @@ def test_run_to_response_copies_fields() -> None:
     assert resp.created_at == NOW
     assert resp.started_at is None
     assert resp.finished_at is None
+    assert resp.profile_id == "profile-001"
 
 
 def test_profile_to_response_preserves_runner() -> None:

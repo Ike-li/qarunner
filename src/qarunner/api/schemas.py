@@ -82,6 +82,7 @@ class RunResponse(BaseModel):
     status: RunStatus
     runner: str
     created_by: str
+    profile_id: str | None = None
     tests_path: str
     args: list[str] = Field(default_factory=list)
     executor_mode: str
@@ -230,6 +231,7 @@ def run_to_response(run: Run) -> RunResponse:
         status=run.status,
         runner=run.runner,
         created_by=run.created_by,
+        profile_id=run.profile_id,
         tests_path=run.tests_path,
         args=run.args,
         executor_mode=run.executor_mode,

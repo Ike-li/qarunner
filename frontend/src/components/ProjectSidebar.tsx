@@ -198,7 +198,11 @@ export function ProjectSidebar() {
                       const isSchedActive = existingSched?.enabled;
 
                       // Compute dynamic run statistics
-                      const profileRuns = d.runs.runs.filter((r) => r.tests_path === profile.tests_path)
+                      const runsForProfileId = d.runs.runs.filter((r) => r.profile_id === profile.id)
+                      const profileRuns =
+                        runsForProfileId.length > 0
+                          ? runsForProfileId
+                          : d.runs.runs.filter((r) => r.tests_path === profile.tests_path)
                       const finishedRuns = profileRuns.filter(
                         (r) => r.status === 'completed' || r.status === 'failed' || r.status === 'timeout',
                       )

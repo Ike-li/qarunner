@@ -22,6 +22,7 @@ export interface Run {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled'
   runner: string
   created_by: string
+  profile_id?: string | null
   tests_path: string
   args: string[]
   executor_mode: string

@@ -366,7 +366,7 @@
 `created_at` · `env{}`
 
 ### RunResponse
-`id` · `status`（见枚举）· `runner` · `created_by` · `tests_path` · `args[]` ·
+`id` · `status`（见枚举）· `runner` · `created_by` · `profile_id?` · `tests_path` · `args[]` ·
 `executor_mode` · `summary?`（TestSummary）· `report?`（ReportRef）· `exit_code?` ·
 `error?` · `passed?`（bool/null）· `created_at` · `started_at?` · `finished_at?` ·
 `stdout?` · `stderr?` · `env{}` · `locked`

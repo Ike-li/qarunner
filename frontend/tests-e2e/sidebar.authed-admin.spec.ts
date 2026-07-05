@@ -21,6 +21,7 @@ const RUNS = [
     status: 'completed',
     runner: 'pytest',
     created_by: 'admin',
+    profile_id: 'prof-001',
     tests_path: SUITE_A,
     args: [],
     executor_mode: 'subprocess',
@@ -39,6 +40,7 @@ const RUNS = [
     status: 'completed',
     runner: 'playwright',
     created_by: 'admin',
+    profile_id: 'prof-other',
     tests_path: SUITE_A,
     args: [],
     executor_mode: 'subprocess',
@@ -57,6 +59,7 @@ const RUNS = [
     status: 'completed',
     runner: 'pytest',
     created_by: 'alice',
+    profile_id: 'prof-other',
     tests_path: SUITE_B,
     args: [],
     executor_mode: 'subprocess',
@@ -308,9 +311,9 @@ test.describe('Sidebar Suite Navigation', () => {
     // Runner tag (pytest) is visible in the profile row
     await expect(page.getByText(/pytest/).first()).toBeVisible();
 
-    // Pass rate tag: suite_a/ has 2 finished runs (both completed),
-    //   passedCount = 1 (run-002 passed), passRate = round(1/2 * 100) = 50
-    await expect(page.getByText(/50% Pass/)).toBeVisible();
+    // Pass rate tag: profile prof-001 owns only run-001, so other profiles'
+    // runs in the same suite must not pollute this row.
+    await expect(page.getByText(/^0% Pass$/)).toBeVisible();
 
     // History dots: profile renders 5 dot spans total (2 real runs + 3 empty
     // padding). Real run dots have role="button" for clickability.
@@ -318,7 +321,7 @@ test.describe('Sidebar Suite Navigation', () => {
     // then count elements with role="button" which represent real run dots.
     const profileItemContainer = profileWithRuns.locator('..').locator('..').locator('..');
     const clickableDots = profileItemContainer.locator('span[role="button"]');
-    await expect(clickableDots).toHaveCount(2);
+    await expect(clickableDots).toHaveCount(1);
 
     // ── Profile without runs (No Runs Profile / playwright) ──
 
@@ -519,7 +522,7 @@ test.describe('Sidebar Suite Navigation', () => {
 
     const container = profileText.locator('..').locator('..').locator('..');
     const clickableDots = container.locator('span[role="button"]');
-    await expect(clickableDots).toHaveCount(2);
+    await expect(clickableDots).toHaveCount(1);
 
     await clickableDots.first().click();
 
