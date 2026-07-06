@@ -632,10 +632,13 @@ test.describe('R-API-1 静默过滤', () => {
     let userProfileId: string | null = null;
     let adminScheduleId: string | null = null;
     let userScheduleId: string | null = null;
+    const stamp = Date.now();
+    const adminScheduleName = `r1_schedule_admin_${stamp}`;
+    const userScheduleName = `r1_schedule_user_${stamp}`;
 
     try {
       const adminProfileResp = await authedPost(page, adminToken, '/profiles', {
-        name: `r1_schedule_admin_${Date.now()}`,
+        name: `r1_schedule_admin_profile_${stamp}`,
         tests_path: PYTEST_SUITE,
         runner: 'pytest',
       });
@@ -643,7 +646,7 @@ test.describe('R-API-1 静默过滤', () => {
       adminProfileId = (await adminProfileResp.json()).id;
 
       const userProfileResp = await authedPost(page, userAToken, '/profiles', {
-        name: `r1_schedule_user_${Date.now()}`,
+        name: `r1_schedule_user_profile_${stamp}`,
         tests_path: PYTEST_SUITE,
         runner: 'pytest',
       });
@@ -651,7 +654,7 @@ test.describe('R-API-1 静默过滤', () => {
       userProfileId = (await userProfileResp.json()).id;
 
       const adminScheduleResp = await authedPost(page, adminToken, '/schedules', {
-        name: `r1_schedule_admin_${Date.now()}`,
+        name: adminScheduleName,
         profile_id: adminProfileId,
         cron_expression: '0 3 * * *',
         timezone: 'UTC',
@@ -663,7 +666,7 @@ test.describe('R-API-1 静默过滤', () => {
       expect(adminSchedule.created_by).toBe(E2E_ADMIN);
 
       const userScheduleResp = await authedPost(page, userAToken, '/schedules', {
-        name: `r1_schedule_user_${Date.now()}`,
+        name: userScheduleName,
         profile_id: userProfileId,
         cron_expression: '0 4 * * *',
         timezone: 'UTC',
@@ -675,8 +678,12 @@ test.describe('R-API-1 静默过滤', () => {
       expect(userSchedule.created_by).toBe(USER_A);
 
       const userListResp = await authedGet(page, userAToken, '/schedules');
-      expect(userListResp.status(), await userListResp.text()).toBe(200);
-      const userSchedules = (await userListResp.json()) as ScheduleResponse[];
+      const userListBody = await userListResp.text();
+      expect(userListResp.status(), userListBody).toBe(200);
+      expect(userListBody).not.toContain(adminScheduleName);
+      expect(userListBody).not.toContain(adminProfileId);
+      expect(userListBody).toContain(userScheduleName);
+      const userSchedules = JSON.parse(userListBody) as ScheduleResponse[];
       const userScheduleIds = userSchedules.map((schedule) => schedule.id);
       expect(userScheduleIds).toContain(userScheduleId);
       expect(userScheduleIds).not.toContain(adminScheduleId);
@@ -686,11 +693,11 @@ test.describe('R-API-1 静默过滤', () => {
         userAToken,
         `/schedules?profile_id=${encodeURIComponent(adminProfileId!)}`,
       );
-      expect(filteredByAdminProfileResp.status(), await filteredByAdminProfileResp.text()).toBe(
-        200,
-      );
-      const filteredByAdminProfile =
-        (await filteredByAdminProfileResp.json()) as ScheduleResponse[];
+      const filteredByAdminProfileBody = await filteredByAdminProfileResp.text();
+      expect(filteredByAdminProfileResp.status(), filteredByAdminProfileBody).toBe(200);
+      expect(filteredByAdminProfileBody).not.toContain(adminScheduleName);
+      expect(filteredByAdminProfileBody).not.toContain(adminProfileId);
+      const filteredByAdminProfile = JSON.parse(filteredByAdminProfileBody) as ScheduleResponse[];
       expect(filteredByAdminProfile.map((schedule) => schedule.id)).not.toContain(adminScheduleId);
 
       const filteredOwnProfileResp = await authedGet(
