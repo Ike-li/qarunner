@@ -5,6 +5,7 @@
 // R-API-5.2 公开端点不带 token 可用
 // R-API-5.3 artifact 端点不带 token → 401 且不泄露路径
 // R-API-5.4 run adjunct 端点不带 token → 401 且不泄露 run id
+// R-API-5.5 mutation 端点不带 token → 401 且不泄露资源标识
 //
 // Runs under the default `chromium` project (no storageState).
 
@@ -212,6 +213,194 @@ test.describe('R-API-5 anonymous API', () => {
         await deleteRun(adminCtx, runId).catch(() => {});
       }
       await adminCtx.dispose();
+    }
+  });
+
+  test('R-API-5.5 mutation 端点不带 token → 401 且不泄露资源标识', async ({ page }) => {
+    const stamp = Date.now();
+    const probeUser = `anonymous_mutation_user_${stamp}`;
+    const probeCredential = `anonymous_credential_${stamp}`;
+    const probeSuite = `anonymous_suite_${stamp}`;
+    const probeProfile = `anonymous_profile_${stamp}`;
+    const probeRun = `anonymous_run_${stamp}`;
+    const probeSchedule = `anonymous_schedule_${stamp}`;
+    const probeSecret = `anonymous_secret_${stamp}`;
+
+    const mutationRequests = [
+      {
+        method: 'POST',
+        endpoint: '/users',
+        data: { username: probeUser, password: 'Anonymous-Test-2026!', role: 'user' },
+        forbidden: [probeUser],
+      },
+      {
+        method: 'PUT',
+        endpoint: `/users/${encodeURIComponent(probeUser)}`,
+        data: { role: 'admin' },
+        forbidden: [probeUser],
+      },
+      {
+        method: 'DELETE',
+        endpoint: `/users/${encodeURIComponent(probeUser)}`,
+        forbidden: [probeUser],
+      },
+      {
+        method: 'POST',
+        endpoint: '/credentials',
+        data: { name: probeCredential, type: 'https_token', secret: probeSecret },
+        forbidden: [probeCredential, probeSecret],
+      },
+      {
+        method: 'DELETE',
+        endpoint: `/credentials/${encodeURIComponent(probeCredential)}`,
+        forbidden: [probeCredential],
+      },
+      {
+        method: 'POST',
+        endpoint: '/tests/link',
+        data: { path: `/tmp/${probeSuite}` },
+        forbidden: [probeSuite],
+      },
+      {
+        method: 'POST',
+        endpoint: '/tests/clone',
+        data: { url: `https://example.com/${probeSuite}.git`, name: probeSuite },
+        forbidden: [probeSuite],
+      },
+      {
+        method: 'POST',
+        endpoint: `/tests/${encodeURIComponent(probeSuite)}/pull`,
+        data: {},
+        forbidden: [probeSuite],
+      },
+      {
+        method: 'POST',
+        endpoint: `/tests/${encodeURIComponent(probeSuite)}/prepare`,
+        data: {},
+        forbidden: [probeSuite],
+      },
+      {
+        method: 'DELETE',
+        endpoint: `/tests/${encodeURIComponent(probeSuite)}`,
+        forbidden: [probeSuite],
+      },
+      {
+        method: 'POST',
+        endpoint: '/profiles',
+        data: { name: probeProfile, tests_path: PYTEST_SUITE, runner: 'pytest' },
+        forbidden: [probeProfile],
+      },
+      {
+        method: 'PUT',
+        endpoint: `/profiles/${encodeURIComponent(probeProfile)}`,
+        data: { name: probeProfile, tests_path: PYTEST_SUITE, runner: 'pytest' },
+        forbidden: [probeProfile],
+      },
+      {
+        method: 'DELETE',
+        endpoint: `/profiles/${encodeURIComponent(probeProfile)}`,
+        forbidden: [probeProfile],
+      },
+      {
+        method: 'POST',
+        endpoint: `/profiles/${encodeURIComponent(probeProfile)}/trigger`,
+        data: {},
+        forbidden: [probeProfile],
+      },
+      {
+        method: 'POST',
+        endpoint: '/runs',
+        data: {
+          tests_path: PYTEST_SUITE,
+          runner: 'pytest',
+          args: [],
+          allure: false,
+          timeout: 60,
+          selected_files: [],
+          selected_markers: [],
+          extra_args: '',
+          env: {},
+        },
+        forbidden: [PYTEST_SUITE],
+      },
+      {
+        method: 'PUT',
+        endpoint: `/runs/${encodeURIComponent(probeRun)}/lock`,
+        data: { locked: true },
+        forbidden: [probeRun],
+      },
+      {
+        method: 'POST',
+        endpoint: `/runs/${encodeURIComponent(probeRun)}/cancel`,
+        data: {},
+        forbidden: [probeRun],
+      },
+      {
+        method: 'DELETE',
+        endpoint: `/runs/${encodeURIComponent(probeRun)}`,
+        forbidden: [probeRun],
+      },
+      {
+        method: 'POST',
+        endpoint: `/runs/${encodeURIComponent(probeRun)}/rerun`,
+        data: {},
+        forbidden: [probeRun],
+      },
+      {
+        method: 'POST',
+        endpoint: '/runs/cleanup',
+        data: { retention_days: 7 },
+        forbidden: [],
+      },
+      {
+        method: 'POST',
+        endpoint: '/schedules',
+        data: {
+          name: probeSchedule,
+          profile_id: probeProfile,
+          cron_expression: '0 3 * * *',
+          timezone: 'UTC',
+          enabled: true,
+        },
+        forbidden: [probeSchedule, probeProfile],
+      },
+      {
+        method: 'PUT',
+        endpoint: `/schedules/${encodeURIComponent(probeSchedule)}`,
+        data: {
+          name: probeSchedule,
+          profile_id: probeProfile,
+          cron_expression: '0 4 * * *',
+          timezone: 'UTC',
+          enabled: false,
+        },
+        forbidden: [probeSchedule, probeProfile],
+      },
+      {
+        method: 'DELETE',
+        endpoint: `/schedules/${encodeURIComponent(probeSchedule)}`,
+        forbidden: [probeSchedule],
+      },
+      {
+        method: 'POST',
+        endpoint: `/schedules/${encodeURIComponent(probeSchedule)}/trigger`,
+        data: {},
+        forbidden: [probeSchedule],
+      },
+    ];
+
+    for (const request of mutationRequests) {
+      const resp = await page.request.fetch(request.endpoint, {
+        method: request.method,
+        data: request.data,
+      });
+      const bodyText = await resp.text();
+      expect(resp.status(), `${request.method} ${request.endpoint} should be 401`).toBe(401);
+      for (const value of request.forbidden) {
+        expect(bodyText, `${request.method} ${request.endpoint} should not leak ${value}`).not.toContain(
+          value,
+        );
+      }
     }
   });
 });
