@@ -1358,11 +1358,13 @@ test.describe('R-API-2 越权单资源', () => {
 
   test('R-API-2.11 /tests/link|delete 遵守 suite owner/admin 边界', async ({ page }) => {
     const suiteName = `r2_suite_scope_${Date.now()}`;
+    const ownerPath = `/tmp/${suiteName}`;
+    const attackerPath = `/tmp/attacker/${suiteName}`;
     let linked = false;
 
     try {
       const ownerLinkResp = await authedPost(page, userAToken, '/tests/link', {
-        path: `/tmp/${suiteName}`,
+        path: ownerPath,
       });
       expect(ownerLinkResp.status(), await ownerLinkResp.text()).toBe(200);
       const ownerLink = (await ownerLinkResp.json()) as LinkSuiteResponse;
@@ -1371,11 +1373,12 @@ test.describe('R-API-2 越权单资源', () => {
       expect(ownerLink.suite_name).toBe(suiteName);
 
       const userBRelinkResp = await authedPost(page, userBToken, '/tests/link', {
-        path: `/tmp/attacker/${suiteName}`,
+        path: attackerPath,
       });
       const userBRelinkBody = await userBRelinkResp.text();
       expect(userBRelinkResp.status(), userBRelinkBody).toBe(403);
       expect(userBRelinkBody).not.toContain(suiteName);
+      expect(userBRelinkBody).not.toContain(attackerPath);
 
       const userBDeleteResp = await authedDelete(page, userBToken, `/tests/${suiteName}`);
       const userBDeleteBody = await userBDeleteResp.text();
