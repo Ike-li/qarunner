@@ -3626,6 +3626,28 @@ def test_get_run_does_not_follow_log_symlink_escape(
     assert "TOPSECRET" not in resp.text
 
 
+def test_get_run_does_not_follow_log_dir_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(artifacts_root))
+    container = _make_container()
+    _make_run_in_store(container.store, id="run_dir_symlink")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "stdout.log").write_text("DIRSECRET", encoding="utf-8")
+    artifacts_root.mkdir()
+    (artifacts_root / "run_dir_symlink").symlink_to(outside_dir, target_is_directory=True)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_dir_symlink")
+
+    assert resp.status_code == 200
+    assert resp.json()["stdout"] is None
+    assert "DIRSECRET" not in resp.text
+
+
 def test_get_run_unreadable_log_returns_null(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

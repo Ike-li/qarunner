@@ -1455,6 +1455,8 @@ def _read_log_tail(path: Path) -> str | None:
 
 
 def _safe_run_log_file(run_dir: Path, name: str) -> Path | None:
+    if run_dir.is_symlink():
+        return None
     candidate = run_dir / name
     if not candidate.exists():
         return None
