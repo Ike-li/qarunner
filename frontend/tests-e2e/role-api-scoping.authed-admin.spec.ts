@@ -2057,14 +2057,48 @@ test.describe('R-API-3 admin 保护', () => {
 // ── R-API-4  Executor mode restrictions ──────────────────────────────────
 
 test.describe('R-API-4 executor_mode 限制', () => {
-  test('R-API-4.1 非管理员 POST /runs executor_mode=subprocess → 400', async ({ page }) => {
-    // RunRequest requires tests_path + runner; executor_mode=subprocess is the restricted field
-    const resp = await authedPost(page, userAToken, '/runs', {
-      tests_path: '/tmp/fake',
-      runner: 'pytest',
-      executor_mode: 'subprocess',
-    });
-    expect(resp.status()).toBe(400);
+  test('R-API-4.1 非管理员 POST /runs executor_mode=subprocess 仍落入 docker', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+
+    let runId: string | null = null;
+    try {
+      const resp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        executor_mode: 'subprocess',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(resp.status(), await resp.text()).toBe(202);
+      const run = (await resp.json()) as RunResponse;
+      runId = run.id;
+      expect(run.created_by).toBe(USER_A);
+      expect(run.executor_mode).toBe('docker');
+
+      const detailResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId)}`);
+      expect(detailResp.status(), await detailResp.text()).toBe(200);
+      const detail = (await detailResp.json()) as RunResponse;
+      expect(detail.executor_mode).toBe('docker');
+    } finally {
+      if (runId) {
+        await expect(async () => {
+          const detailResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId!)}`);
+          expect(detailResp.status(), await detailResp.text()).toBe(200);
+          const detail = (await detailResp.json()) as RunResponse;
+          expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+        }).toPass({ timeout: 60_000, intervals: [1_000] });
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(
+          () => {},
+        );
+      }
+    }
   });
 
   // R-API-4.2 并发超限 429 — skipped: creating 20 runs is too expensive for CI
