@@ -128,6 +128,20 @@ async def _require_registered_suite_access(
         _require_owner_access(suite.created_by, user)
 
 
+async def _visible_suite_names(
+    container: Container, names: list[str], user: User
+) -> list[str]:
+    """Filter recorded suite names for non-admin users; keep unrecorded dirs visible."""
+    if user.role == UserRole.ADMIN:
+        return names
+    suites_by_name = {suite.name: suite for suite in await container.store.list_suites()}
+    return [
+        name
+        for name in names
+        if (suite := suites_by_name.get(name)) is None or suite.created_by == user.username
+    ]
+
+
 def _client_ip(request: Request) -> str:
     """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
 
@@ -630,19 +644,21 @@ async def delete_credential(
 
 @router.get("/tests", response_model=list[str])
 async def list_tests(
-    request: Request, _current_user: User = Depends(get_current_user)
+    request: Request, current_user: User = Depends(get_current_user)
 ) -> list[str]:
     """List all available test directories directly under tests_root."""
-    cfg = request.app.state.container.settings
+    container = request.app.state.container
+    cfg = container.settings
     tests_root = Path(cfg.tests_root).resolve()
     if not tests_root.is_dir():
         return []
-    return await asyncio.to_thread(_scan_suite_dirs, tests_root)
+    names = await asyncio.to_thread(_scan_suite_dirs, tests_root)
+    return await _visible_suite_names(container, names, current_user)
 
 
 @router.get("/suites", response_model=list[SuiteInfoResponse])
 async def list_suites_detailed(
-    request: Request, _current_user: User = Depends(get_current_user)
+    request: Request, current_user: User = Depends(get_current_user)
 ) -> list[SuiteInfoResponse]:
     """List suites as filesystem entities left-joined with their metadata (R5).
 
@@ -658,6 +674,7 @@ async def list_suites_detailed(
         return []
 
     names = await asyncio.to_thread(_scan_suite_dirs, tests_root)
+    names = await _visible_suite_names(container, names, current_user)
     suites: list[SuiteInfoResponse] = []
     for name in names:
         record = await store.get_suite(name)

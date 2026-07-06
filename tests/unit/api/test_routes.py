@@ -2346,6 +2346,47 @@ def test_list_tests_missing_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resp.json() == []
 
 
+def test_list_tests_and_suites_hide_other_users_registered_suites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    (tests_root / "alice_suite").mkdir()
+    (tests_root / "bob_suite").mkdir()
+    (tests_root / "manual_suite").mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _save_suite_in_store(
+        container.store,
+        name="alice_suite",
+        created_by="alice",
+        repo_url="https://example.com/alice.git",
+    )
+    _save_suite_in_store(
+        container.store,
+        name="bob_suite",
+        created_by="bob",
+        repo_url="https://example.com/bob-private.git",
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        tests_resp = client.get("/tests")
+        suites_resp = client.get("/suites")
+
+    assert tests_resp.status_code == 200
+    assert tests_resp.json() == ["alice_suite", "manual_suite"]
+    assert "bob_suite" not in tests_resp.text
+
+    assert suites_resp.status_code == 200
+    suites_body = suites_resp.text
+    suite_names = [suite["name"] for suite in suites_resp.json()]
+    assert suite_names == ["alice_suite", "manual_suite"]
+    assert "bob_suite" not in suites_body
+    assert "bob-private" not in suites_body
+
+
 def test_list_suites_detailed_left_join(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """GET /suites = filesystem entities left-joined with metadata (R5).
 
