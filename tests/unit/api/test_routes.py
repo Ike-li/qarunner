@@ -3724,6 +3724,30 @@ def test_create_profile_forbidden_for_other_users_registered_suite() -> None:
     assert container.store._profiles == {}
 
 
+def test_update_profile_forbidden_for_other_users_registered_suite() -> None:
+    container = _make_container()
+    container.store._profiles["profile-alice"] = TestProfile(
+        id="profile-alice",
+        name="Alice Profile",
+        tests_path="alice_suite",
+        created_by="alice",
+        created_at=NOW,
+    )
+    _save_suite_in_store(container.store, name="bob_suite", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/profiles/profile-alice",
+            json={"name": "Moved", "tests_path": "bob_suite", "runner": "pytest"},
+        )
+
+    assert resp.status_code == 403
+    assert "bob_suite" not in resp.text
+    assert container.store._profiles["profile-alice"].tests_path == "alice_suite"
+
+
 def test_profile_crud_endpoints() -> None:
     container = _make_container()
     app = create_app(container)

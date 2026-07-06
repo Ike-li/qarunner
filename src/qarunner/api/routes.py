@@ -1281,6 +1281,7 @@ async def update_profile(
     existing = await container.store.get_profile(profile_id)
     if existing is not None:
         _require_owner_access(existing.created_by, current_user)
+        await _require_tests_path_suite_access(container, req.tests_path, current_user)
     try:
         updated = await container.profile_service.update(profile_id, req)
     except ProfileNotFound:
