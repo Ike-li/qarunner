@@ -3,6 +3,8 @@
 // R-UI-2.1  user 角色可见 trigger/add-suite，不可见 users 管理
 // R-UI-2.2  user 请求 GET /users → 403（后端 gate）
 // R-UI-3.1  useUsers hook 对 user 不发 /users 请求
+// R-UI-4.1  user 打开非 owner artifact drawer 显示 403 权限态
+// R-UI-4.2  owner user 打开自己的 artifact drawer 显示下载入口
 //
 // Runs under `chromium-authed-user` (storageState = e2e_user cookies).
 
@@ -15,6 +17,7 @@ import {
   loginAndGetContext,
   pollRunToTerminal,
 } from './helpers/api';
+import { E2E_USER } from './fixtures/auth';
 
 const PLAYWRIGHT_SUITE = 'sample_playwright';
 
@@ -27,6 +30,7 @@ interface RunDetail {
 
 interface Artifact {
   path: string;
+  content_type: string;
 }
 
 async function triggerProfileRun(ctx: APIRequestContext, profileId: string): Promise<string> {
@@ -112,7 +116,7 @@ test.describe('R-UI-4 artifact drawer 权限状态', () => {
       expect(detailResp.status(), await detailResp.text()).toBe(200);
       const runDetail = (await detailResp.json()) as RunDetail;
       expect(runDetail.runner).toBe('playwright');
-      expect(runDetail.created_by).not.toBe('e2e_user');
+      expect(runDetail.created_by).not.toBe(E2E_USER);
 
       const artifactsResp = await adminCtx.get(`/runs/${encodeURIComponent(runId)}/artifacts`);
       expect(artifactsResp.status(), await artifactsResp.text()).toBe(200);
@@ -175,6 +179,84 @@ test.describe('R-UI-4 artifact drawer 权限状态', () => {
         await deleteProfile(adminCtx, profileId).catch(() => {});
       }
       await adminCtx.dispose();
+    }
+  });
+
+  test('R-UI-4.2 owner user 打开自己的 Playwright run 时 artifact 下载入口可见', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    const userCtx = await loginAndGetContext('user');
+    let profileId: string | null = null;
+    let runId: string | null = null;
+    try {
+      profileId = await createProfile(userCtx, {
+        name: `rui4_owner_artifacts_${Date.now()}`,
+        tests_path: PLAYWRIGHT_SUITE,
+        runner: 'playwright',
+      });
+      runId = await triggerProfileRun(userCtx, profileId);
+      const status = await pollRunToTerminal(userCtx, runId, 120_000, 2_000);
+      expect(status).toBe('completed');
+
+      const detailResp = await userCtx.get(`/runs/${encodeURIComponent(runId)}`);
+      expect(detailResp.status(), await detailResp.text()).toBe(200);
+      const runDetail = (await detailResp.json()) as RunDetail;
+      expect(runDetail.runner).toBe('playwright');
+      expect(runDetail.created_by).toBe(E2E_USER);
+
+      const artifactsResp = await userCtx.get(`/runs/${encodeURIComponent(runId)}/artifacts`);
+      expect(artifactsResp.status(), await artifactsResp.text()).toBe(200);
+      const artifacts = ((await artifactsResp.json()).artifacts ?? []) as Artifact[];
+      const trace = artifacts.find((artifact) => artifact.path.endsWith('trace.zip'));
+      expect(trace).toBeTruthy();
+      expect(artifacts.some((artifact) => artifact.content_type === 'image/png')).toBe(true);
+      expect(artifacts.some((artifact) => artifact.content_type === 'video/webm')).toBe(true);
+
+      await page.goto('/');
+      await expect(page.getByTestId(`run-row-${runId}`)).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId(`run-row-${runId}`).click();
+      await expect(page.locator('[role="dialog"]').first()).toBeVisible({ timeout: 10_000 });
+
+      const artifactResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.pathname === `/runs/${runId}/artifacts` &&
+          response.request().method() === 'GET'
+        );
+      });
+      await page.getByTestId('drawer-tab-report').click();
+      expect((await artifactResponse).status()).toBe(200);
+
+      await expect(page.getByTestId('run-artifacts')).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId('run-artifacts-download-all')).toHaveAttribute(
+        'href',
+        `/runs/${runId}/artifacts.zip`,
+      );
+      await expect(page.getByTestId('run-artifact-group-trace')).toContainText('trace.zip');
+      await expect(page.getByTestId('run-artifact-group-screenshot')).toContainText('image/png');
+      await expect(page.getByTestId('run-artifact-group-video')).toContainText('video/webm');
+      await expect(page.getByTestId('run-artifacts-forbidden')).toHaveCount(0);
+      await expect(page.getByTestId('run-artifacts-error')).toHaveCount(0);
+
+      const traceDownload = page
+        .getByTestId('run-artifact-group-trace')
+        .getByRole('link')
+        .filter({ hasText: 'trace.zip' })
+        .first();
+      await expect(traceDownload).toHaveAttribute(
+        'href',
+        `/runs/${runId}/artifacts/${encodeURIComponent(trace!.path)}`,
+      );
+    } finally {
+      if (runId) {
+        await deleteRun(userCtx, runId).catch(() => {});
+      }
+      if (profileId) {
+        await deleteProfile(userCtx, profileId).catch(() => {});
+      }
+      await userCtx.dispose();
     }
   });
 });
