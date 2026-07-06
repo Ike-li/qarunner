@@ -16,6 +16,7 @@ const USER_A = `e2e_role_a_${Date.now()}`;
 const USER_B = `e2e_role_b_${Date.now()}`;
 const USER_A_PW = 'RoleA-Test-2026!';
 const USER_B_PW = 'RoleB-Test-2026!';
+const PLAYWRIGHT_SUITE = 'sample_playwright';
 
 let adminToken: string;
 let userAToken: string;
@@ -258,6 +259,84 @@ test.describe('R-API-2 越权单资源', () => {
 
     // Cleanup
     await authedDelete(page, adminToken, `/schedules/${schedId}`);
+  });
+
+  test('R-API-2.5 GET /runs/{admin_run}/artifacts* 以 userA token → 403', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    let playwrightProfileId: string | null = null;
+    let runId: string | null = null;
+    try {
+      const profileResp = await authedPost(page, adminToken, '/profiles', {
+        name: `r2_artifacts_${Date.now()}`,
+        tests_path: PLAYWRIGHT_SUITE,
+        runner: 'playwright',
+      });
+      expect(profileResp.status()).toBe(201);
+      playwrightProfileId = (await profileResp.json()).id;
+
+      const runResp = await authedPost(
+        page,
+        adminToken,
+        `/profiles/${encodeURIComponent(playwrightProfileId!)}/trigger`,
+        {},
+      );
+      expect(runResp.status()).toBe(202);
+      const triggeredRun = await runResp.json();
+      runId = triggeredRun.id;
+      expect(triggeredRun.runner).toBe('playwright');
+
+      let terminalStatus = triggeredRun.status as string;
+      await expect(async () => {
+        const detailResp = await authedGet(page, adminToken, `/runs/${encodeURIComponent(runId!)}`);
+        expect(detailResp.status()).toBe(200);
+        const detail = await detailResp.json();
+        terminalStatus = detail.status;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(terminalStatus);
+      }).toPass({ timeout: 120_000, intervals: [2_000] });
+      expect(terminalStatus).toBe('completed');
+
+      const adminListResp = await authedGet(
+        page,
+        adminToken,
+        `/runs/${encodeURIComponent(runId!)}/artifacts`,
+      );
+      expect(adminListResp.status()).toBe(200);
+      const artifacts = ((await adminListResp.json()).artifacts ?? []) as Array<{
+        path: string;
+        content_type: string;
+      }>;
+      const trace = artifacts.find((artifact) => artifact.path.endsWith('trace.zip'));
+      expect(trace).toBeTruthy();
+
+      const artifactPath = trace!.path;
+      const endpoints = [
+        `/runs/${encodeURIComponent(runId!)}/artifacts`,
+        `/runs/${encodeURIComponent(runId!)}/artifacts/${encodeURIComponent(artifactPath)}`,
+        `/runs/${encodeURIComponent(runId!)}/artifacts.zip`,
+      ];
+
+      for (const endpoint of endpoints) {
+        const adminResp = await authedGet(page, adminToken, endpoint);
+        expect(adminResp.status()).toBe(200);
+
+        const userResp = await authedGet(page, userAToken, endpoint);
+        const userBody = await userResp.text();
+        expect(userResp.status(), userBody).toBe(403);
+        expect(userBody).not.toContain(artifactPath);
+      }
+    } finally {
+      if (runId) {
+        await authedDelete(page, adminToken, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
+      }
+      if (playwrightProfileId) {
+        await authedDelete(
+          page,
+          adminToken,
+          `/profiles/${encodeURIComponent(playwrightProfileId)}`,
+        ).catch(() => {});
+      }
+    }
   });
 });
 
