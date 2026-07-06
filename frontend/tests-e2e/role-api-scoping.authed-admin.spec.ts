@@ -254,14 +254,16 @@ test.describe('R-API-1 静默过滤', () => {
   }) => {
     const stamp = Date.now();
     const adminProfileName = `admin_only_profile_${stamp}`;
+    const adminTestsPath = `/tmp/admin_profile_suite_${stamp}`;
     const adminEnvSecret = `admin_env_secret_${stamp}`;
     const adminWebhook = `https://open.feishu.cn/open-apis/bot/v2/hook/admin_${stamp}`;
     let adminProfId: string | null = null;
+    let userProfId: string | null = null;
 
     try {
       const adminProfResp = await authedPost(page, adminToken, '/profiles', {
         name: adminProfileName,
-        tests_path: '/tmp/fake',
+        tests_path: adminTestsPath,
         runner: 'pytest',
         env: { ADMIN_ONLY_TOKEN: adminEnvSecret },
         webhook_url: adminWebhook,
@@ -269,18 +271,65 @@ test.describe('R-API-1 静默过滤', () => {
       expect(adminProfResp.status(), await adminProfResp.text()).toBe(201);
       adminProfId = (await adminProfResp.json()).id;
 
+      const userProfileName = `userA_visible_profile_${stamp}`;
+      const userTestsPath = `/tmp/user_profile_suite_${stamp}`;
+      const userProfResp = await authedPost(page, userAToken, '/profiles', {
+        name: userProfileName,
+        tests_path: userTestsPath,
+        runner: 'pytest',
+      });
+      expect(userProfResp.status(), await userProfResp.text()).toBe(201);
+      userProfId = (await userProfResp.json()).id;
+
       const userAList = await authedGet(page, userAToken, '/profiles');
       const userAListBody = await userAList.text();
       expect(userAList.status(), userAListBody).toBe(200);
       expect(userAListBody).not.toContain(adminProfileName);
+      expect(userAListBody).not.toContain(adminTestsPath);
       expect(userAListBody).not.toContain(adminEnvSecret);
       expect(userAListBody).not.toContain(adminWebhook);
+      expect(userAListBody).toContain(userProfileName);
 
       const profiles = (JSON.parse(userAListBody) as Array<{ name: string }>).map(
         (profile) => profile.name,
       );
       expect(profiles).not.toContain(adminProfileName);
+      expect(profiles).toContain(userProfileName);
+
+      const filteredByAdminPathResp = await authedGet(
+        page,
+        userAToken,
+        `/profiles?tests_path=${encodeURIComponent(adminTestsPath)}`,
+      );
+      const filteredByAdminPathBody = await filteredByAdminPathResp.text();
+      expect(filteredByAdminPathResp.status(), filteredByAdminPathBody).toBe(200);
+      expect(filteredByAdminPathBody).not.toContain(adminProfileName);
+      expect(filteredByAdminPathBody).not.toContain(adminTestsPath);
+      expect(filteredByAdminPathBody).not.toContain(adminEnvSecret);
+      expect(filteredByAdminPathBody).not.toContain(adminWebhook);
+      expect(JSON.parse(filteredByAdminPathBody)).toEqual([]);
+
+      const filteredOwnPathResp = await authedGet(
+        page,
+        userAToken,
+        `/profiles?tests_path=${encodeURIComponent(userTestsPath)}`,
+      );
+      const filteredOwnPathBody = await filteredOwnPathResp.text();
+      expect(filteredOwnPathResp.status(), filteredOwnPathBody).toBe(200);
+      expect(filteredOwnPathBody).toContain(userProfileName);
+      const filteredOwnProfiles = JSON.parse(filteredOwnPathBody) as Array<{
+        id: string;
+        name: string;
+        tests_path: string;
+      }>;
+      expect(filteredOwnProfiles.map((profile) => profile.id)).toContain(userProfId);
+      expect(filteredOwnProfiles.map((profile) => profile.tests_path)).toContain(userTestsPath);
     } finally {
+      if (userProfId) {
+        await authedDelete(page, userAToken, `/profiles/${encodeURIComponent(userProfId)}`).catch(
+          () => {},
+        );
+      }
       if (adminProfId) {
         await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(adminProfId)}`).catch(
           () => {},
