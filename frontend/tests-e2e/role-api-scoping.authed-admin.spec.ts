@@ -1320,6 +1320,92 @@ test.describe('R-API-2 越权单资源', () => {
       }
     }
   });
+
+  test('R-API-2.14 /tests/{suite}/pull|prepare 遵守 suite owner/admin 边界', async ({
+    page,
+  }) => {
+    const suiteName = `r2_suite_lifecycle_${Date.now()}`;
+    let linked = false;
+
+    try {
+      const ownerLinkResp = await authedPost(page, userAToken, '/tests/link', {
+        path: `/tmp/${suiteName}`,
+      });
+      expect(ownerLinkResp.status(), await ownerLinkResp.text()).toBe(200);
+      const ownerLink = (await ownerLinkResp.json()) as LinkSuiteResponse;
+      linked = true;
+      expect(ownerLink.success).toBe(true);
+      expect(ownerLink.suite_name).toBe(suiteName);
+
+      const userBPullResp = await authedPost(
+        page,
+        userBToken,
+        `/tests/${encodeURIComponent(suiteName)}/pull`,
+        {},
+      );
+      const userBPullBody = await userBPullResp.text();
+      expect(userBPullResp.status(), userBPullBody).toBe(403);
+      expect(userBPullBody).not.toContain(suiteName);
+
+      const userBPrepareResp = await authedPost(
+        page,
+        userBToken,
+        `/tests/${encodeURIComponent(suiteName)}/prepare`,
+        {},
+      );
+      const userBPrepareBody = await userBPrepareResp.text();
+      expect(userBPrepareResp.status(), userBPrepareBody).toBe(403);
+      expect(userBPrepareBody).not.toContain(suiteName);
+
+      const ownerPullResp = await authedPost(
+        page,
+        userAToken,
+        `/tests/${encodeURIComponent(suiteName)}/pull`,
+        {},
+      );
+      const ownerPullBody = await ownerPullResp.text();
+      expect(ownerPullResp.status(), ownerPullBody).toBe(400);
+      expect(ownerPullBody).toContain('Only git suites');
+
+      const ownerPrepareResp = await authedPost(
+        page,
+        userAToken,
+        `/tests/${encodeURIComponent(suiteName)}/prepare`,
+        {},
+      );
+      expect(ownerPrepareResp.status(), await ownerPrepareResp.text()).toBe(200);
+      const ownerPrepare = (await ownerPrepareResp.json()) as LinkSuiteResponse;
+      expect(ownerPrepare.success).toBe(true);
+      expect(ownerPrepare.suite_name).toBe(suiteName);
+
+      const adminPullResp = await authedPost(
+        page,
+        adminToken,
+        `/tests/${encodeURIComponent(suiteName)}/pull`,
+        {},
+      );
+      const adminPullBody = await adminPullResp.text();
+      expect(adminPullResp.status(), adminPullBody).toBe(400);
+      expect(adminPullBody).toContain('Only git suites');
+
+      const adminPrepareResp = await authedPost(
+        page,
+        adminToken,
+        `/tests/${encodeURIComponent(suiteName)}/prepare`,
+        {},
+      );
+      expect(adminPrepareResp.status(), await adminPrepareResp.text()).toBe(200);
+      const adminPrepare = (await adminPrepareResp.json()) as LinkSuiteResponse;
+      expect(adminPrepare.success).toBe(true);
+      expect(adminPrepare.suite_name).toBe(suiteName);
+    } finally {
+      if (linked) {
+        await authedDelete(page, adminToken, `/tests/${encodeURIComponent(suiteName)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
 });
 
 // ── R-API-3  Admin protection rules ──────────────────────────────────────
