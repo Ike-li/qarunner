@@ -338,6 +338,79 @@ test.describe('R-API-2 越权单资源', () => {
       }
     }
   });
+
+  test('R-API-2.6 GET /runs/{own_run}/artifacts* 以 owner user token → 200', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    let playwrightProfileId: string | null = null;
+    let runId: string | null = null;
+    try {
+      const profileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `r2_owner_artifacts_${Date.now()}`,
+        tests_path: PLAYWRIGHT_SUITE,
+        runner: 'playwright',
+      });
+      expect(profileResp.status()).toBe(201);
+      playwrightProfileId = (await profileResp.json()).id;
+
+      const runResp = await authedPost(
+        page,
+        userAToken,
+        `/profiles/${encodeURIComponent(playwrightProfileId!)}/trigger`,
+        {},
+      );
+      expect(runResp.status()).toBe(202);
+      const triggeredRun = await runResp.json();
+      runId = triggeredRun.id;
+      expect(triggeredRun.runner).toBe('playwright');
+
+      let terminalStatus = triggeredRun.status as string;
+      await expect(async () => {
+        const detailResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId!)}`);
+        expect(detailResp.status()).toBe(200);
+        const detail = await detailResp.json();
+        terminalStatus = detail.status;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(terminalStatus);
+      }).toPass({ timeout: 120_000, intervals: [2_000] });
+      expect(terminalStatus).toBe('completed');
+
+      const ownerListResp = await authedGet(
+        page,
+        userAToken,
+        `/runs/${encodeURIComponent(runId!)}/artifacts`,
+      );
+      expect(ownerListResp.status()).toBe(200);
+      const artifacts = ((await ownerListResp.json()).artifacts ?? []) as Array<{
+        path: string;
+        content_type: string;
+      }>;
+      const trace = artifacts.find((artifact) => artifact.path.endsWith('trace.zip'));
+      expect(trace).toBeTruthy();
+
+      const artifactPath = trace!.path;
+      const endpoints = [
+        `/runs/${encodeURIComponent(runId!)}/artifacts`,
+        `/runs/${encodeURIComponent(runId!)}/artifacts/${encodeURIComponent(artifactPath)}`,
+        `/runs/${encodeURIComponent(runId!)}/artifacts.zip`,
+      ];
+
+      for (const endpoint of endpoints) {
+        const ownerResp = await authedGet(page, userAToken, endpoint);
+        expect(ownerResp.status(), await ownerResp.text()).toBe(200);
+      }
+    } finally {
+      if (runId) {
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
+      }
+      if (playwrightProfileId) {
+        await authedDelete(
+          page,
+          userAToken,
+          `/profiles/${encodeURIComponent(playwrightProfileId)}`,
+        ).catch(() => {});
+      }
+    }
+  });
 });
 
 // ── R-API-3  Admin protection rules ──────────────────────────────────────
