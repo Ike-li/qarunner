@@ -23,6 +23,14 @@ let adminToken: string;
 let userAToken: string;
 let userBToken: string;
 
+interface CredentialResponse {
+  id: string;
+  name: string;
+  type: string;
+  created_by: string;
+  secret?: string;
+}
+
 // Helper: login and return the bearer token.
 async function getToken(
   request: APIRequestContext,
@@ -180,6 +188,67 @@ test.describe('R-API-1 静默过滤', () => {
 
     // Cleanup
     await authedDelete(page, adminToken, `/profiles/${adminProfId}`);
+  });
+
+  test('R-API-1.3 GET /credentials 非 admin 只见自己的且不回显 secret', async ({ page }) => {
+    const createdCredentialIds: string[] = [];
+    const stamp = Date.now();
+    const adminSecret = `ghp_admin_secret_${stamp}`;
+    const userASecret = `ghp_userA_secret_${stamp}`;
+
+    try {
+      const adminCreateResp = await authedPost(page, adminToken, '/credentials', {
+        name: `admin_credential_${stamp}`,
+        type: 'https_token',
+        secret: adminSecret,
+      });
+      expect(adminCreateResp.status(), await adminCreateResp.text()).toBe(201);
+      const adminCredential = (await adminCreateResp.json()) as CredentialResponse;
+      createdCredentialIds.push(adminCredential.id);
+      expect(adminCredential.created_by).toBe(E2E_ADMIN);
+      expect(adminCredential.secret).toBeUndefined();
+      expect(JSON.stringify(adminCredential)).not.toContain(adminSecret);
+
+      const userACreateResp = await authedPost(page, userAToken, '/credentials', {
+        name: `userA_credential_${stamp}`,
+        type: 'https_token',
+        secret: userASecret,
+      });
+      expect(userACreateResp.status(), await userACreateResp.text()).toBe(201);
+      const userACredential = (await userACreateResp.json()) as CredentialResponse;
+      createdCredentialIds.push(userACredential.id);
+      expect(userACredential.created_by).toBe(USER_A);
+      expect(userACredential.secret).toBeUndefined();
+      expect(JSON.stringify(userACredential)).not.toContain(userASecret);
+
+      const userAListResp = await authedGet(page, userAToken, '/credentials');
+      expect(userAListResp.status(), await userAListResp.text()).toBe(200);
+      const userAList = (await userAListResp.json()) as { credentials: CredentialResponse[] };
+      const userACredentialIds = userAList.credentials.map((credential) => credential.id);
+      expect(userACredentialIds).toContain(userACredential.id);
+      expect(userACredentialIds).not.toContain(adminCredential.id);
+      expect(JSON.stringify(userAList)).not.toContain(userASecret);
+      expect(JSON.stringify(userAList)).not.toContain(adminSecret);
+      expect(userAList.credentials.every((credential) => credential.secret === undefined)).toBe(
+        true,
+      );
+
+      const adminListResp = await authedGet(page, adminToken, '/credentials');
+      expect(adminListResp.status(), await adminListResp.text()).toBe(200);
+      const adminList = (await adminListResp.json()) as { credentials: CredentialResponse[] };
+      const adminCredentialIds = adminList.credentials.map((credential) => credential.id);
+      expect(adminCredentialIds).toContain(adminCredential.id);
+      expect(adminCredentialIds).toContain(userACredential.id);
+      expect(JSON.stringify(adminList)).not.toContain(userASecret);
+      expect(JSON.stringify(adminList)).not.toContain(adminSecret);
+      expect(adminList.credentials.every((credential) => credential.secret === undefined)).toBe(
+        true,
+      );
+    } finally {
+      for (const credentialId of createdCredentialIds) {
+        await authedDelete(page, adminToken, `/credentials/${credentialId}`).catch(() => {});
+      }
+    }
   });
 });
 
@@ -472,6 +541,47 @@ test.describe('R-API-2 越权单资源', () => {
     } finally {
       if (runId) {
         await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
+      }
+    }
+  });
+
+  test('R-API-2.8 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
+    const stamp = Date.now();
+    const secret = `ghp_delete_scope_${stamp}`;
+    let credentialId: string | null = null;
+
+    try {
+      const createResp = await authedPost(page, userAToken, '/credentials', {
+        name: `userA_delete_scope_${stamp}`,
+        type: 'https_token',
+        secret,
+      });
+      expect(createResp.status(), await createResp.text()).toBe(201);
+      const credential = (await createResp.json()) as CredentialResponse;
+      credentialId = credential.id;
+      expect(credential.created_by).toBe(USER_A);
+      expect(JSON.stringify(credential)).not.toContain(secret);
+
+      const userBDeleteResp = await authedDelete(
+        page,
+        userBToken,
+        `/credentials/${credentialId}`,
+      );
+      const userBDeleteBody = await userBDeleteResp.text();
+      expect(userBDeleteResp.status(), userBDeleteBody).toBe(403);
+      expect(userBDeleteBody).not.toContain(credentialId);
+
+      const userAListResp = await authedGet(page, userAToken, '/credentials');
+      expect(userAListResp.status(), await userAListResp.text()).toBe(200);
+      const userAList = (await userAListResp.json()) as { credentials: CredentialResponse[] };
+      expect(userAList.credentials.map((item) => item.id)).toContain(credentialId);
+
+      const adminDeleteResp = await authedDelete(page, adminToken, `/credentials/${credentialId}`);
+      expect(adminDeleteResp.status(), await adminDeleteResp.text()).toBe(200);
+      credentialId = null;
+    } finally {
+      if (credentialId) {
+        await authedDelete(page, adminToken, `/credentials/${credentialId}`).catch(() => {});
       }
     }
   });

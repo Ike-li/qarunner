@@ -43,6 +43,10 @@ export default defineConfig(({ mode }) => {
         '/schedules': {
           target: backendTarget,
           changeOrigin: true,
+        },
+        '/credentials': {
+          target: backendTarget,
+          changeOrigin: true,
         }
       }
     }
