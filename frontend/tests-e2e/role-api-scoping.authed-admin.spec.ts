@@ -1627,6 +1627,32 @@ test.describe('R-API-3 admin 保护', () => {
     expect(userBMe.username).toBe(USER_B);
     expect(userBMe.role).toBe('user');
   });
+
+  test('R-API-3.6 管理员 GET /users 不泄露密码字段或测试密码', async ({ page }) => {
+    const resp = await authedGet(page, adminToken, '/users');
+    const bodyText = await resp.text();
+    expect(resp.status(), bodyText).toBe(200);
+    expect(bodyText).not.toContain(USER_A_PW);
+    expect(bodyText).not.toContain(USER_B_PW);
+    expect(bodyText.toLowerCase()).not.toContain('password');
+    expect(bodyText.toLowerCase()).not.toContain('hash');
+
+    const users = ((JSON.parse(bodyText) as { users: Array<Record<string, unknown>> }).users ?? []);
+    const userA = users.find((user) => user.username === USER_A);
+    const userB = users.find((user) => user.username === USER_B);
+    expect(userA).toBeTruthy();
+    expect(userB).toBeTruthy();
+    expect(userA?.role).toBe('user');
+    expect(userB?.role).toBe('user');
+
+    for (const user of users) {
+      expect(user.username).toBeTruthy();
+      expect(user.role).toBeTruthy();
+      expect(user.created_at).toBeTruthy();
+      expect(Object.keys(user).some((key) => key.toLowerCase().includes('password'))).toBe(false);
+      expect(Object.keys(user).some((key) => key.toLowerCase().includes('hash'))).toBe(false);
+    }
+  });
 });
 
 // ── R-API-4  Executor mode restrictions ──────────────────────────────────
