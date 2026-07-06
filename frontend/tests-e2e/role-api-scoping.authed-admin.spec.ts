@@ -53,6 +53,7 @@ interface CaseHistoryResponse {
 
 interface ScheduleResponse {
   id: string;
+  name: string;
   profile_id: string;
   created_by: string;
 }
@@ -914,8 +915,9 @@ test.describe('R-API-2 越权单资源', () => {
 
   test('R-API-2.5 DELETE /schedules/{admin_schedule} 以 userA token → 403', async ({ page }) => {
     // Create a schedule as admin
+    const scheduleName = `admin_sched_r2_${Date.now()}`;
     const schedResp = await authedPost(page, adminToken, '/schedules', {
-      name: 'admin_sched_r2',
+      name: scheduleName,
       profile_id: adminProfileId,
       cron_expression: '0 3 * * *',
       timezone: 'UTC',
@@ -929,7 +931,11 @@ test.describe('R-API-2 越权单资源', () => {
 
     // userA tries to delete admin's schedule
     const delResp = await authedDelete(page, userAToken, `/schedules/${schedId}`);
-    expect(delResp.status()).toBe(403);
+    const delBody = await delResp.text();
+    expect(delResp.status(), delBody).toBe(403);
+    expect(delBody).not.toContain(schedId);
+    expect(delBody).not.toContain(scheduleName);
+    expect(delBody).not.toContain(adminProfileId);
 
     // Cleanup
     await authedDelete(page, adminToken, `/schedules/${schedId}`);
@@ -960,12 +966,15 @@ test.describe('R-API-2 越权单资源', () => {
       expect(scheduleResp.status(), await scheduleResp.text()).toBe(201);
       const schedule = (await scheduleResp.json()) as ScheduleResponse;
       scheduleId = schedule.id;
+      const scheduleName = schedule.name;
       expect(schedule.created_by).toBe(USER_A);
 
       const userBGetResp = await authedGet(page, userBToken, `/schedules/${scheduleId}`);
       const userBGetBody = await userBGetResp.text();
       expect(userBGetResp.status(), userBGetBody).toBe(403);
       expect(userBGetBody).not.toContain(scheduleId);
+      expect(userBGetBody).not.toContain(scheduleName);
+      expect(userBGetBody).not.toContain(userProfileId);
 
       const userBPutResp = await authedPut(page, userBToken, `/schedules/${scheduleId}`, {
         name: 'hijacked_schedule',
@@ -977,6 +986,8 @@ test.describe('R-API-2 越权单资源', () => {
       const userBPutBody = await userBPutResp.text();
       expect(userBPutResp.status(), userBPutBody).toBe(403);
       expect(userBPutBody).not.toContain(scheduleId);
+      expect(userBPutBody).not.toContain(scheduleName);
+      expect(userBPutBody).not.toContain(userProfileId);
 
       const userBTriggerResp = await authedPost(
         page,
@@ -987,6 +998,8 @@ test.describe('R-API-2 越权单资源', () => {
       const userBTriggerBody = await userBTriggerResp.text();
       expect(userBTriggerResp.status(), userBTriggerBody).toBe(403);
       expect(userBTriggerBody).not.toContain(scheduleId);
+      expect(userBTriggerBody).not.toContain(scheduleName);
+      expect(userBTriggerBody).not.toContain(userProfileId);
 
       const ownerGetResp = await authedGet(page, userAToken, `/schedules/${scheduleId}`);
       expect(ownerGetResp.status(), await ownerGetResp.text()).toBe(200);
