@@ -1452,6 +1452,20 @@ def _read_log_tail(path: Path) -> str | None:
     return text
 
 
+def _safe_run_log_file(run_dir: Path, name: str) -> Path | None:
+    candidate = run_dir / name
+    if not candidate.exists():
+        return None
+    try:
+        run_root = run_dir.resolve()
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if not resolved.is_relative_to(run_root) or not candidate.is_file():
+        return None
+    return candidate
+
+
 def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path:
     """Return the Playwright output directory for a run."""
     return Path(artifacts_root) / run_id / "results" / "playwright-results"
@@ -1491,18 +1505,21 @@ async def get_run(
 
     cfg = container.settings
     run_dir = Path(cfg.artifacts_root) / run_id
-    stdout_file = run_dir / "stdout.log"
-    stderr_file = run_dir / "stderr.log"
+    stdout_file = _safe_run_log_file(run_dir, "stdout.log")
+    stderr_file = _safe_run_log_file(run_dir, "stderr.log")
 
-    if not stdout_file.exists():
+    if stdout_file is None:
         run_dir_fallback = Path("./artifacts") / run_id
-        if (run_dir_fallback / "stdout.log").exists():
-            stdout_file = run_dir_fallback / "stdout.log"
-            stderr_file = run_dir_fallback / "stderr.log"
+        stdout_fallback = _safe_run_log_file(run_dir_fallback, "stdout.log")
+        if stdout_fallback is not None:
+            stdout_file = stdout_fallback
+            stderr_file = _safe_run_log_file(run_dir_fallback, "stderr.log")
 
-    def _read_logs(stdout_path: Path, stderr_path: Path) -> tuple[str | None, str | None]:
-        stdout_val = _read_log_tail(stdout_path) if stdout_path.exists() else None
-        stderr_val = _read_log_tail(stderr_path) if stderr_path.exists() else None
+    def _read_logs(
+        stdout_path: Path | None, stderr_path: Path | None
+    ) -> tuple[str | None, str | None]:
+        stdout_val = _read_log_tail(stdout_path) if stdout_path is not None else None
+        stderr_val = _read_log_tail(stderr_path) if stderr_path is not None else None
         return stdout_val, stderr_val
 
     stdout_content, stderr_content = await asyncio.to_thread(_read_logs, stdout_file, stderr_file)

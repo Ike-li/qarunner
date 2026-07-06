@@ -3506,6 +3506,87 @@ def test_get_run_truncates_large_log(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert body["stderr"] == "small"  # small log: unchanged, no marker
 
 
+def test_get_run_does_not_follow_log_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path / "artifacts"))
+    container = _make_container()
+    _make_run_in_store(container.store, id="run_symlink")
+    secret = tmp_path / "secret.log"
+    secret.write_text("TOPSECRET", encoding="utf-8")
+    run_dir = tmp_path / "artifacts" / "run_symlink"
+    run_dir.mkdir(parents=True)
+    (run_dir / "stdout.log").symlink_to(secret)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_symlink")
+
+    assert resp.status_code == 200
+    assert resp.json()["stdout"] is None
+    assert "TOPSECRET" not in resp.text
+
+
+def test_get_run_unreadable_log_returns_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(artifacts_root))
+    container = _make_container()
+    _make_run_in_store(container.store, id="run_unreadable")
+    run_dir = artifacts_root / "run_unreadable"
+    run_dir.mkdir(parents=True)
+    stdout_file = run_dir / "stdout.log"
+    stdout_file.write_text("SHOULD_NOT_LEAK", encoding="utf-8")
+
+    import builtins
+
+    original_open = builtins.open
+
+    def _raise_on_stdout(path: object, *args: object, **kwargs: object):
+        if Path(path) == stdout_file:
+            raise OSError("read failed")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _raise_on_stdout)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_unreadable")
+
+    assert resp.status_code == 200
+    assert resp.json()["stdout"] is None
+    assert "SHOULD_NOT_LEAK" not in resp.text
+
+
+def test_get_run_log_resolve_error_returns_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(artifacts_root))
+    container = _make_container()
+    _make_run_in_store(container.store, id="run_resolve_error")
+    run_dir = artifacts_root / "run_resolve_error"
+    run_dir.mkdir(parents=True)
+    stdout_file = run_dir / "stdout.log"
+    stdout_file.write_text("SHOULD_NOT_LEAK", encoding="utf-8")
+
+    original_resolve = Path.resolve
+
+    def _raise_on_stdout_resolve(self: Path, *args: object, **kwargs: object):
+        if self == stdout_file:
+            raise OSError("resolve failed")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _raise_on_stdout_resolve)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_resolve_error")
+
+    assert resp.status_code == 200
+    assert resp.json()["stdout"] is None
+    assert "SHOULD_NOT_LEAK" not in resp.text
+
+
 def test_stream_run_logs_missing_and_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
