@@ -665,7 +665,7 @@ def test_get_report_success(tmp_path: Path) -> None:
     html_file = tmp_path / "report.html"
     html_file.write_text("<html><body>Report</body></html>")
 
-    container = _make_container()
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path)))
     report = ReportRef(
         allure_results_dir=str(tmp_path),
         allure_report_file=str(html_file),
@@ -685,7 +685,7 @@ def test_get_report_rejects_file_outside_results_dir(tmp_path: Path) -> None:
     secret_file = tmp_path / "secret.html"
     secret_file.write_text("<html>TOPSECRET</html>")
 
-    container = _make_container()
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path)))
     report = ReportRef(
         allure_results_dir=str(results_dir),
         allure_report_file=str(secret_file),
@@ -695,6 +695,28 @@ def test_get_report_rejects_file_outside_results_dir(tmp_path: Path) -> None:
     app = create_app(container)
     with TestClient(app) as client:
         resp = client.get("/runs/r-out/report")
+
+    assert resp.status_code == 403
+    assert "TOPSECRET" not in resp.text
+
+
+def test_get_report_rejects_results_dir_outside_artifacts_root(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    report_dir = tmp_path / "outside-results"
+    report_dir.mkdir()
+    report_file = report_dir / "index.html"
+    report_file.write_text("<html>TOPSECRET</html>", encoding="utf-8")
+
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    report = ReportRef(
+        allure_results_dir=str(report_dir),
+        allure_report_file=str(report_file),
+        html_generated=True,
+    )
+    _make_run_in_store(container.store, id="r-out-root", status=RunStatus.COMPLETED, report=report)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/r-out-root/report")
 
     assert resp.status_code == 403
     assert "TOPSECRET" not in resp.text
@@ -731,7 +753,7 @@ def _report_run(store: FakeStore, run_id: str, report_dir: Path) -> None:
 
 def test_get_report_assets_success(tmp_path: Path) -> None:
     report_dir = tmp_path / "allure-report"
-    container = _make_container()
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path)))
     _report_run(container.store, "ra", report_dir)
     (report_dir / "data").mkdir()
     (report_dir / "data" / "suites.json").write_text('{"ok": true}')
@@ -761,7 +783,7 @@ def test_get_report_assets_report_not_available() -> None:
 
 def test_get_report_assets_traversal_blocked(tmp_path: Path) -> None:
     report_dir = tmp_path / "allure-report"
-    container = _make_container()
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path)))
     _report_run(container.store, "rc", report_dir)
     # A symlink inside the report dir pointing outside must not be served.
     secret = tmp_path / "secret.txt"
@@ -776,7 +798,7 @@ def test_get_report_assets_traversal_blocked(tmp_path: Path) -> None:
 
 def test_get_report_assets_missing_file(tmp_path: Path) -> None:
     report_dir = tmp_path / "allure-report"
-    container = _make_container()
+    container = _make_container(settings=Settings(artifacts_root=str(tmp_path)))
     _report_run(container.store, "rd", report_dir)
     app = create_app(container)
     with TestClient(app) as client:
