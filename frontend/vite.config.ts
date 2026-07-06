@@ -47,6 +47,10 @@ export default defineConfig(({ mode }) => {
         '/credentials': {
           target: backendTarget,
           changeOrigin: true,
+        },
+        '/cases': {
+          target: backendTarget,
+          changeOrigin: true,
         }
       }
     }
