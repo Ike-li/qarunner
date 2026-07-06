@@ -60,6 +60,10 @@ interface LinkSuiteResponse {
   suite_name: string;
 }
 
+interface MetricsSummary {
+  total_runs: number;
+}
+
 // Helper: login and return the bearer token.
 async function getToken(
   request: APIRequestContext,
@@ -529,6 +533,75 @@ test.describe('R-API-1 静默过滤', () => {
         await authedDelete(page, userAToken, `/profiles/${encodeURIComponent(userProfileId)}`).catch(
           () => {},
         );
+      }
+    }
+  });
+
+  test('R-API-1.6 GET /metrics 非 admin 只聚合自己的 runs', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    const readMetrics = async (token: string): Promise<MetricsSummary> => {
+      const resp = await authedGet(page, token, '/metrics');
+      expect(resp.status(), await resp.text()).toBe(200);
+      return (await resp.json()) as MetricsSummary;
+    };
+
+    const beforeUserMetrics = await readMetrics(userAToken);
+    const beforeAdminMetrics = await readMetrics(adminToken);
+    let adminRunId: string | null = null;
+    let userRunId: string | null = null;
+
+    try {
+      const adminRunResp = await authedPost(page, adminToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(adminRunResp.status(), await adminRunResp.text()).toBe(202);
+      const adminRun = (await adminRunResp.json()) as RunResponse;
+      adminRunId = adminRun.id;
+      expect(adminRun.created_by).toBe(E2E_ADMIN);
+
+      const userRunResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(userRunResp.status(), await userRunResp.text()).toBe(202);
+      const userRun = (await userRunResp.json()) as RunResponse;
+      userRunId = userRun.id;
+      expect(userRun.created_by).toBe(USER_A);
+
+      const afterUserMetrics = await readMetrics(userAToken);
+      expect(afterUserMetrics.total_runs).toBe(beforeUserMetrics.total_runs + 1);
+
+      const afterAdminMetrics = await readMetrics(adminToken);
+      expect(afterAdminMetrics.total_runs).toBe(beforeAdminMetrics.total_runs + 2);
+    } finally {
+      for (const [token, runId] of [
+        [adminToken, adminRunId],
+        [userAToken, userRunId],
+      ] as const) {
+        if (!runId) continue;
+        await expect(async () => {
+          const detailResp = await authedGet(page, token, `/runs/${encodeURIComponent(runId)}`);
+          expect(detailResp.status(), await detailResp.text()).toBe(200);
+          const detail = (await detailResp.json()) as RunResponse;
+          expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+        }).toPass({ timeout: 60_000, intervals: [1_000] });
+        await authedDelete(page, token, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
       }
     }
   });

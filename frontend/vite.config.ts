@@ -51,6 +51,10 @@ export default defineConfig(({ mode }) => {
         '/cases': {
           target: backendTarget,
           changeOrigin: true,
+        },
+        '/metrics': {
+          target: backendTarget,
+          changeOrigin: true,
         }
       }
     }
