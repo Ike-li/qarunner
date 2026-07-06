@@ -2552,6 +2552,50 @@ def test_cleanup_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loop.close()
 
 
+def test_cleanup_runs_skips_artifact_path_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(artifacts_root))
+    artifacts_root.mkdir()
+    container = _make_container()
+
+    old_date = datetime.now(UTC) - timedelta(days=40)
+    run = Run(
+        id="../outside",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="test_user",
+        tests_path="tests/",
+        created_at=old_date,
+        finished_at=old_date,
+        locked=False,
+        report=ReportRef(
+            allure_results_dir="outside/results",
+            allure_report_file="outside/report.html",
+            html_generated=True,
+        ),
+    )
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "stdout.log").write_text("keep me")
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(container.store.save(run))
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/runs/cleanup?retention_days=30")
+
+    assert resp.status_code == 200
+    assert resp.json()["cleaned_runs"] == 0
+    assert outside_dir.exists()
+    assert loop.run_until_complete(container.store.get("../outside")).report is not None
+    loop.close()
+
+
 def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
     container = _make_container()

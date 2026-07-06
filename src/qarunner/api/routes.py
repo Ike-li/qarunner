@@ -1466,6 +1466,15 @@ def _safe_run_log_file(run_dir: Path, name: str) -> Path | None:
     return candidate
 
 
+def _safe_run_artifact_dir(artifacts_root: str, run_id: str) -> Path | None:
+    from qarunner.core.paths import safe_subpath
+
+    try:
+        return Path(safe_subpath(artifacts_root, run_id))
+    except UnsafePath:
+        return None
+
+
 def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path:
     """Return the Playwright output directory for a run."""
     return Path(artifacts_root) / run_id / "results" / "playwright-results"
@@ -1990,7 +1999,10 @@ async def cleanup_runs(
         # deleted, so get() always resolves.
         if (await container.store.get(r.id)).locked:
             continue
-        run_dir = Path(cfg.artifacts_root) / r.id
+        run_dir = _safe_run_artifact_dir(cfg.artifacts_root, r.id)
+        if run_dir is None:
+            logger.warning("Skipping cleanup for unsafe run artifact path: %s", r.id)
+            continue
         if run_dir.exists():
             try:
                 await asyncio.to_thread(shutil.rmtree, run_dir)
