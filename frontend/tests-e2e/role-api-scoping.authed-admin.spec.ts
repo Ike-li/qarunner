@@ -1387,6 +1387,45 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
+  test('R-API-2.17 POST /tests/clone 禁止使用他人 credential_ref', async ({ page }) => {
+    const stamp = Date.now();
+    const credentialName = `userB_clone_credential_${stamp}`;
+    const secret = `ghp_clone_scope_${stamp}`;
+    const suiteName = `r2_clone_scope_${stamp}`;
+    const repoUrl = `https://example.com/org/${suiteName}.git`;
+    let credentialId: string | null = null;
+
+    try {
+      const createResp = await authedPost(page, userBToken, '/credentials', {
+        name: credentialName,
+        type: 'https_token',
+        secret,
+      });
+      expect(createResp.status(), await createResp.text()).toBe(201);
+      const credential = (await createResp.json()) as CredentialResponse;
+      credentialId = credential.id;
+      expect(credential.created_by).toBe(USER_B);
+      expect(JSON.stringify(credential)).not.toContain(secret);
+
+      const cloneResp = await authedPost(page, userAToken, '/tests/clone', {
+        url: repoUrl,
+        name: suiteName,
+        credential_ref: credentialId,
+      });
+      const cloneBody = await cloneResp.text();
+      expect(cloneResp.status(), cloneBody).toBe(403);
+      expect(cloneBody).not.toContain(credentialId);
+      expect(cloneBody).not.toContain(credentialName);
+      expect(cloneBody).not.toContain(secret);
+      expect(cloneBody).not.toContain(suiteName);
+      expect(cloneBody).not.toContain(repoUrl);
+    } finally {
+      if (credentialId) {
+        await authedDelete(page, adminToken, `/credentials/${credentialId}`).catch(() => {});
+      }
+    }
+  });
+
   test('R-API-2.12 POST /runs/{run}/rerun 遵守 owner/admin 边界', async ({ page }) => {
     test.setTimeout(120_000);
 
