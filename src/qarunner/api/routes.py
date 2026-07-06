@@ -1455,8 +1455,6 @@ def _read_log_tail(path: Path) -> str | None:
 
 
 def _safe_run_log_file(run_dir: Path, name: str) -> Path | None:
-    if run_dir.is_symlink():
-        return None
     candidate = run_dir / name
     if not candidate.exists():
         return None
@@ -1528,16 +1526,21 @@ async def get_run(
     _require_run_access(run, current_user)
 
     cfg = container.settings
-    run_dir = Path(cfg.artifacts_root) / run_id
-    stdout_file = _safe_run_log_file(run_dir, "stdout.log")
-    stderr_file = _safe_run_log_file(run_dir, "stderr.log")
+    run_dir = _safe_run_artifact_dir(cfg.artifacts_root, run_id)
+    stdout_file = (
+        _safe_run_log_file(run_dir, "stdout.log") if run_dir is not None else None
+    )
+    stderr_file = (
+        _safe_run_log_file(run_dir, "stderr.log") if run_dir is not None else None
+    )
 
     if stdout_file is None:
-        run_dir_fallback = Path("./artifacts") / run_id
-        stdout_fallback = _safe_run_log_file(run_dir_fallback, "stdout.log")
-        if stdout_fallback is not None:
-            stdout_file = stdout_fallback
-            stderr_file = _safe_run_log_file(run_dir_fallback, "stderr.log")
+        run_dir_fallback = _safe_run_artifact_dir("./artifacts", run_id)
+        if run_dir_fallback is not None:
+            stdout_fallback = _safe_run_log_file(run_dir_fallback, "stdout.log")
+            if stdout_fallback is not None:
+                stdout_file = stdout_fallback
+                stderr_file = _safe_run_log_file(run_dir_fallback, "stderr.log")
 
     def _read_logs(
         stdout_path: Path | None, stderr_path: Path | None
@@ -1813,7 +1816,7 @@ async def stream_run_logs(
     import asyncio
 
     cfg = container.settings
-    run_dir = Path(cfg.artifacts_root) / run_id
+    run_dir = _safe_run_artifact_dir(cfg.artifacts_root, run_id)
     terminal_states = (
         RunStatus.COMPLETED,
         RunStatus.FAILED,
@@ -1829,7 +1832,9 @@ async def stream_run_logs(
         for _ in range(50):
             if await request.is_disconnected():
                 return
-            stdout_file = _safe_run_log_file(run_dir, "stdout.log")
+            stdout_file = (
+                _safe_run_log_file(run_dir, "stdout.log") if run_dir is not None else None
+            )
             if stdout_file is not None:
                 break
             try:

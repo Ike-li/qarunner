@@ -2808,6 +2808,32 @@ def test_stream_run_logs_does_not_follow_symlink_escape(
     assert "STREAMSECRET" not in resp.text
 
 
+def test_stream_run_logs_does_not_read_outside_artifacts_root_for_traversal_run_id(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    artifacts_root = workspace / "artifacts"
+    artifacts_root.mkdir(parents=True)
+    outside_stdout = workspace / "stdout.log"
+    outside_stdout.write_text("STREAMSECRET\n", encoding="utf-8")
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(
+        container.store,
+        id="..",
+        created_by="alice",
+        status=RunStatus.COMPLETED,
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.get("/runs/%2E%2E/stream")
+
+    assert resp.status_code == 200
+    assert "[System] Log file not found." in resp.text
+    assert "STREAMSECRET" not in resp.text
+
+
 def test_user_registration_and_login() -> None:
     container = _make_container()
     app = create_app(container)
@@ -3799,6 +3825,27 @@ def test_get_run_does_not_follow_log_dir_symlink_escape(
     assert resp.status_code == 200
     assert resp.json()["stdout"] is None
     assert "DIRSECRET" not in resp.text
+
+
+def test_get_run_does_not_read_logs_outside_artifacts_root_for_traversal_run_id(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    artifacts_root = workspace / "artifacts"
+    artifacts_root.mkdir(parents=True)
+    outside_stdout = workspace / "stdout.log"
+    outside_stdout.write_text("PARENTSECRET", encoding="utf-8")
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(container.store, id="..", created_by="alice")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.get("/runs/%2E%2E")
+
+    assert resp.status_code == 200
+    assert resp.json()["stdout"] is None
+    assert "PARENTSECRET" not in resp.text
 
 
 def test_get_run_unreadable_log_returns_null(
