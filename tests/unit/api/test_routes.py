@@ -4725,7 +4725,13 @@ def test_clone_name_without_git_suffix(tmp_path: Path, monkeypatch: pytest.Monke
 
 @pytest.mark.parametrize(
     "bad_url",
-    ["file:///etc/passwd", "ext::sh -c whoami", "http://insecure/repo.git"],
+    [
+        "file:///etc/passwd",
+        "ext::sh -c whoami",
+        "http://insecure/repo.git",
+        "https://token@example.com/org/repo.git",
+        "https://x-access-token:ghp_secret@example.com/org/repo.git",
+    ],
 )
 def test_clone_rejects_unsupported_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_url: str

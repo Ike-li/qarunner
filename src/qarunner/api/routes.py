@@ -15,6 +15,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -270,9 +271,18 @@ def _validate_git_url(url: str) -> None:
     """Reject repo URLs outside the allowlist (SSRF / local-file / command exec).
 
     Only ``https://`` and scp-style ``git@`` are accepted; ``file://``, ``ext::``,
-    plain ``http://`` and anything else are refused with 400.
+    plain ``http://`` and anything else are refused with 400. Credentials must
+    use ``credential_ref`` so tokens never land in the clone URL or git argv.
     """
-    if url.startswith("https://") or url.startswith("git@"):
+    if url.startswith("https://"):
+        parsed = urlsplit(url)
+        if parsed.username or parsed.password:
+            raise HTTPException(
+                status_code=400,
+                detail="Repository URL must not include credentials; use credential_ref.",
+            )
+        return
+    if url.startswith("git@"):
         return
     raise HTTPException(
         status_code=400,
