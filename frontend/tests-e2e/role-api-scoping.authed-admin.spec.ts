@@ -1828,12 +1828,15 @@ test.describe('R-API-3 admin 保护', () => {
   test('R-API-3.5 非管理员 PUT|DELETE /users/{username} → 403 且不改变用户', async ({
     page,
   }) => {
+    const deniedPassword = `Denied-Update-${Date.now()}!`;
     const putResp = await authedPut(page, userAToken, `/users/${USER_B}`, {
+      password: deniedPassword,
       role: 'admin',
     });
     const putBody = await putResp.text();
     expect(putResp.status(), putBody).toBe(403);
     expect(putBody).not.toContain(USER_B);
+    expect(putBody).not.toContain(deniedPassword);
 
     const deleteResp = await authedDelete(page, userAToken, `/users/${USER_B}`);
     const deleteBody = await deleteResp.text();
@@ -1845,6 +1848,18 @@ test.describe('R-API-3 admin 保护', () => {
     const userBMe = await userBMeResp.json();
     expect(userBMe.username).toBe(USER_B);
     expect(userBMe.role).toBe('user');
+
+    const deniedLoginResp = await page.request.post('/auth/login', {
+      data: { username: USER_B, password: deniedPassword },
+    });
+    const deniedLoginBody = await deniedLoginResp.text();
+    expect(deniedLoginResp.status(), deniedLoginBody).toBe(401);
+    expect(deniedLoginBody).not.toContain(deniedPassword);
+
+    const originalLoginResp = await page.request.post('/auth/login', {
+      data: { username: USER_B, password: USER_B_PW },
+    });
+    expect(originalLoginResp.status(), await originalLoginResp.text()).toBe(200);
   });
 
   test('R-API-3.6 管理员 GET /users 不泄露密码字段或测试密码', async ({ page }) => {
