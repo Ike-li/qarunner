@@ -74,7 +74,32 @@ test.describe('R-API-5 anonymous API', () => {
   // so these calls are effectively anonymous.
 
   test('R-API-5.1 受保护端点不带 token → 401', async ({ page }) => {
-    for (const endpoint of ['/runs', '/profiles', '/schedules', '/auth/me']) {
+    const schedulePreviewQuery = new URLSearchParams({
+      expression: '*/5 * * * *',
+      timezone: 'UTC',
+    });
+    const caseHistoryQuery = new URLSearchParams({
+      tests_path: PYTEST_SUITE,
+      suite: PYTEST_SUITE,
+      name: 'test_example',
+    });
+
+    for (const endpoint of [
+      '/auth/me',
+      '/users',
+      '/credentials',
+      '/tests',
+      '/suites',
+      `/tests/${encodeURIComponent(PYTEST_SUITE)}/tree`,
+      `/tests/${encodeURIComponent(PYTEST_SUITE)}/markers`,
+      '/runs',
+      `/runs/trend?tests_path=${encodeURIComponent(PYTEST_SUITE)}`,
+      '/profiles',
+      '/metrics',
+      `/cases/history?${caseHistoryQuery.toString()}`,
+      '/schedules',
+      `/schedules/preview?${schedulePreviewQuery.toString()}`,
+    ]) {
       const resp = await page.request.get(endpoint);
       expect(resp.status(), `GET ${endpoint} should be 401`).toBe(401);
     }
