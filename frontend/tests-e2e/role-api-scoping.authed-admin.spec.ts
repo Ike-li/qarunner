@@ -693,24 +693,41 @@ test.describe('R-API-2 越权单资源', () => {
   });
 
   test('R-API-2.4 DELETE /runs/{admin_run} 以 userA token → 403', async ({ page }) => {
-    // Create a run as admin (needs tests_path, not profile_id)
-    const runResp = await authedPost(page, adminToken, '/runs', {
-      tests_path: '/tmp/fake_tests',
-      runner: 'pytest',
-    });
-    if (!runResp.ok()) {
-      // If run creation fails (executor issue), skip gracefully
-      test.skip(true, `Admin run creation failed: ${runResp.status()}`);
-      return;
+    test.setTimeout(120_000);
+
+    let runId: string | null = null;
+    try {
+      const runResp = await authedPost(page, adminToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(runResp.status(), await runResp.text()).toBe(202);
+      const run = (await runResp.json()) as RunResponse;
+      runId = run.id;
+      expect(run.created_by).toBe(E2E_ADMIN);
+
+      const delResp = await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`);
+      const delBody = await delResp.text();
+      expect(delResp.status(), delBody).toBe(403);
+      expect(delBody).not.toContain(runId);
+    } finally {
+      if (runId) {
+        await expect(async () => {
+          const detailResp = await authedGet(page, adminToken, `/runs/${encodeURIComponent(runId!)}`);
+          expect(detailResp.status(), await detailResp.text()).toBe(200);
+          const detail = (await detailResp.json()) as RunResponse;
+          expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+        }).toPass({ timeout: 60_000, intervals: [1_000] });
+        await authedDelete(page, adminToken, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
+      }
     }
-    const runId = (await runResp.json()).id;
-
-    // userA tries to delete admin's run
-    const delResp = await authedDelete(page, userAToken, `/runs/${runId}`);
-    expect(delResp.status()).toBe(403);
-
-    // Cleanup: admin deletes their own run
-    await authedDelete(page, adminToken, `/runs/${runId}`);
   });
 
   test('R-API-2.5 DELETE /schedules/{admin_schedule} 以 userA token → 403', async ({ page }) => {
