@@ -202,26 +202,44 @@ test.describe('R-API-1 静默过滤', () => {
     await authedDelete(page, userAToken, `/profiles/${userProfileId}`);
   });
 
-  test('R-API-1.2 GET /profiles 非 admin 只见自己的', async ({ page }) => {
-    // admin has some profiles; userA should NOT see them
-    const adminProfResp = await authedPost(page, adminToken, '/profiles', {
-      name: 'admin_only_profile',
-      tests_path: '/tmp/fake',
-      runner: 'pytest',
-    });
-    const adminProfId = (await adminProfResp.json()).id;
+  test('R-API-1.2 GET /profiles 非 admin 只见自己的且不泄露他人 env/webhook', async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const adminProfileName = `admin_only_profile_${stamp}`;
+    const adminEnvSecret = `admin_env_secret_${stamp}`;
+    const adminWebhook = `https://open.feishu.cn/open-apis/bot/v2/hook/admin_${stamp}`;
+    let adminProfId: string | null = null;
 
-    const userAList = await authedGet(page, userAToken, '/profiles');
-    expect(userAList.ok()).toBeTruthy();
-    const profiles = (await userAList.json()).profiles ?? (await userAList.json());
-    const profNames: string[] = Array.isArray(profiles)
-      ? profiles.map((p: { name: string }) => p.name)
-      : [];
+    try {
+      const adminProfResp = await authedPost(page, adminToken, '/profiles', {
+        name: adminProfileName,
+        tests_path: '/tmp/fake',
+        runner: 'pytest',
+        env: { ADMIN_ONLY_TOKEN: adminEnvSecret },
+        webhook_url: adminWebhook,
+      });
+      expect(adminProfResp.status(), await adminProfResp.text()).toBe(201);
+      adminProfId = (await adminProfResp.json()).id;
 
-    expect(profNames).not.toContain('admin_only_profile');
+      const userAList = await authedGet(page, userAToken, '/profiles');
+      const userAListBody = await userAList.text();
+      expect(userAList.status(), userAListBody).toBe(200);
+      expect(userAListBody).not.toContain(adminProfileName);
+      expect(userAListBody).not.toContain(adminEnvSecret);
+      expect(userAListBody).not.toContain(adminWebhook);
 
-    // Cleanup
-    await authedDelete(page, adminToken, `/profiles/${adminProfId}`);
+      const profiles = (JSON.parse(userAListBody) as Array<{ name: string }>).map(
+        (profile) => profile.name,
+      );
+      expect(profiles).not.toContain(adminProfileName);
+    } finally {
+      if (adminProfId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(adminProfId)}`).catch(
+          () => {},
+        );
+      }
+    }
   });
 
   test('R-API-1.3 GET /credentials 非 admin 只见自己的且不回显 secret', async ({ page }) => {
