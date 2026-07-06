@@ -1309,12 +1309,13 @@ test.describe('R-API-2 越权单资源', () => {
 
   test('R-API-2.10 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
     const stamp = Date.now();
+    const credentialName = `userA_delete_scope_${stamp}`;
     const secret = `ghp_delete_scope_${stamp}`;
     let credentialId: string | null = null;
 
     try {
       const createResp = await authedPost(page, userAToken, '/credentials', {
-        name: `userA_delete_scope_${stamp}`,
+        name: credentialName,
         type: 'https_token',
         secret,
       });
@@ -1332,6 +1333,8 @@ test.describe('R-API-2 越权单资源', () => {
       const userBDeleteBody = await userBDeleteResp.text();
       expect(userBDeleteResp.status(), userBDeleteBody).toBe(403);
       expect(userBDeleteBody).not.toContain(credentialId);
+      expect(userBDeleteBody).not.toContain(credentialName);
+      expect(userBDeleteBody).not.toContain(secret);
 
       const userAListResp = await authedGet(page, userAToken, '/credentials');
       expect(userAListResp.status(), await userAListResp.text()).toBe(200);
