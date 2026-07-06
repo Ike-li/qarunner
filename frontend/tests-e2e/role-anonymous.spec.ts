@@ -6,6 +6,7 @@
 // R-API-5.3 artifact 端点不带 token → 401 且不泄露路径
 // R-API-5.4 run adjunct 端点不带 token → 401 且不泄露 run id
 // R-API-5.5 mutation 端点不带 token → 401 且不泄露资源标识
+// R-API-5.6 schedule detail 端点不带 token → 401 且不泄露 schedule 标识
 //
 // Runs under the default `chromium` project (no storageState).
 
@@ -13,8 +14,10 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 
 import {
   createProfile,
+  createSchedule,
   deleteProfile,
   deleteRun,
+  deleteSchedule,
   loginAndGetContext,
   pollRunToTerminal,
 } from './helpers/api';
@@ -169,7 +172,7 @@ test.describe('R-API-5 anonymous API', () => {
     }
   });
 
-  test('R-API-5.4 diff/report/stream 端点不带 token → 401 且不泄露 run id', async ({ page }) => {
+  test('R-API-5.4 run detail/diff/report/stream 端点不带 token → 401 且不泄露 run id', async ({ page }) => {
     test.setTimeout(120_000);
 
     const adminCtx = await loginAndGetContext('admin');
@@ -197,6 +200,7 @@ test.describe('R-API-5 anonymous API', () => {
       expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(status);
 
       const endpoints = [
+        `/runs/${encodeURIComponent(runId)}`,
         `/runs/${encodeURIComponent(runId)}/diff`,
         `/runs/${encodeURIComponent(runId)}/report`,
         `/runs/${encodeURIComponent(runId)}/report/index.html`,
@@ -212,6 +216,44 @@ test.describe('R-API-5 anonymous API', () => {
     } finally {
       if (runId) {
         await deleteRun(adminCtx, runId).catch(() => {});
+      }
+      await adminCtx.dispose();
+    }
+  });
+
+  test('R-API-5.6 schedule detail 端点不带 token → 401 且不泄露 schedule 标识', async ({
+    page,
+  }) => {
+    const adminCtx = await loginAndGetContext('admin');
+    const stamp = Date.now();
+    const scheduleName = `anonymous_schedule_detail_${stamp}`;
+    let profileId: string | null = null;
+    let scheduleId: string | null = null;
+
+    try {
+      profileId = await createProfile(adminCtx, {
+        name: `anonymous_schedule_profile_${stamp}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      scheduleId = await createSchedule(adminCtx, {
+        name: scheduleName,
+        profile_id: profileId,
+        enabled: false,
+      });
+
+      const resp = await page.request.get(`/schedules/${encodeURIComponent(scheduleId)}`);
+      const bodyText = await resp.text();
+      expect(resp.status(), 'GET /schedules/{schedule} should be 401').toBe(401);
+      expect(bodyText).not.toContain(scheduleId);
+      expect(bodyText).not.toContain(scheduleName);
+      expect(bodyText).not.toContain(profileId);
+    } finally {
+      if (scheduleId) {
+        await deleteSchedule(adminCtx, scheduleId).catch(() => {});
+      }
+      if (profileId) {
+        await deleteProfile(adminCtx, profileId).catch(() => {});
       }
       await adminCtx.dispose();
     }
