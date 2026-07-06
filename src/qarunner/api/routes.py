@@ -1149,6 +1149,8 @@ async def get_test_markers(
         for js_file in suite_dir.glob("**/*"):
             if js_file.name.startswith(".") or js_file.name.startswith("__"):
                 continue
+            if not js_file.resolve().is_relative_to(suite_root):
+                continue
             if not js_file.is_file() or not js_file.name.endswith(_JS_TEST_SUFFIXES):
                 continue
             content = js_file.read_text(encoding="utf-8", errors="replace")

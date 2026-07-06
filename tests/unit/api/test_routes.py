@@ -3401,6 +3401,40 @@ def test_not_playwright_title():
     assert resp.json() == ["auth-flow", "regression", "smoke"]
 
 
+def test_get_markers_does_not_follow_playwright_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_dir = tmp_path / "external_tests"
+    tests_dir.mkdir()
+    suite_dir = tests_dir / "playwright_suite"
+    suite_dir.mkdir()
+    (suite_dir / "inside.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test('inside @inside', async ({ page }) => {});\n",
+        encoding="utf-8",
+    )
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_spec = outside / "secret.spec.ts"
+    outside_spec.write_text(
+        "import { test } from '@playwright/test';\n"
+        "test('secret @external-secret', async ({ page }) => {});\n",
+        encoding="utf-8",
+    )
+    (suite_dir / "secret.spec.ts").symlink_to(outside_spec)
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/tests/playwright_suite/markers")
+
+    assert resp.status_code == 200
+    assert "inside" in resp.json()
+    assert "external-secret" not in resp.json()
+
+
 def test_create_profile_rejects_nonpositive_timeout() -> None:
     # P2-5: a non-positive timeout would expire immediately; reject at the edge.
     container = _make_container()
