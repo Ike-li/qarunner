@@ -31,6 +31,17 @@ interface CredentialResponse {
   secret?: string;
 }
 
+interface RunResponse {
+  id: string;
+  runner: string;
+  status: string;
+  created_by: string;
+}
+
+interface RunTrendResponse {
+  points: Array<{ run_id: string }>;
+}
+
 // Helper: login and return the bearer token.
 async function getToken(
   request: APIRequestContext,
@@ -247,6 +258,128 @@ test.describe('R-API-1 静默过滤', () => {
     } finally {
       for (const credentialId of createdCredentialIds) {
         await authedDelete(page, adminToken, `/credentials/${credentialId}`).catch(() => {});
+      }
+    }
+  });
+
+  test('R-API-1.4 GET /runs/trend 非 admin 即使指定 profile_id 也不泄露他人 run_id', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    let adminProfileId: string | null = null;
+    let adminRunId: string | null = null;
+    let userProfileId: string | null = null;
+    let userRunId: string | null = null;
+
+    try {
+      const adminProfileResp = await authedPost(page, adminToken, '/profiles', {
+        name: `r1_trend_admin_${Date.now()}`,
+        tests_path: PLAYWRIGHT_SUITE,
+        runner: 'playwright',
+      });
+      expect(adminProfileResp.status(), await adminProfileResp.text()).toBe(201);
+      adminProfileId = (await adminProfileResp.json()).id;
+
+      const userProfileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `r1_trend_user_${Date.now()}`,
+        tests_path: PLAYWRIGHT_SUITE,
+        runner: 'playwright',
+      });
+      expect(userProfileResp.status(), await userProfileResp.text()).toBe(201);
+      userProfileId = (await userProfileResp.json()).id;
+
+      const adminRunResp = await authedPost(
+        page,
+        adminToken,
+        `/profiles/${encodeURIComponent(adminProfileId!)}/trigger`,
+        {},
+      );
+      expect(adminRunResp.status(), await adminRunResp.text()).toBe(202);
+      const adminRun = (await adminRunResp.json()) as RunResponse;
+      adminRunId = adminRun.id;
+      expect(adminRun.runner).toBe('playwright');
+      expect(adminRun.created_by).toBe(E2E_ADMIN);
+
+      const userRunResp = await authedPost(
+        page,
+        userAToken,
+        `/profiles/${encodeURIComponent(userProfileId!)}/trigger`,
+        {},
+      );
+      expect(userRunResp.status(), await userRunResp.text()).toBe(202);
+      const userRun = (await userRunResp.json()) as RunResponse;
+      userRunId = userRun.id;
+      expect(userRun.runner).toBe('playwright');
+      expect(userRun.created_by).toBe(USER_A);
+
+      for (const [token, runId] of [
+        [adminToken, adminRunId],
+        [userAToken, userRunId],
+      ] as const) {
+        let terminalStatus = '';
+        await expect(async () => {
+          const detailResp = await authedGet(page, token, `/runs/${encodeURIComponent(runId!)}`);
+          expect(detailResp.status(), await detailResp.text()).toBe(200);
+          const detail = (await detailResp.json()) as RunResponse;
+          terminalStatus = detail.status;
+          expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(terminalStatus);
+        }).toPass({ timeout: 120_000, intervals: [2_000] });
+        expect(terminalStatus).toBe('completed');
+      }
+
+      const ownTrendResp = await authedGet(
+        page,
+        userAToken,
+        `/runs/trend?tests_path=${encodeURIComponent(PLAYWRIGHT_SUITE)}&profile_id=${encodeURIComponent(
+          userProfileId!,
+        )}&limit=100`,
+      );
+      expect(ownTrendResp.status(), await ownTrendResp.text()).toBe(200);
+      const ownTrend = (await ownTrendResp.json()) as RunTrendResponse;
+      expect(ownTrend.points.map((point) => point.run_id)).toContain(userRunId);
+
+      const crossOwnerTrendResp = await authedGet(
+        page,
+        userAToken,
+        `/runs/trend?tests_path=${encodeURIComponent(PLAYWRIGHT_SUITE)}&profile_id=${encodeURIComponent(
+          adminProfileId!,
+        )}&limit=100`,
+      );
+      expect(crossOwnerTrendResp.status(), await crossOwnerTrendResp.text()).toBe(200);
+      const crossOwnerTrend = (await crossOwnerTrendResp.json()) as RunTrendResponse;
+      expect(crossOwnerTrend.points.map((point) => point.run_id)).not.toContain(adminRunId);
+
+      const adminTrendResp = await authedGet(
+        page,
+        adminToken,
+        `/runs/trend?tests_path=${encodeURIComponent(PLAYWRIGHT_SUITE)}&profile_id=${encodeURIComponent(
+          adminProfileId!,
+        )}&limit=100`,
+      );
+      expect(adminTrendResp.status(), await adminTrendResp.text()).toBe(200);
+      const adminTrend = (await adminTrendResp.json()) as RunTrendResponse;
+      expect(adminTrend.points.map((point) => point.run_id)).toContain(adminRunId);
+    } finally {
+      if (adminRunId) {
+        await authedDelete(page, adminToken, `/runs/${encodeURIComponent(adminRunId)}`).catch(
+          () => {},
+        );
+      }
+      if (userRunId) {
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(userRunId)}`).catch(
+          () => {},
+        );
+      }
+      if (adminProfileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(adminProfileId)}`).catch(
+          () => {},
+        );
+      }
+      if (userProfileId) {
+        await authedDelete(page, userAToken, `/profiles/${encodeURIComponent(userProfileId)}`).catch(
+          () => {},
+        );
       }
     }
   });
