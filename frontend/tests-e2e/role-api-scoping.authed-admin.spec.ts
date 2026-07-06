@@ -1737,12 +1737,23 @@ test.describe('R-API-2 越权单资源', () => {
 
 test.describe('R-API-3 admin 保护', () => {
   test('R-API-3.1 非管理员 POST /users → 403', async ({ page }) => {
+    const deniedUsername = `should_not_exist_${Date.now()}`;
+    const deniedPassword = `Denied-User-${Date.now()}!`;
     const resp = await authedPost(page, userAToken, '/users', {
-      username: 'should_not_exist',
-      password: 'whatever',
+      username: deniedUsername,
+      password: deniedPassword,
       role: 'user',
     });
-    expect(resp.status()).toBe(403);
+    const body = await resp.text();
+    expect(resp.status(), body).toBe(403);
+    expect(body).not.toContain(deniedUsername);
+    expect(body).not.toContain(deniedPassword);
+
+    const usersResp = await authedGet(page, adminToken, '/users');
+    const usersBody = await usersResp.text();
+    expect(usersResp.status(), usersBody).toBe(200);
+    expect(usersBody).not.toContain(deniedUsername);
+    expect(usersBody).not.toContain(deniedPassword);
   });
 
   test('R-API-3.2 DELETE /users/{自己} → 400（不能删自己）', async ({ page }) => {
@@ -1757,10 +1768,16 @@ test.describe('R-API-3 admin 保护', () => {
   });
 
   test('R-API-3.4 POST /runs/cleanup 非管理员 → 403', async ({ page }) => {
-    const resp = await authedPost(page, userAToken, '/runs/cleanup', {
-      retention_days: 30,
-    });
-    expect(resp.status()).toBe(403);
+    const retentionDays = 987;
+    const resp = await authedPost(
+      page,
+      userAToken,
+      `/runs/cleanup?retention_days=${retentionDays}`,
+      {},
+    );
+    const body = await resp.text();
+    expect(resp.status(), body).toBe(403);
+    expect(body).not.toContain(String(retentionDays));
   });
 
   test('R-API-3.5 非管理员 PUT|DELETE /users/{username} → 403 且不改变用户', async ({
