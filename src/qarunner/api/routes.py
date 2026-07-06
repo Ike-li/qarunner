@@ -680,9 +680,10 @@ async def link_test_suite(
         try:
             tests_root.mkdir(parents=True, exist_ok=True)
         except Exception as e:
+            msg = _scrub_paths(str(e), str(tests_root))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create tests_root directory: {str(e)}",
+                detail=f"Failed to create tests_root directory: {msg}",
             ) from e
 
     target_path = Path(payload.path)

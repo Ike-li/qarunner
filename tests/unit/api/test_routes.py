@@ -4432,6 +4432,32 @@ def test_link_clear_existing_failure_hides_tests_root(
     assert existing.exists()
 
 
+def test_link_tests_root_mkdir_failure_hides_tests_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    local = tmp_path / "proj"
+    local.mkdir()
+
+    original_mkdir = Path.mkdir
+
+    def _fail_tests_root_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        if self == tests_root:
+            raise OSError(f"cannot create {self}")
+        original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _fail_tests_root_mkdir)
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/tests/link", json={"path": str(local)})
+
+    assert resp.status_code == 500
+    assert "Failed to create tests_root" in resp.json()["detail"]
+    assert str(tests_root) not in resp.text
+
+
 # ── External test suites: git clone / pull / delete (stage 2) ────────────
 
 
