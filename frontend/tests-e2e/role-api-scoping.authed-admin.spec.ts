@@ -37,6 +37,7 @@ interface RunResponse {
   status: string;
   created_by: string;
   locked?: boolean;
+  env?: Record<string, string>;
   cases?: Array<{ suite: string; name: string; status: string }>;
 }
 
@@ -1591,6 +1592,7 @@ test.describe('R-API-2 越权单资源', () => {
     test.setTimeout(120_000);
 
     let runId: string | undefined;
+    const runEnvSecret = `r2_run_detail_env_secret_${Date.now()}`;
 
     const waitTerminal = async (token: string, id: string) => {
       await expect(async () => {
@@ -1611,7 +1613,7 @@ test.describe('R-API-2 越权单资源', () => {
         selected_files: [],
         selected_markers: [],
         extra_args: '',
-        env: {},
+        env: { RUN_DETAIL_SECRET: runEnvSecret },
       });
       expect(createResp.status(), await createResp.text()).toBe(202);
       const created = (await createResp.json()) as RunResponse;
@@ -1622,18 +1624,21 @@ test.describe('R-API-2 越权单资源', () => {
       const userBGetBody = await userBGetResp.text();
       expect(userBGetResp.status(), userBGetBody).toBe(403);
       expect(userBGetBody).not.toContain(runId);
+      expect(userBGetBody).not.toContain(runEnvSecret);
 
       const ownerGetResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId)}`);
       expect(ownerGetResp.status(), await ownerGetResp.text()).toBe(200);
       const ownerRun = (await ownerGetResp.json()) as RunResponse;
       expect(ownerRun.id).toBe(runId);
       expect(ownerRun.created_by).toBe(USER_A);
+      expect(ownerRun.env?.RUN_DETAIL_SECRET).toBe(runEnvSecret);
 
       const adminGetResp = await authedGet(page, adminToken, `/runs/${encodeURIComponent(runId)}`);
       expect(adminGetResp.status(), await adminGetResp.text()).toBe(200);
       const adminRun = (await adminGetResp.json()) as RunResponse;
       expect(adminRun.id).toBe(runId);
       expect(adminRun.created_by).toBe(USER_A);
+      expect(adminRun.env?.RUN_DETAIL_SECRET).toBe(runEnvSecret);
     } finally {
       if (runId) {
         await waitTerminal(userAToken, runId);
