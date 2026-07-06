@@ -135,12 +135,18 @@ test.describe('R-API-5 anonymous API', () => {
   });
 
   test('R-API-5.2 公开端点不带 token 可用 — 错误凭据返回 401 而非 500', async ({ page }) => {
+    const rejectedUsername = `anonymous_bad_login_${Date.now()}`;
+    const rejectedPassword = `Secret-Probe-${Date.now()}!`;
+
     // POST /auth/login is public (no token required).
     // With bad credentials it should return 401, not 500 or any other error.
     const badLogin = await page.request.post('/auth/login', {
-      data: { username: 'nonexistent', password: 'wrong' },
+      data: { username: rejectedUsername, password: rejectedPassword },
     });
-    expect(badLogin.status()).toBe(401);
+    const badLoginBody = await badLogin.text();
+    expect(badLogin.status(), badLoginBody).toBe(401);
+    expect(badLoginBody).not.toContain(rejectedUsername);
+    expect(badLoginBody).not.toContain(rejectedPassword);
 
     // GET /health is on the backend (:8000) and not proxied through Vite,
     // so we verify it directly. In the official Playwright Docker network the
