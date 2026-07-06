@@ -4,6 +4,7 @@
 // R-API-5.1 受保护端点不带 token → 401
 // R-API-5.2 公开端点不带 token 可用
 // R-API-5.3 artifact 端点不带 token → 401 且不泄露路径
+// R-API-5.4 run adjunct 端点不带 token → 401 且不泄露 run id
 //
 // Runs under the default `chromium` project (no storageState).
 
@@ -25,6 +26,7 @@ const backendUrl =
     ? 'http://backend:8000'
     : 'http://localhost:8000');
 const PLAYWRIGHT_SUITE = 'sample_playwright';
+const PYTEST_SUITE = 'sample_tests';
 
 interface RunResponse {
   id: string;
@@ -136,6 +138,53 @@ test.describe('R-API-5 anonymous API', () => {
       }
       if (profileId) {
         await deleteProfile(adminCtx, profileId).catch(() => {});
+      }
+      await adminCtx.dispose();
+    }
+  });
+
+  test('R-API-5.4 diff/report/stream 端点不带 token → 401 且不泄露 run id', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    const adminCtx = await loginAndGetContext('admin');
+    let runId: string | null = null;
+    try {
+      const runResp = await adminCtx.post('/runs', {
+        data: {
+          tests_path: PYTEST_SUITE,
+          runner: 'pytest',
+          args: [],
+          allure: false,
+          timeout: 60,
+          selected_files: [],
+          selected_markers: [],
+          extra_args: '',
+          env: {},
+        },
+      });
+      expect(runResp.status(), await runResp.text()).toBe(202);
+      const run = (await runResp.json()) as RunResponse;
+      runId = run.id;
+      expect(run.runner).toBe('pytest');
+
+      const status = await pollRunToTerminal(adminCtx, runId, 60_000, 1_000);
+      expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(status);
+
+      const endpoints = [
+        `/runs/${encodeURIComponent(runId)}/diff`,
+        `/runs/${encodeURIComponent(runId)}/report`,
+        `/runs/${encodeURIComponent(runId)}/stream`,
+      ];
+
+      for (const endpoint of endpoints) {
+        const resp = await page.request.get(endpoint);
+        const bodyText = await resp.text();
+        expect(resp.status(), `GET ${endpoint} should be 401`).toBe(401);
+        expect(bodyText).not.toContain(runId);
+      }
+    } finally {
+      if (runId) {
+        await deleteRun(adminCtx, runId).catch(() => {});
       }
       await adminCtx.dispose();
     }
