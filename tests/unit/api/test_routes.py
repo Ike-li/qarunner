@@ -498,6 +498,19 @@ def test_create_run_forbidden_for_other_users_registered_suite() -> None:
     assert container.orchestrator.last_req is None
 
 
+def test_create_run_allows_admin_registered_shared_suite_for_non_admin() -> None:
+    container = _make_container()
+    _save_suite_in_store(container.store, name="shared_suite", created_by="admin")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.post("/runs", json={"tests_path": "shared_suite", "runner": "pytest"})
+
+    assert resp.status_code == 202
+    assert resp.json()["tests_path"] == "shared_suite"
+
+
 def test_create_run_playwright_docker_allowed() -> None:
     # All runs are docker now — executor_mode removed from API input.
     container = _make_container()
@@ -2366,6 +2379,7 @@ def test_list_tests_and_suites_hide_other_users_registered_suites(
     tests_root = tmp_path / "external_tests"
     tests_root.mkdir()
     (tests_root / "alice_suite").mkdir()
+    (tests_root / "admin_suite").mkdir()
     (tests_root / "bob_suite").mkdir()
     (tests_root / "manual_suite").mkdir()
     monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
@@ -2375,6 +2389,12 @@ def test_list_tests_and_suites_hide_other_users_registered_suites(
         name="alice_suite",
         created_by="alice",
         repo_url="https://example.com/alice.git",
+    )
+    _save_suite_in_store(
+        container.store,
+        name="admin_suite",
+        created_by="admin",
+        repo_url="https://example.com/admin-shared.git",
     )
     _save_suite_in_store(
         container.store,
@@ -2390,13 +2410,14 @@ def test_list_tests_and_suites_hide_other_users_registered_suites(
         suites_resp = client.get("/suites")
 
     assert tests_resp.status_code == 200
-    assert tests_resp.json() == ["alice_suite", "manual_suite"]
+    assert tests_resp.json() == ["admin_suite", "alice_suite", "manual_suite"]
     assert "bob_suite" not in tests_resp.text
 
     assert suites_resp.status_code == 200
     suites_body = suites_resp.text
     suite_names = [suite["name"] for suite in suites_resp.json()]
-    assert suite_names == ["alice_suite", "manual_suite"]
+    assert suite_names == ["admin_suite", "alice_suite", "manual_suite"]
+    assert "admin-shared" in suites_body
     assert "bob_suite" not in suites_body
     assert "bob-private" not in suites_body
 

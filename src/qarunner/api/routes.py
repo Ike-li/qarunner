@@ -124,8 +124,12 @@ async def _require_registered_suite_access(
     visibility; destructive operations apply stricter admin-only rules there.
     """
     suite = await container.store.get_suite(suite_name)
-    if suite is not None:
+    if suite is not None and not _is_shared_suite(suite, container.settings.admin_user):
         _require_owner_access(suite.created_by, user)
+
+
+def _is_shared_suite(suite: TestSuite, admin_user: str) -> bool:
+    return suite.created_by in {admin_user, "system"}
 
 
 async def _visible_suite_names(
@@ -139,6 +143,7 @@ async def _visible_suite_names(
         name
         for name in names
         if (suite := suites_by_name.get(name)) is None or suite.created_by == user.username
+        or _is_shared_suite(suite, container.settings.admin_user)
     ]
 
 
