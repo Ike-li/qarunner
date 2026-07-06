@@ -78,34 +78,59 @@ test.describe('R-API-5 anonymous API', () => {
   // so these calls are effectively anonymous.
 
   test('R-API-5.1 受保护端点不带 token → 401', async ({ page }) => {
+    const protectedSuite = `anonymous_protected_suite_${Date.now()}`;
+    const protectedCaseName = `anonymous_protected_case_${Date.now()}`;
+    const protectedCron = '13 7 * * *';
+    const protectedTimezone = 'America/New_York';
     const schedulePreviewQuery = new URLSearchParams({
-      expression: '*/5 * * * *',
-      timezone: 'UTC',
+      expression: protectedCron,
+      timezone: protectedTimezone,
     });
     const caseHistoryQuery = new URLSearchParams({
-      tests_path: PYTEST_SUITE,
-      suite: PYTEST_SUITE,
-      name: 'test_example',
+      tests_path: protectedSuite,
+      suite: protectedSuite,
+      name: protectedCaseName,
     });
 
-    for (const endpoint of [
-      '/auth/me',
-      '/users',
-      '/credentials',
-      '/tests',
-      '/suites',
-      `/tests/${encodeURIComponent(PYTEST_SUITE)}/tree`,
-      `/tests/${encodeURIComponent(PYTEST_SUITE)}/markers`,
-      '/runs',
-      `/runs/trend?tests_path=${encodeURIComponent(PYTEST_SUITE)}`,
-      '/profiles',
-      '/metrics',
-      `/cases/history?${caseHistoryQuery.toString()}`,
-      '/schedules',
-      `/schedules/preview?${schedulePreviewQuery.toString()}`,
-    ]) {
-      const resp = await page.request.get(endpoint);
-      expect(resp.status(), `GET ${endpoint} should be 401`).toBe(401);
+    const protectedGetRequests = [
+      { endpoint: '/auth/me', forbidden: [] },
+      { endpoint: '/users', forbidden: [] },
+      { endpoint: '/credentials', forbidden: [] },
+      { endpoint: '/tests', forbidden: [] },
+      { endpoint: '/suites', forbidden: [] },
+      {
+        endpoint: `/tests/${encodeURIComponent(PYTEST_SUITE)}/tree`,
+        forbidden: [PYTEST_SUITE],
+      },
+      {
+        endpoint: `/tests/${encodeURIComponent(PYTEST_SUITE)}/markers`,
+        forbidden: [PYTEST_SUITE],
+      },
+      { endpoint: '/runs', forbidden: [] },
+      {
+        endpoint: `/runs/trend?tests_path=${encodeURIComponent(protectedSuite)}`,
+        forbidden: [protectedSuite],
+      },
+      { endpoint: '/profiles', forbidden: [] },
+      { endpoint: '/metrics', forbidden: [] },
+      {
+        endpoint: `/cases/history?${caseHistoryQuery.toString()}`,
+        forbidden: [protectedSuite, protectedCaseName],
+      },
+      { endpoint: '/schedules', forbidden: [] },
+      {
+        endpoint: `/schedules/preview?${schedulePreviewQuery.toString()}`,
+        forbidden: [protectedCron, protectedTimezone],
+      },
+    ];
+
+    for (const request of protectedGetRequests) {
+      const resp = await page.request.get(request.endpoint);
+      const bodyText = await resp.text();
+      expect(resp.status(), `GET ${request.endpoint} should be 401`).toBe(401);
+      for (const value of request.forbidden) {
+        expect(bodyText, `GET ${request.endpoint} should not leak ${value}`).not.toContain(value);
+      }
     }
   });
 
