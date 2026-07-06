@@ -143,63 +143,107 @@ test.afterAll(async ({ request }) => {
 // ── R-API-1  Silent filtering (list endpoints) ───────────────────────────
 
 test.describe('R-API-1 静默过滤', () => {
-  test('R-API-1.1 GET /runs 非 admin 只见自己的', async ({ page }) => {
-    // Admin creates a profile + run
-    const adminProfileResp = await authedPost(page, adminToken, '/profiles', {
-      name: 'admin_scope_profile',
-      tests_path: '/tmp/fake_tests',
-      runner: 'pytest',
-    });
-    expect(adminProfileResp.ok()).toBeTruthy();
-    const adminProfileId = (await adminProfileResp.json()).id;
+  test('R-API-1.1 GET /runs 非 admin 只见自己的且不泄露他人 env', async ({ page }) => {
+    test.setTimeout(120_000);
 
-    // Trigger a run as admin (needs tests_path, not profile_id)
-    const adminRunResp = await authedPost(page, adminToken, '/runs', {
-      tests_path: '/tmp/fake_tests',
-      runner: 'pytest',
-    });
-    // 201 or 400 (if executor unavailable) — either way we try
+    const stamp = Date.now();
+    const adminEnvSecret = `admin_run_env_secret_${stamp}`;
+    const userEnvSecret = `user_run_env_secret_${stamp}`;
+    let adminProfileId: string | null = null;
+    let userProfileId: string | null = null;
     let adminRunId: string | null = null;
-    if (adminRunResp.ok()) {
-      adminRunId = (await adminRunResp.json()).id;
-    }
-
-    // userA creates a profile + run
-    const userProfileResp = await authedPost(page, userAToken, '/profiles', {
-      name: 'userA_scope_profile',
-      tests_path: '/tmp/fake_tests',
-      runner: 'pytest',
-    });
-    expect(userProfileResp.ok()).toBeTruthy();
-    const userProfileId = (await userProfileResp.json()).id;
-
-    const userRunResp = await authedPost(page, userAToken, '/runs', {
-      tests_path: '/tmp/fake_tests',
-      runner: 'pytest',
-    });
     let userRunId: string | null = null;
-    if (userRunResp.ok()) {
-      userRunId = (await userRunResp.json()).id;
-    }
 
-    // userA GET /runs — should only see their own
-    const listResp = await authedGet(page, userAToken, '/runs');
-    expect(listResp.ok()).toBeTruthy();
-    const runs = (await listResp.json()).runs ?? (await listResp.json());
-    const runIds: string[] = Array.isArray(runs) ? runs.map((r: { id: string }) => r.id) : [];
+    const waitTerminal = async (token: string, runId: string) => {
+      await expect(async () => {
+        const detailResp = await authedGet(page, token, `/runs/${encodeURIComponent(runId)}`);
+        expect(detailResp.status(), await detailResp.text()).toBe(200);
+        const detail = (await detailResp.json()) as RunResponse;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+    };
 
-    if (userRunId) {
+    try {
+      const adminProfileResp = await authedPost(page, adminToken, '/profiles', {
+        name: `admin_scope_profile_${stamp}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(adminProfileResp.status(), await adminProfileResp.text()).toBe(201);
+      adminProfileId = (await adminProfileResp.json()).id;
+
+      const adminRunResp = await authedPost(page, adminToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: { ADMIN_ONLY_RUN_TOKEN: adminEnvSecret },
+      });
+      expect(adminRunResp.status(), await adminRunResp.text()).toBe(202);
+      adminRunId = ((await adminRunResp.json()) as RunResponse).id;
+
+      const userProfileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `userA_scope_profile_${stamp}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(userProfileResp.status(), await userProfileResp.text()).toBe(201);
+      userProfileId = (await userProfileResp.json()).id;
+
+      const userRunResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: { USER_RUN_TOKEN: userEnvSecret },
+      });
+      expect(userRunResp.status(), await userRunResp.text()).toBe(202);
+      userRunId = ((await userRunResp.json()) as RunResponse).id;
+
+      const listResp = await authedGet(page, userAToken, '/runs');
+      const listBody = await listResp.text();
+      expect(listResp.status(), listBody).toBe(200);
+      expect(listBody).toContain(userRunId);
+      expect(listBody).toContain(userEnvSecret);
+      expect(listBody).not.toContain(adminRunId);
+      expect(listBody).not.toContain(adminEnvSecret);
+
+      const runs = (JSON.parse(listBody) as { runs: RunResponse[] }).runs ?? [];
+      const runIds = runs.map((run) => run.id);
       expect(runIds).toContain(userRunId);
-    }
-    if (adminRunId) {
       expect(runIds).not.toContain(adminRunId);
+    } finally {
+      if (adminRunId) {
+        await waitTerminal(adminToken, adminRunId);
+        await authedDelete(page, adminToken, `/runs/${encodeURIComponent(adminRunId)}`).catch(
+          () => {},
+        );
+      }
+      if (userRunId) {
+        await waitTerminal(userAToken, userRunId);
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(userRunId)}`).catch(
+          () => {},
+        );
+      }
+      if (adminProfileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(adminProfileId)}`).catch(
+          () => {},
+        );
+      }
+      if (userProfileId) {
+        await authedDelete(page, userAToken, `/profiles/${encodeURIComponent(userProfileId)}`).catch(
+          () => {},
+        );
+      }
     }
-
-    // Cleanup
-    if (adminRunId) await authedDelete(page, adminToken, `/runs/${adminRunId}`);
-    if (userRunId) await authedDelete(page, userAToken, `/runs/${userRunId}`);
-    await authedDelete(page, adminToken, `/profiles/${adminProfileId}`);
-    await authedDelete(page, userAToken, `/profiles/${userProfileId}`);
   });
 
   test('R-API-1.2 GET /profiles 非 admin 只见自己的且不泄露他人 env/webhook', async ({
