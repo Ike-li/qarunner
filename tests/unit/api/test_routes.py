@@ -982,6 +982,76 @@ def test_run_artifact_endpoints_do_not_follow_run_dir_symlink_escape(
     assert b"TOPSECRET" not in resp.content
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("/runs/pw-nested-link/artifacts", 200),
+        ("/runs/pw-nested-link/artifacts.zip", 404),
+        ("/runs/pw-nested-link/artifacts/secret.txt", 404),
+    ],
+)
+def test_run_artifact_endpoints_do_not_follow_artifact_dir_symlink_escape(
+    tmp_path: Path, path: str, expected_status: int
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(
+        container.store,
+        id="pw-nested-link",
+        runner="playwright",
+        status=RunStatus.COMPLETED,
+    )
+    outside_artifacts = tmp_path / "outside-results"
+    outside_artifacts.mkdir()
+    (outside_artifacts / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
+    run_results = artifacts_root / "pw-nested-link" / "results"
+    run_results.mkdir(parents=True)
+    (run_results / "playwright-results").symlink_to(
+        outside_artifacts, target_is_directory=True
+    )
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get(path)
+
+    assert resp.status_code == expected_status
+    if path.endswith("/artifacts"):
+        assert resp.json() == {"artifacts": []}
+    assert b"TOPSECRET" not in resp.content
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("/runs/pw-resolve-error/artifacts", 200),
+        ("/runs/pw-resolve-error/artifacts.zip", 404),
+        ("/runs/pw-resolve-error/artifacts/secret.txt", 404),
+    ],
+)
+def test_run_artifact_endpoints_hide_artifact_root_resolve_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, expected_status: int
+) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path, run_id="pw-resolve-error")
+    (artifact_dir / "secret.txt").write_text("SHOULD_NOT_LEAK", encoding="utf-8")
+
+    original_resolve = Path.resolve
+
+    def _raise_on_artifact_root(self: Path, *args: object, **kwargs: object):
+        if self == artifact_dir:
+            raise OSError("resolve failed")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _raise_on_artifact_root)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get(path)
+
+    assert resp.status_code == expected_status
+    if path.endswith("/artifacts"):
+        assert resp.json() == {"artifacts": []}
+    assert b"SHOULD_NOT_LEAK" not in resp.content
+
+
 def test_download_run_artifact_success(tmp_path: Path) -> None:
     container, artifact_dir = _playwright_artifact_run(tmp_path)
     (artifact_dir / "trace.zip").write_bytes(b"trace-data")

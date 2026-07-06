@@ -1484,7 +1484,15 @@ def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path | None:
     run_dir = _safe_run_artifact_dir(artifacts_root, run_id)
     if run_dir is None:
         return None
-    return run_dir / "results" / "playwright-results"
+    artifact_root = run_dir / "results" / "playwright-results"
+    try:
+        run_root = run_dir.resolve()
+        artifact_root_resolved = artifact_root.resolve()
+    except OSError:
+        return None
+    if not artifact_root_resolved.is_relative_to(run_root):
+        return None
+    return artifact_root
 
 
 def _artifact_content_type(path: Path) -> str:
