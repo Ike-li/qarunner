@@ -55,6 +55,11 @@ interface ScheduleResponse {
   created_by: string;
 }
 
+interface LinkSuiteResponse {
+  success: boolean;
+  suite_name: string;
+}
+
 // Helper: login and return the bearer token.
 async function getToken(
   request: APIRequestContext,
@@ -937,6 +942,42 @@ test.describe('R-API-2 越权单资源', () => {
     } finally {
       if (credentialId) {
         await authedDelete(page, adminToken, `/credentials/${credentialId}`).catch(() => {});
+      }
+    }
+  });
+
+  test('R-API-2.10 /tests/link|delete 遵守 suite owner/admin 边界', async ({ page }) => {
+    const suiteName = `r2_suite_scope_${Date.now()}`;
+    let linked = false;
+
+    try {
+      const ownerLinkResp = await authedPost(page, userAToken, '/tests/link', {
+        path: `/tmp/${suiteName}`,
+      });
+      expect(ownerLinkResp.status(), await ownerLinkResp.text()).toBe(200);
+      const ownerLink = (await ownerLinkResp.json()) as LinkSuiteResponse;
+      linked = true;
+      expect(ownerLink.success).toBe(true);
+      expect(ownerLink.suite_name).toBe(suiteName);
+
+      const userBRelinkResp = await authedPost(page, userBToken, '/tests/link', {
+        path: `/tmp/attacker/${suiteName}`,
+      });
+      const userBRelinkBody = await userBRelinkResp.text();
+      expect(userBRelinkResp.status(), userBRelinkBody).toBe(403);
+      expect(userBRelinkBody).not.toContain(suiteName);
+
+      const userBDeleteResp = await authedDelete(page, userBToken, `/tests/${suiteName}`);
+      const userBDeleteBody = await userBDeleteResp.text();
+      expect(userBDeleteResp.status(), userBDeleteBody).toBe(403);
+      expect(userBDeleteBody).not.toContain(suiteName);
+
+      const adminDeleteResp = await authedDelete(page, adminToken, `/tests/${suiteName}`);
+      expect(adminDeleteResp.status(), await adminDeleteResp.text()).toBe(200);
+      linked = false;
+    } finally {
+      if (linked) {
+        await authedDelete(page, adminToken, `/tests/${suiteName}`).catch(() => {});
       }
     }
   });
