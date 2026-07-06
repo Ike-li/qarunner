@@ -1479,9 +1479,12 @@ def _safe_run_artifact_dir(artifacts_root: str, run_id: str) -> Path | None:
         return None
 
 
-def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path:
+def _run_artifacts_dir(artifacts_root: str, run_id: str) -> Path | None:
     """Return the Playwright output directory for a run."""
-    return Path(artifacts_root) / run_id / "results" / "playwright-results"
+    run_dir = _safe_run_artifact_dir(artifacts_root, run_id)
+    if run_dir is None:
+        return None
+    return run_dir / "results" / "playwright-results"
 
 
 def _artifact_content_type(path: Path) -> str:
@@ -1698,7 +1701,7 @@ async def list_run_artifacts(
     _require_run_access(run, current_user)
 
     artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
-    if not artifact_root.is_dir():
+    if artifact_root is None or not artifact_root.is_dir():
         return RunArtifactListResponse()
 
     artifacts: list[RunArtifactResponse] = []
@@ -1728,7 +1731,7 @@ async def download_run_artifacts_archive(
     _require_run_access(run, current_user)
 
     artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
-    if not artifact_root.is_dir():
+    if artifact_root is None or not artifact_root.is_dir():
         raise HTTPException(status_code=404, detail="Artifacts not available")
 
     payload = io.BytesIO()
@@ -1761,6 +1764,8 @@ async def download_run_artifact(
     from qarunner.core.paths import safe_subpath
 
     artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
+    if artifact_root is None:
+        raise HTTPException(status_code=404, detail="Artifacts not available")
     try:
         artifact_path = safe_subpath(str(artifact_root), path)
     except UnsafePath:

@@ -924,6 +924,42 @@ def test_run_artifact_endpoints_enforce_owner_or_admin_access(
         assert "trace" not in resp.text
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("/runs/pw-link/artifacts", 200),
+        ("/runs/pw-link/artifacts.zip", 404),
+        ("/runs/pw-link/artifacts/secret.txt", 404),
+    ],
+)
+def test_run_artifact_endpoints_do_not_follow_run_dir_symlink_escape(
+    tmp_path: Path, path: str, expected_status: int
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(
+        container.store,
+        id="pw-link",
+        runner="playwright",
+        status=RunStatus.COMPLETED,
+    )
+    outside_root = tmp_path / "outside-run"
+    outside_artifacts = outside_root / "results" / "playwright-results"
+    outside_artifacts.mkdir(parents=True)
+    (outside_artifacts / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
+    artifacts_root.mkdir()
+    (artifacts_root / "pw-link").symlink_to(outside_root, target_is_directory=True)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get(path)
+
+    assert resp.status_code == expected_status
+    if path.endswith("/artifacts"):
+        assert resp.json() == {"artifacts": []}
+    assert b"TOPSECRET" not in resp.content
+
+
 def test_download_run_artifact_success(tmp_path: Path) -> None:
     container, artifact_dir = _playwright_artifact_run(tmp_path)
     (artifact_dir / "trace.zip").write_bytes(b"trace-data")
