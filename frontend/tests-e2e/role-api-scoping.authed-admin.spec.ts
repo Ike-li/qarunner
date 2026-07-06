@@ -1430,6 +1430,7 @@ test.describe('R-API-2 越权单资源', () => {
     test.setTimeout(120_000);
 
     const cleanupRuns: Array<{ token: string; id: string }> = [];
+    const rerunEnvSecret = `rerun_scope_secret_${Date.now()}`;
 
     const waitTerminal = async (token: string, runId: string) => {
       await expect(async () => {
@@ -1450,7 +1451,7 @@ test.describe('R-API-2 越权单资源', () => {
         selected_files: [],
         selected_markers: [],
         extra_args: '',
-        env: {},
+        env: { RERUN_SCOPE_TOKEN: rerunEnvSecret },
       });
       expect(originalResp.status(), await originalResp.text()).toBe(202);
       const original = (await originalResp.json()) as RunResponse;
@@ -1466,6 +1467,7 @@ test.describe('R-API-2 越权单资源', () => {
       const userBRerunBody = await userBRerunResp.text();
       expect(userBRerunResp.status(), userBRerunBody).toBe(403);
       expect(userBRerunBody).not.toContain(original.id);
+      expect(userBRerunBody).not.toContain(rerunEnvSecret);
 
       const ownerRerunResp = await authedPost(
         page,
@@ -1502,6 +1504,7 @@ test.describe('R-API-2 越权单资源', () => {
     test.setTimeout(120_000);
 
     let runId: string | undefined;
+    const lockCancelEnvSecret = `lock_cancel_scope_secret_${Date.now()}`;
 
     const waitTerminal = async (token: string, id: string) => {
       await expect(async () => {
@@ -1522,7 +1525,7 @@ test.describe('R-API-2 越权单资源', () => {
         selected_files: [],
         selected_markers: [],
         extra_args: '',
-        env: {},
+        env: { LOCK_CANCEL_SCOPE_TOKEN: lockCancelEnvSecret },
       });
       expect(createResp.status(), await createResp.text()).toBe(202);
       const created = (await createResp.json()) as RunResponse;
@@ -1540,6 +1543,7 @@ test.describe('R-API-2 越权单资源', () => {
       const userBLockBody = await userBLockResp.text();
       expect(userBLockResp.status(), userBLockBody).toBe(403);
       expect(userBLockBody).not.toContain(runId);
+      expect(userBLockBody).not.toContain(lockCancelEnvSecret);
 
       const afterDeniedLockResp = await authedGet(
         page,
@@ -1569,6 +1573,7 @@ test.describe('R-API-2 越权单资源', () => {
       const userBUnlockBody = await userBUnlockResp.text();
       expect(userBUnlockResp.status(), userBUnlockBody).toBe(403);
       expect(userBUnlockBody).not.toContain(runId);
+      expect(userBUnlockBody).not.toContain(lockCancelEnvSecret);
 
       const stillLockedResp = await authedGet(
         page,
@@ -1596,6 +1601,7 @@ test.describe('R-API-2 越权单资源', () => {
       const userBCancelBody = await userBCancelResp.text();
       expect(userBCancelResp.status(), userBCancelBody).toBe(403);
       expect(userBCancelBody).not.toContain(runId);
+      expect(userBCancelBody).not.toContain(lockCancelEnvSecret);
 
       const ownerCancelResp = await authedPost(
         page,
