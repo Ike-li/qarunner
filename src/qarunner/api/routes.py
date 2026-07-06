@@ -115,6 +115,19 @@ async def _require_profile_access(container: Container, profile_id: str, user: U
         _require_owner_access(profile.created_by, user)
 
 
+async def _require_registered_suite_access(
+    container: Container, suite_name: str, user: User
+) -> None:
+    """Raise 403 for recorded suites owned by another user.
+
+    Unrecorded directories under tests_root keep their existing login-only
+    visibility; destructive operations apply stricter admin-only rules there.
+    """
+    suite = await container.store.get_suite(suite_name)
+    if suite is not None:
+        _require_owner_access(suite.created_by, user)
+
+
 def _client_ip(request: Request) -> str:
     """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
 
@@ -1049,10 +1062,12 @@ def _is_test_tree_file(name: str) -> bool:
 async def get_test_tree(
     request: Request,
     suite_name: str,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict]:
     """Recursively scan a test suite directory and return its file-tree structure."""
-    cfg = request.app.state.container.settings
+    container = request.app.state.container
+    await _require_registered_suite_access(container, suite_name, current_user)
+    cfg = container.settings
     from qarunner.core.paths import safe_subpath
 
     try:
@@ -1100,12 +1115,14 @@ async def get_test_tree(
 async def get_test_markers(
     request: Request,
     suite_name: str,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> list[str]:
     """Statically parse pytest markers and Playwright title tags under the suite."""
     import ast
 
-    cfg = request.app.state.container.settings
+    container = request.app.state.container
+    await _require_registered_suite_access(container, suite_name, current_user)
+    cfg = container.settings
     from qarunner.core.paths import safe_subpath
 
     try:

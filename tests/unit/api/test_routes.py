@@ -3465,6 +3465,32 @@ def test_test_suite_path_errors_hide_tests_root(
     assert str(tests_dir) not in resp.text
 
 
+@pytest.mark.parametrize("endpoint", ["tree", "markers"])
+def test_test_suite_scans_forbidden_for_non_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    tests_dir = tmp_path / "test_suites"
+    tests_dir.mkdir()
+    suite_dir = tests_dir / "private_suite"
+    suite_dir.mkdir()
+    (suite_dir / "test_private.py").write_text(
+        "import pytest\n\n@pytest.mark.private_marker\ndef test_private():\n    pass\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+    container = _make_container()
+    _save_suite_in_store(container.store, name="private_suite", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.get(f"/tests/private_suite/{endpoint}")
+
+    assert resp.status_code == 403
+    assert "test_private.py" not in resp.text
+    assert "private_marker" not in resp.text
+
+
 def test_test_suite_scans_do_not_follow_symlink_escape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
