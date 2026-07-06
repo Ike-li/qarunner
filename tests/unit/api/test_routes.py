@@ -1887,6 +1887,19 @@ def test_cancel_run_forbidden_for_non_owner() -> None:
     assert resp.status_code == 403
 
 
+def test_cancel_run_forbidden_precedes_terminal_state() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store, id="r-cancel", created_by="bob", status=RunStatus.COMPLETED
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/runs/r-cancel/cancel")
+    assert resp.status_code == 403
+    assert "already finished" not in resp.text
+
+
 def test_cancel_run_nonexistent_404() -> None:
     container = _make_container()
     app = create_app(container)
@@ -1961,6 +1974,24 @@ def test_delete_run_forbidden_for_non_owner() -> None:
         resp = client.delete("/runs/r-del")
     assert resp.status_code == 403
     assert "r-del" in container.store._runs  # type: ignore[attr-defined]
+
+
+def test_delete_run_forbidden_precedes_locked_state() -> None:
+    container = _make_container()
+    _make_run_in_store(
+        container.store,
+        id="r-lock",
+        created_by="bob",
+        status=RunStatus.COMPLETED,
+        locked=True,
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.delete("/runs/r-lock")
+    assert resp.status_code == 403
+    assert "locked" not in resp.text
+    assert "r-lock" in container.store._runs  # type: ignore[attr-defined]
 
 
 def test_delete_run_nonexistent_404() -> None:
