@@ -2096,6 +2096,31 @@ def test_delete_run_owner_removes_row_and_artifacts(
     assert "r-del" not in container.store._runs  # type: ignore[attr-defined]
 
 
+def test_delete_run_does_not_remove_artifacts_parent_for_traversal_run_id(
+    tmp_path: Path,
+) -> None:
+    """A poisoned run id must not let artifact cleanup escape artifacts_root."""
+    workspace = tmp_path / "workspace"
+    artifacts_root = workspace / "artifacts"
+    protected_dir = workspace / "protected"
+    artifacts_root.mkdir(parents=True)
+    protected_dir.mkdir()
+    protected_file = protected_dir / "keep.txt"
+    protected_file.write_text("KEEP", encoding="utf-8")
+    container = _make_container(settings=Settings(artifacts_root=str(artifacts_root)))
+    _make_run_in_store(container.store, id="..", created_by="alice", status=RunStatus.COMPLETED)
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.delete("/runs/%2E%2E")
+
+    assert resp.status_code == 200
+    assert protected_file.read_text(encoding="utf-8") == "KEEP"
+    assert artifacts_root.exists()
+    assert ".." not in container.store._runs  # type: ignore[attr-defined]
+
+
 def test_delete_run_without_artifact_dir_still_deletes_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

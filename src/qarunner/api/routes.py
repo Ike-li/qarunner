@@ -1964,8 +1964,8 @@ async def delete_run(
 
     import shutil
 
-    run_dir = Path(cfg.artifacts_root) / run_id
-    if run_dir.exists():
+    run_dir = _safe_run_artifact_dir(cfg.artifacts_root, run_id)
+    if run_dir is not None and run_dir.exists():
         await asyncio.to_thread(shutil.rmtree, run_dir, ignore_errors=True)
     await container.store.delete_run(run_id)
     return {"status": "success", "message": f"Run {run_id} deleted"}
