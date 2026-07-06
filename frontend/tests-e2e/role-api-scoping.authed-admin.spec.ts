@@ -1406,6 +1406,63 @@ test.describe('R-API-2 越权单资源', () => {
       }
     }
   });
+
+  test('R-API-2.15 GET /runs/{run} 遵守 owner/admin 边界', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    let runId: string | undefined;
+
+    const waitTerminal = async (token: string, id: string) => {
+      await expect(async () => {
+        const detailResp = await authedGet(page, token, `/runs/${encodeURIComponent(id)}`);
+        expect(detailResp.status(), await detailResp.text()).toBe(200);
+        const detail = (await detailResp.json()) as RunResponse;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+    };
+
+    try {
+      const createResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(createResp.status(), await createResp.text()).toBe(202);
+      const created = (await createResp.json()) as RunResponse;
+      runId = created.id;
+      expect(created.created_by).toBe(USER_A);
+
+      const userBGetResp = await authedGet(page, userBToken, `/runs/${encodeURIComponent(runId)}`);
+      const userBGetBody = await userBGetResp.text();
+      expect(userBGetResp.status(), userBGetBody).toBe(403);
+      expect(userBGetBody).not.toContain(runId);
+
+      const ownerGetResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId)}`);
+      expect(ownerGetResp.status(), await ownerGetResp.text()).toBe(200);
+      const ownerRun = (await ownerGetResp.json()) as RunResponse;
+      expect(ownerRun.id).toBe(runId);
+      expect(ownerRun.created_by).toBe(USER_A);
+
+      const adminGetResp = await authedGet(page, adminToken, `/runs/${encodeURIComponent(runId)}`);
+      expect(adminGetResp.status(), await adminGetResp.text()).toBe(200);
+      const adminRun = (await adminGetResp.json()) as RunResponse;
+      expect(adminRun.id).toBe(runId);
+      expect(adminRun.created_by).toBe(USER_A);
+    } finally {
+      if (runId) {
+        await waitTerminal(userAToken, runId);
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
 });
 
 // ── R-API-3  Admin protection rules ──────────────────────────────────────
