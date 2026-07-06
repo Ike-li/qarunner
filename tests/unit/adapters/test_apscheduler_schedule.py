@@ -145,6 +145,58 @@ async def test_trigger_missing_profile() -> None:
 
 
 @pytest.mark.asyncio
+async def test_trigger_skips_cross_owner_profile_for_non_admin_schedule() -> None:
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(
+        return_value=_schedule(created_by="alice", profile_id="prof-bob")
+    )
+    store.get_profile = AsyncMock(return_value=_profile(id="prof-bob", created_by="bob"))
+    store.get_user = AsyncMock(return_value={"username": "alice", "role": "user"})
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    store.claim_schedule_run.assert_not_called()
+    orch.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_trigger_skips_cross_owner_profile_when_schedule_creator_missing() -> None:
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(
+        return_value=_schedule(created_by="deleted-user", profile_id="prof-bob")
+    )
+    store.get_profile = AsyncMock(return_value=_profile(id="prof-bob", created_by="bob"))
+    store.get_user = AsyncMock(return_value=None)
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    store.claim_schedule_run.assert_not_called()
+    orch.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_trigger_allows_admin_schedule_to_use_cross_owner_profile() -> None:
+    port, store, orch = _make_port()
+    store.get_schedule = AsyncMock(
+        return_value=_schedule(created_by="admin", profile_id="prof-bob")
+    )
+    store.get_profile = AsyncMock(return_value=_profile(id="prof-bob", created_by="bob"))
+    store.get_user = AsyncMock(return_value={"username": "admin", "role": "admin"})
+    store.save_schedule = AsyncMock()
+    store.claim_schedule_run = AsyncMock(return_value=True)
+    orch.create = AsyncMock()
+
+    await port._trigger("sched-1")
+
+    store.claim_schedule_run.assert_called_once()
+    orch.create.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_trigger_skips_when_already_claimed() -> None:
     """CONC-2: when another replica already claimed this cron tick, no run is created."""
     port, store, orch = _make_port()

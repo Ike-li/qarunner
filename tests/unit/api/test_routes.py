@@ -2280,6 +2280,84 @@ def test_schedule_crud_and_preview_endpoints() -> None:
         assert resp_get_deleted.status_code == 404
 
 
+def test_create_schedule_forbidden_for_cross_owner_profile() -> None:
+    container = _make_container()
+    container.store._profiles["profile-bob"] = TestProfile(
+        id="profile-bob",
+        name="Bob Secret Profile",
+        tests_path="tests/",
+        created_by="bob",
+        created_at=NOW,
+    )
+
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post(
+            "/schedules",
+            json={
+                "name": "Alice Cross Owner Schedule",
+                "profile_id": "profile-bob",
+                "cron_expression": "0 2 * * *",
+                "enabled": True,
+                "timezone": "UTC",
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "profile-bob" not in resp.text
+    assert "Bob Secret Profile" not in resp.text
+    assert container.store._schedules == {}
+
+
+def test_update_schedule_forbidden_for_cross_owner_profile() -> None:
+    container = _make_container()
+    container.store._profiles["profile-alice"] = TestProfile(
+        id="profile-alice",
+        name="Alice Profile",
+        tests_path="tests/",
+        created_by="alice",
+        created_at=NOW,
+    )
+    container.store._profiles["profile-bob"] = TestProfile(
+        id="profile-bob",
+        name="Bob Secret Profile",
+        tests_path="tests/",
+        created_by="bob",
+        created_at=NOW,
+    )
+    container.store._schedules["sched-alice"] = TestSchedule(
+        id="sched-alice",
+        name="Alice Schedule",
+        profile_id="profile-alice",
+        cron_expression="0 2 * * *",
+        enabled=True,
+        timezone="UTC",
+        created_by="alice",
+        created_at=NOW,
+    )
+
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.put(
+            "/schedules/sched-alice",
+            json={
+                "name": "Alice Schedule",
+                "profile_id": "profile-bob",
+                "cron_expression": "0 3 * * *",
+                "enabled": True,
+                "timezone": "UTC",
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "profile-bob" not in resp.text
+    assert "Bob Secret Profile" not in resp.text
+    assert container.store._schedules["sched-alice"].profile_id == "profile-alice"
+    assert container.store._schedules["sched-alice"].cron_expression == "0 2 * * *"
+
+
 def test_lock_run() -> None:
     container = _make_container()
     run = Run(
@@ -3615,6 +3693,7 @@ def _seed_schedule_with_profile(
     container: Container,
     *,
     schedule_owner: str = "test_user",
+    profile_owner: str | None = None,
     profile_id: str | None = "profile-x",
     schedule_id: str = "sched-x",
 ) -> None:
@@ -3628,7 +3707,7 @@ def _seed_schedule_with_profile(
                     id=profile_id,
                     name="P",
                     tests_path="tests/",
-                    created_by=schedule_owner,
+                    created_by=profile_owner or schedule_owner,
                     created_at=NOW,
                 )
             )
@@ -3674,6 +3753,18 @@ def test_trigger_schedule_forbidden_for_non_owner() -> None:
     with TestClient(app) as client:
         resp = client.post("/schedules/sched-x/trigger")
     assert resp.status_code == 403
+
+
+def test_trigger_schedule_forbidden_when_bound_profile_has_different_owner() -> None:
+    container = _make_container()
+    _seed_schedule_with_profile(container, schedule_owner="alice", profile_owner="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.post("/schedules/sched-x/trigger")
+    assert resp.status_code == 403
+    assert "profile-x" not in resp.text
+    assert container.store._runs == {}
 
 
 def test_trigger_schedule_nonexistent_404() -> None:

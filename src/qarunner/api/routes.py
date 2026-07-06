@@ -102,6 +102,17 @@ def _require_run_access(run: Run, user: User) -> None:
     _require_owner_access(run.created_by, user)
 
 
+async def _require_profile_access(container: Container, profile_id: str, user: User) -> None:
+    """Raise 403 when an existing profile is not usable by *user*.
+
+    Missing profiles are left to the profile/schedule service so existing 400/404
+    error mapping stays unchanged.
+    """
+    profile = await container.store.get_profile(profile_id)
+    if profile is not None:
+        _require_owner_access(profile.created_by, user)
+
+
 def _client_ip(request: Request) -> str:
     """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
 
@@ -1973,6 +1984,7 @@ async def create_schedule(
 ) -> TestScheduleResponse:
     """Create and persist a new test schedule."""
     container = request.app.state.container
+    await _require_profile_access(container, req.profile_id, current_user)
     try:
         schedule = await container.schedule_service.create(req, created_by=current_user.username)
     except InvalidScheduleRequest as e:
@@ -2026,6 +2038,7 @@ async def update_schedule(
     existing = await container.store.get_schedule(schedule_id)
     if existing is not None:
         _require_owner_access(existing.created_by, current_user)
+        await _require_profile_access(container, req.profile_id, current_user)
     try:
         updated = await container.schedule_service.update(schedule_id, req)
     except ScheduleNotFound:
@@ -2078,6 +2091,7 @@ async def trigger_schedule(
             status_code=409,
             detail=f"Schedule's profile '{schedule.profile_id}' no longer exists.",
         )
+    _require_owner_access(profile.created_by, current_user)
     run = await _create_run_guarded(
         container,
         RunRequest.from_profile(profile),

@@ -10,12 +10,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from qarunner.core import cron
-from qarunner.models import RunRequest
+from qarunner.models import RunRequest, UserRole
 
 if TYPE_CHECKING:
     from qarunner.core.orchestrator import RunOrchestrator
     from qarunner.models import TestSchedule
-    from qarunner.ports.store import RunStore
+    from qarunner.ports.store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class ApschedulerSchedulePort:
     ``SqliteStore`` does); those methods are used by the trigger callback.
     """
 
-    def __init__(self, store: RunStore, orchestrator: RunOrchestrator) -> None:
+    def __init__(self, store: Store, orchestrator: RunOrchestrator) -> None:
         self._store = store
         self._orchestrator = orchestrator
         self._scheduler: AsyncIOScheduler | None = None
@@ -51,6 +51,20 @@ class ApschedulerSchedulePort:
                 schedule_id,
             )
             return
+
+        if profile.created_by != schedule.created_by:
+            creator = await self._store.get_user(schedule.created_by)
+            creator_role = str(creator.get("role", "") if creator else "")
+            if creator_role != UserRole.ADMIN.value:
+                logger.error(
+                    "Profile %s bound to schedule %s is owned by %s, not schedule creator %s. "
+                    "Skipping.",
+                    schedule.profile_id,
+                    schedule_id,
+                    profile.created_by,
+                    schedule.created_by,
+                )
+                return
 
         # Leader election for multi-replica deployments (CONC-2): every replica runs
         # its own in-process scheduler and fires this job at the same cron tick. Claim

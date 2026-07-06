@@ -1784,6 +1784,110 @@ test.describe('R-API-2 越权单资源', () => {
       }
     }
   });
+
+  test('R-API-2.18 非管理员不能创建或更新 schedule 指向他人 profile', async ({ page }) => {
+    const stamp = Date.now();
+    const adminProfileName = `r2_schedule_admin_profile_${stamp}`;
+    let adminProfileId: string | null = null;
+    let userProfileId: string | null = null;
+    let userScheduleId: string | null = null;
+    let unauthorizedScheduleId: string | null = null;
+
+    try {
+      const adminProfileResp = await authedPost(page, adminToken, '/profiles', {
+        name: adminProfileName,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        env: { ADMIN_PROFILE_SECRET: `schedule_admin_profile_secret_${stamp}` },
+      });
+      expect(adminProfileResp.status(), await adminProfileResp.text()).toBe(201);
+      adminProfileId = (await adminProfileResp.json()).id;
+
+      const userProfileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `r2_schedule_user_profile_${stamp}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(userProfileResp.status(), await userProfileResp.text()).toBe(201);
+      userProfileId = (await userProfileResp.json()).id;
+
+      const unauthorizedCreateResp = await authedPost(page, userAToken, '/schedules', {
+        name: `r2_schedule_cross_profile_create_${stamp}`,
+        profile_id: adminProfileId,
+        cron_expression: '0 5 * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      const unauthorizedCreateBody = await unauthorizedCreateResp.text();
+      if (unauthorizedCreateResp.status() === 201) {
+        unauthorizedScheduleId = (JSON.parse(unauthorizedCreateBody) as ScheduleResponse).id;
+      }
+      expect(unauthorizedCreateResp.status(), unauthorizedCreateBody).toBe(403);
+      expect(unauthorizedCreateBody).not.toContain(adminProfileId!);
+      expect(unauthorizedCreateBody).not.toContain(adminProfileName);
+
+      const ownScheduleResp = await authedPost(page, userAToken, '/schedules', {
+        name: `r2_schedule_cross_profile_update_${stamp}`,
+        profile_id: userProfileId,
+        cron_expression: '0 6 * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      expect(ownScheduleResp.status(), await ownScheduleResp.text()).toBe(201);
+      userScheduleId = ((await ownScheduleResp.json()) as ScheduleResponse).id;
+
+      const unauthorizedUpdateResp = await authedPut(
+        page,
+        userAToken,
+        `/schedules/${encodeURIComponent(userScheduleId)}`,
+        {
+          name: `r2_schedule_cross_profile_update_${stamp}`,
+          profile_id: adminProfileId,
+          cron_expression: '0 7 * * *',
+          timezone: 'UTC',
+          enabled: true,
+        },
+      );
+      const unauthorizedUpdateBody = await unauthorizedUpdateResp.text();
+      expect(unauthorizedUpdateResp.status(), unauthorizedUpdateBody).toBe(403);
+      expect(unauthorizedUpdateBody).not.toContain(adminProfileId!);
+      expect(unauthorizedUpdateBody).not.toContain(adminProfileName);
+
+      const ownerScheduleResp = await authedGet(
+        page,
+        userAToken,
+        `/schedules/${encodeURIComponent(userScheduleId)}`,
+      );
+      expect(ownerScheduleResp.status(), await ownerScheduleResp.text()).toBe(200);
+      const ownerSchedule = (await ownerScheduleResp.json()) as ScheduleResponse;
+      expect(ownerSchedule.profile_id).toBe(userProfileId);
+    } finally {
+      if (unauthorizedScheduleId) {
+        await authedDelete(
+          page,
+          adminToken,
+          `/schedules/${encodeURIComponent(unauthorizedScheduleId)}`,
+        ).catch(() => {});
+      }
+      if (userScheduleId) {
+        await authedDelete(
+          page,
+          adminToken,
+          `/schedules/${encodeURIComponent(userScheduleId)}`,
+        ).catch(() => {});
+      }
+      if (adminProfileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(adminProfileId)}`).catch(
+          () => {},
+        );
+      }
+      if (userProfileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(userProfileId)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
 });
 
 // ── R-API-3  Admin protection rules ──────────────────────────────────────
