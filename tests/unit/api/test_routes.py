@@ -852,6 +852,57 @@ def test_list_run_artifacts_non_owner_forbidden(tmp_path: Path) -> None:
     assert resp.status_code == 403
 
 
+@pytest.mark.parametrize(
+    ("username", "role", "expected_status"),
+    [
+        ("alice", UserRole.USER, 200),
+        ("admin", UserRole.ADMIN, 200),
+        ("bob", UserRole.USER, 403),
+    ],
+)
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/runs/pw-run/artifacts",
+        "/runs/pw-run/artifacts/trace.zip",
+        "/runs/pw-run/artifacts.zip",
+    ],
+)
+def test_run_artifact_endpoints_enforce_owner_or_admin_access(
+    tmp_path: Path,
+    username: str,
+    role: UserRole,
+    expected_status: int,
+    path: str,
+) -> None:
+    container, artifact_dir = _playwright_artifact_run(tmp_path)
+    (artifact_dir / "trace.zip").write_bytes(b"trace")
+    run = container.store._runs["pw-run"]
+    container.store._runs["pw-run"] = run.model_copy(update={"created_by": "alice"})
+
+    app = create_app(container)
+    _override_user(app, username, role)
+    with TestClient(app) as client:
+        resp = client.get(path)
+
+    assert resp.status_code == expected_status
+    if expected_status == 200:
+        if path.endswith("/artifacts"):
+            assert resp.json()["artifacts"] == [
+                {
+                    "path": "trace.zip",
+                    "size_bytes": 5,
+                    "content_type": "application/zip",
+                }
+            ]
+        elif path.endswith(".zip"):
+            assert resp.headers["content-type"] == "application/zip"
+        else:
+            assert resp.content == b"trace"
+    else:
+        assert "trace" not in resp.text
+
+
 def test_download_run_artifact_success(tmp_path: Path) -> None:
     container, artifact_dir = _playwright_artifact_run(tmp_path)
     (artifact_dir / "trace.zip").write_bytes(b"trace-data")

@@ -242,6 +242,7 @@ export function RunDetailsDrawer() {
   const [runArtifacts, setRunArtifacts] = useState<RunArtifact[]>([])
   const [artifactsLoading, setArtifactsLoading] = useState(false)
   const [artifactsError, setArtifactsError] = useState(false)
+  const [artifactsForbidden, setArtifactsForbidden] = useState(false)
   const [artifactsLoaded, setArtifactsLoaded] = useState(false)
 
   // Fetch Playwright runner artifacts lazily — only when the Report tab is
@@ -255,6 +256,7 @@ export function RunDetailsDrawer() {
       setRunArtifacts([])
       setArtifactsLoading(false)
       setArtifactsError(false)
+      setArtifactsForbidden(false)
       setArtifactsLoaded(false)
       return
     }
@@ -262,23 +264,37 @@ export function RunDetailsDrawer() {
     let cancelled = false
     setArtifactsLoading(true)
     setArtifactsError(false)
+    setArtifactsForbidden(false)
     setArtifactsLoaded(false)
     setRunArtifacts([])
     d.apiFetch(`/runs/${selectedRunId}/artifacts`)
-      .then((r) => {
+      .then(async (r) => {
+        if (r.status === 403) {
+          return { kind: 'forbidden' as const, data: null }
+        }
         if (!r.ok) throw new Error(`Artifacts request failed: ${r.status}`)
-        return r.json()
+        return {
+          kind: 'ok' as const,
+          data: await r.json() as { artifacts?: RunArtifact[] } | null,
+        }
       })
-      .then((data: { artifacts?: RunArtifact[] } | null) => {
+      .then((result) => {
         if (!cancelled) {
-          setRunArtifacts(data?.artifacts ?? [])
-          setArtifactsLoaded(true)
+          if (result.kind === 'forbidden') {
+            setRunArtifacts([])
+            setArtifactsForbidden(true)
+            setArtifactsLoaded(false)
+          } else {
+            setRunArtifacts(result.data?.artifacts ?? [])
+            setArtifactsLoaded(true)
+          }
         }
       })
       .catch(() => {
         if (!cancelled) {
           setRunArtifacts([])
           setArtifactsError(true)
+          setArtifactsForbidden(false)
           setArtifactsLoaded(false)
         }
       })
@@ -348,7 +364,8 @@ export function RunDetailsDrawer() {
   const artifactGroups = groupRunArtifacts(runArtifacts)
   const showArtifactsSection =
     selectedRunner === 'playwright' &&
-    (artifactsLoading || artifactsError || artifactsLoaded || runArtifacts.length > 0)
+    (artifactsLoading || artifactsError || artifactsForbidden || artifactsLoaded ||
+      runArtifacts.length > 0)
 
   const downloadLogs = (runId: string) => {
     const logText = d.runs.isStreaming
@@ -831,6 +848,18 @@ export function RunDetailsDrawer() {
                       <div className={styles.summaryPlaceholder} data-testid="run-artifacts-error">
                         <AlertTriangle size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
                         <p>{d.t('artifactsLoadError')}</p>
+                      </div>
+                    )}
+
+                    {artifactsForbidden && (
+                      <div
+                        className={styles.summaryPlaceholder}
+                        data-testid="run-artifacts-forbidden"
+                        role="alert"
+                      >
+                        <Ban size={24} style={{ color: '#f59e0b', marginBottom: '0.75rem' }} />
+                        <p>{d.t('artifactsForbidden')}</p>
+                        <span>{d.t('artifactsForbiddenDesc')}</span>
                       </div>
                     )}
 

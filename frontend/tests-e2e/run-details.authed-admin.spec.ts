@@ -169,12 +169,18 @@ async function mockRunDetailRoute(page: import('@playwright/test').Page, runId: 
   });
 }
 
-async function mockRunArtifactsRoute(page: import('@playwright/test').Page, runId: string) {
+async function mockRunArtifactsRoute(
+  page: import('@playwright/test').Page,
+  runId: string,
+  options: { status?: number; body?: unknown } = {},
+) {
+  const status = options.status ?? 200;
+  const body = options.body ?? RUN_ARTIFACTS;
   await page.route(`**/runs/${runId}/artifacts`, async (route) => {
     await route.fulfill({
-      status: 200,
+      status,
       contentType: 'application/json',
-      body: JSON.stringify(RUN_ARTIFACTS),
+      body: JSON.stringify(body),
     });
   });
 }
@@ -317,6 +323,86 @@ test.describe('Run Details Drawer', () => {
 
     await expect(page.getByTestId('run-artifact-link-2')).toContainText('failed-case/video.webm');
     await expect(page.getByTestId('run-artifact-link-3')).toContainText('metadata.json');
+  });
+
+  test('Report tab shows empty runner artifact state', async ({ page }) => {
+    const playwrightRun = { ...RUN_WITH_LOGS_AND_REPORT, runner: 'playwright' };
+    await page.unroute('**/runs');
+    await page.unroute(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}`);
+    await mockRunsRoute(page, [shallowRunForList(playwrightRun)]);
+    await mockRunDetailRoute(page, playwrightRun.id, playwrightRun);
+    await mockRunArtifactsRoute(page, playwrightRun.id, { body: { artifacts: [] } });
+
+    await openDrawer(page);
+    await page.getByTestId('drawer-tab-report').click();
+
+    await expect(page.getByTestId('run-artifacts-empty')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('run-artifacts-empty')).toContainText(
+      /No runner artifacts|暂无运行产物/,
+    );
+    await expect(page.getByTestId('run-artifacts-download-all')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="run-artifact-link-"]')).toHaveCount(0);
+  });
+
+  test('Report tab shows runner artifact loading failure without download links', async ({ page }) => {
+    const playwrightRun = { ...RUN_WITH_LOGS_AND_REPORT, runner: 'playwright' };
+    await page.unroute('**/runs');
+    await page.unroute(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}`);
+    await mockRunsRoute(page, [shallowRunForList(playwrightRun)]);
+    await mockRunDetailRoute(page, playwrightRun.id, playwrightRun);
+    await mockRunArtifactsRoute(page, playwrightRun.id, {
+      status: 500,
+      body: { detail: 'artifact list failed' },
+    });
+
+    await openDrawer(page);
+    await page.getByTestId('drawer-tab-report').click();
+
+    await expect(page.getByTestId('run-artifacts-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('run-artifacts-error')).toContainText(/Unable to load|无法加载/);
+    await expect(page.getByTestId('run-artifacts-download-all')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="run-artifact-link-"]')).toHaveCount(0);
+  });
+
+  test('Report tab shows runner artifact permission state without download links', async ({ page }) => {
+    const playwrightRun = { ...RUN_WITH_LOGS_AND_REPORT, runner: 'playwright' };
+    await page.unroute('**/runs');
+    await page.unroute(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}`);
+    await mockRunsRoute(page, [shallowRunForList(playwrightRun)]);
+    await mockRunDetailRoute(page, playwrightRun.id, playwrightRun);
+    await mockRunArtifactsRoute(page, playwrightRun.id, {
+      status: 403,
+      body: { detail: 'Access denied' },
+    });
+
+    await openDrawer(page);
+    await page.getByTestId('drawer-tab-report').click();
+
+    await expect(page.getByTestId('run-artifacts-forbidden')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('run-artifacts-forbidden')).toContainText(
+      /do not have permission|没有权限/,
+    );
+    await expect(page.getByTestId('run-artifacts-download-all')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="run-artifact-link-"]')).toHaveCount(0);
+  });
+
+  test('Report tab does not request runner artifacts for non-Playwright runs', async ({ page }) => {
+    let artifactRequests = 0;
+    await page.route(`**/runs/${RUN_WITH_LOGS_AND_REPORT.id}/artifacts`, async (route) => {
+      artifactRequests += 1;
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: '{"detail":"should not be requested"}',
+      });
+    });
+
+    await openDrawer(page);
+    await page.getByTestId('drawer-tab-report').click();
+
+    await expect(page.getByTestId('report-section-summary')).toBeVisible();
+    await expect(page.getByTestId('report-section-artifacts')).toHaveCount(0);
+    expect(artifactRequests).toBe(0);
   });
 
   // 4. Diff tab shows cross-run comparison buckets

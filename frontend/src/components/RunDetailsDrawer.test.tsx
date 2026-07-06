@@ -157,6 +157,30 @@ describe('RunDetailsDrawer', () => {
     expect(screen.queryByTestId('run-artifacts-download-all')).not.toBeInTheDocument()
   })
 
+  it('shows a permission state without download links when artifact access is forbidden', async () => {
+    dashboard.current.runs.selectedRun = {
+      ...dashboard.current.runs.selectedRun,
+      runner: 'playwright',
+    }
+    dashboard.current.apiFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ detail: 'Access denied' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    render(<RunDetailsDrawer />)
+
+    await waitFor(() => {
+      expect(dashboard.current.apiFetch).toHaveBeenCalledWith('/runs/run-001/artifacts')
+    })
+    expect(await screen.findByTestId('run-artifacts-forbidden')).toHaveTextContent(
+      'artifactsForbidden',
+    )
+    expect(screen.queryByTestId('run-artifacts-download-all')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('run-artifact-link-0')).not.toBeInTheDocument()
+  })
+
   it('shows downloadable runner artifacts on the report tab', async () => {
     dashboard.current.runs.selectedRun = {
       ...dashboard.current.runs.selectedRun,
