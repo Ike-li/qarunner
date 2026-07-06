@@ -36,6 +36,7 @@ interface RunResponse {
   runner: string;
   status: string;
   created_by: string;
+  locked?: boolean;
   cases?: Array<{ suite: string; name: string; status: string }>;
 }
 
@@ -1188,6 +1189,134 @@ test.describe('R-API-2 越权单资源', () => {
       for (const run of cleanupRuns) {
         await waitTerminal(run.token, run.id);
         await authedDelete(page, run.token, `/runs/${encodeURIComponent(run.id)}`).catch(() => {});
+      }
+    }
+  });
+
+  test('R-API-2.13 PUT /runs/{run}/lock|POST /runs/{run}/cancel 遵守 owner/admin 边界', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+
+    let runId: string | undefined;
+
+    const waitTerminal = async (token: string, id: string) => {
+      await expect(async () => {
+        const detailResp = await authedGet(page, token, `/runs/${encodeURIComponent(id)}`);
+        expect(detailResp.status(), await detailResp.text()).toBe(200);
+        const detail = (await detailResp.json()) as RunResponse;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+    };
+
+    try {
+      const createResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(createResp.status(), await createResp.text()).toBe(202);
+      const created = (await createResp.json()) as RunResponse;
+      runId = created.id;
+      expect(created.created_by).toBe(USER_A);
+
+      await waitTerminal(userAToken, runId);
+
+      const userBLockResp = await authedPut(
+        page,
+        userBToken,
+        `/runs/${encodeURIComponent(runId)}/lock`,
+        { locked: true },
+      );
+      const userBLockBody = await userBLockResp.text();
+      expect(userBLockResp.status(), userBLockBody).toBe(403);
+      expect(userBLockBody).not.toContain(runId);
+
+      const afterDeniedLockResp = await authedGet(
+        page,
+        userAToken,
+        `/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(afterDeniedLockResp.status(), await afterDeniedLockResp.text()).toBe(200);
+      expect(((await afterDeniedLockResp.json()) as RunResponse).locked).toBe(false);
+
+      const ownerLockResp = await authedPut(
+        page,
+        userAToken,
+        `/runs/${encodeURIComponent(runId)}/lock`,
+        { locked: true },
+      );
+      expect(ownerLockResp.status(), await ownerLockResp.text()).toBe(200);
+      const ownerLocked = (await ownerLockResp.json()) as RunResponse;
+      expect(ownerLocked.created_by).toBe(USER_A);
+      expect(ownerLocked.locked).toBe(true);
+
+      const userBUnlockResp = await authedPut(
+        page,
+        userBToken,
+        `/runs/${encodeURIComponent(runId)}/lock`,
+        { locked: false },
+      );
+      const userBUnlockBody = await userBUnlockResp.text();
+      expect(userBUnlockResp.status(), userBUnlockBody).toBe(403);
+      expect(userBUnlockBody).not.toContain(runId);
+
+      const stillLockedResp = await authedGet(
+        page,
+        userAToken,
+        `/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(stillLockedResp.status(), await stillLockedResp.text()).toBe(200);
+      expect(((await stillLockedResp.json()) as RunResponse).locked).toBe(true);
+
+      const adminUnlockResp = await authedPut(
+        page,
+        adminToken,
+        `/runs/${encodeURIComponent(runId)}/lock`,
+        { locked: false },
+      );
+      expect(adminUnlockResp.status(), await adminUnlockResp.text()).toBe(200);
+      expect(((await adminUnlockResp.json()) as RunResponse).locked).toBe(false);
+
+      const userBCancelResp = await authedPost(
+        page,
+        userBToken,
+        `/runs/${encodeURIComponent(runId)}/cancel`,
+        {},
+      );
+      const userBCancelBody = await userBCancelResp.text();
+      expect(userBCancelResp.status(), userBCancelBody).toBe(403);
+      expect(userBCancelBody).not.toContain(runId);
+
+      const ownerCancelResp = await authedPost(
+        page,
+        userAToken,
+        `/runs/${encodeURIComponent(runId)}/cancel`,
+        {},
+      );
+      expect(ownerCancelResp.status(), await ownerCancelResp.text()).toBe(409);
+
+      const adminCancelResp = await authedPost(
+        page,
+        adminToken,
+        `/runs/${encodeURIComponent(runId)}/cancel`,
+        {},
+      );
+      expect(adminCancelResp.status(), await adminCancelResp.text()).toBe(409);
+    } finally {
+      if (runId) {
+        await authedPut(page, adminToken, `/runs/${encodeURIComponent(runId)}/lock`, {
+          locked: false,
+        }).catch(() => {});
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(
+          () => {},
+        );
       }
     }
   });
