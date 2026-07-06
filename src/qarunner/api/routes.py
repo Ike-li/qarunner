@@ -71,6 +71,7 @@ from qarunner.errors import (
 from qarunner.models import (
     Credential,
     MetricsSummary,
+    ReportRef,
     Run,
     RunRequest,
     RunStatus,
@@ -1584,6 +1585,16 @@ async def get_case_history(
     return CaseHistoryResponse(points=points, flaky=is_flaky, flip_count=flips)
 
 
+def _resolve_report_file(report: ReportRef) -> Path:
+    """Resolve an Allure HTML entrypoint without allowing report path escape."""
+    from qarunner.core.paths import safe_subpath
+
+    try:
+        return Path(safe_subpath(report.allure_results_dir, report.allure_report_file))
+    except UnsafePath:
+        raise HTTPException(status_code=403, detail="Access denied") from None
+
+
 @router.get("/runs/{run_id}/report")
 async def get_report(
     run_id: str,
@@ -1599,7 +1610,8 @@ async def get_report(
     _require_run_access(run, current_user)
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
-    return FileResponse(run.report.allure_report_file, media_type="text/html")
+    report_file = _resolve_report_file(run.report)
+    return FileResponse(report_file, media_type="text/html")
 
 
 @router.get("/runs/{run_id}/report/{path:path}")
@@ -1621,7 +1633,8 @@ async def get_report_assets(
 
     from qarunner.core.paths import safe_subpath
 
-    allure_report_dir = str(Path(run.report.allure_report_file).parent)
+    report_file = _resolve_report_file(run.report)
+    allure_report_dir = str(report_file.parent)
     try:
         asset_path = safe_subpath(allure_report_dir, path)  # raises UnsafePath on escape
     except UnsafePath:

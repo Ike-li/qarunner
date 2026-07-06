@@ -679,6 +679,27 @@ def test_get_report_success(tmp_path: Path) -> None:
     assert "Report" in resp.text
 
 
+def test_get_report_rejects_file_outside_results_dir(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    secret_file = tmp_path / "secret.html"
+    secret_file.write_text("<html>TOPSECRET</html>")
+
+    container = _make_container()
+    report = ReportRef(
+        allure_results_dir=str(results_dir),
+        allure_report_file=str(secret_file),
+        html_generated=True,
+    )
+    _make_run_in_store(container.store, id="r-out", status=RunStatus.COMPLETED, report=report)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/r-out/report")
+
+    assert resp.status_code == 403
+    assert "TOPSECRET" not in resp.text
+
+
 def test_get_report_html_not_generated(tmp_path: Path) -> None:
     """Report exists but html_generated is False → 404."""
     container = _make_container()
