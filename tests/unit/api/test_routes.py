@@ -484,6 +484,20 @@ def test_create_run_default_mode_docker_allows_non_admin() -> None:
     assert resp.status_code == 202
 
 
+def test_create_run_forbidden_for_other_users_registered_suite() -> None:
+    container = _make_container()
+    _save_suite_in_store(container.store, name="bob_suite", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.post("/runs", json={"tests_path": "bob_suite/tests", "runner": "pytest"})
+
+    assert resp.status_code == 403
+    assert "bob_suite" not in resp.text
+    assert container.orchestrator.last_req is None
+
+
 def test_create_run_playwright_docker_allowed() -> None:
     # All runs are docker now — executor_mode removed from API input.
     container = _make_container()

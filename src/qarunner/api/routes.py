@@ -142,6 +142,21 @@ async def _visible_suite_names(
     ]
 
 
+def _suite_name_from_tests_path(tests_path: str) -> str | None:
+    normalized = tests_path.replace("\\", "/").strip("/")
+    if not normalized or normalized.startswith("."):
+        return None
+    return normalized.split("/", 1)[0]
+
+
+async def _require_tests_path_suite_access(
+    container: Container, tests_path: str, user: User
+) -> None:
+    suite_name = _suite_name_from_tests_path(tests_path)
+    if suite_name is not None:
+        await _require_registered_suite_access(container, suite_name, user)
+
+
 def _client_ip(request: Request) -> str:
     """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
 
@@ -1304,6 +1319,8 @@ async def _create_run_guarded(
     """
     # Per-user in-flight cap (P2-7): bound unbounded run accumulation by one
     # authenticated user. Admins are exempt; a limit of 0 disables the check.
+    await _require_tests_path_suite_access(container, req.tests_path, current_user)
+
     limit = container.settings.max_inflight_runs_per_user
     if limit and current_user.role != UserRole.ADMIN:
         inflight = await container.store.count_inflight_runs(current_user.username)
