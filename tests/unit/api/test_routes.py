@@ -2621,6 +2621,38 @@ def _seed_user(
     }
 
 
+def test_user_responses_never_include_password_material() -> None:
+    container = _make_container()
+    _seed_user(container.store, "bob", password="oldpw")
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/users",
+            json={
+                "username": "alice",
+                "password": "create-plain-secret",
+                "role": "user",
+            },
+        )
+        list_resp = client.get("/users")
+        update_resp = client.put("/users/bob", json={"password": "update-plain-secret"})
+
+    for resp in (create_resp, list_resp, update_resp):
+        assert resp.status_code in (200, 201)
+        assert "password" not in resp.text
+        assert "password_hash" not in resp.text
+        assert "create-plain-secret" not in resp.text
+        assert "update-plain-secret" not in resp.text
+
+    assert set(create_resp.json()) == {"username", "role", "created_at"}
+    assert set(update_resp.json()) == {"username", "role", "created_at"}
+    assert all(
+        set(user) == {"username", "role", "created_at"} for user in list_resp.json()["users"]
+    )
+
+
 def test_delete_user_admin_removes_target() -> None:
     container = _make_container()
     _seed_user(container.store, "bob")
