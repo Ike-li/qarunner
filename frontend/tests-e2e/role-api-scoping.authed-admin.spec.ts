@@ -49,6 +49,12 @@ interface CaseHistoryResponse {
   flip_count: number;
 }
 
+interface ScheduleResponse {
+  id: string;
+  profile_id: string;
+  created_by: string;
+}
+
 // Helper: login and return the bearer token.
 async function getToken(
   request: APIRequestContext,
@@ -602,7 +608,85 @@ test.describe('R-API-2 越权单资源', () => {
     await authedDelete(page, adminToken, `/schedules/${schedId}`);
   });
 
-  test('R-API-2.5 GET /runs/{admin_run}/artifacts* 以 userA token → 403', async ({ page }) => {
+  test('R-API-2.5 GET|PUT|trigger /schedules/{user_schedule} 遵守 owner/admin 边界', async ({
+    page,
+  }) => {
+    let userProfileId: string | null = null;
+    let scheduleId: string | null = null;
+
+    try {
+      const profileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `r2_schedule_profile_${Date.now()}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(profileResp.status(), await profileResp.text()).toBe(201);
+      userProfileId = (await profileResp.json()).id;
+
+      const scheduleResp = await authedPost(page, userAToken, '/schedules', {
+        name: `r2_schedule_${Date.now()}`,
+        profile_id: userProfileId,
+        cron_expression: '0 3 * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      expect(scheduleResp.status(), await scheduleResp.text()).toBe(201);
+      const schedule = (await scheduleResp.json()) as ScheduleResponse;
+      scheduleId = schedule.id;
+      expect(schedule.created_by).toBe(USER_A);
+
+      const userBGetResp = await authedGet(page, userBToken, `/schedules/${scheduleId}`);
+      const userBGetBody = await userBGetResp.text();
+      expect(userBGetResp.status(), userBGetBody).toBe(403);
+      expect(userBGetBody).not.toContain(scheduleId);
+
+      const userBPutResp = await authedPut(page, userBToken, `/schedules/${scheduleId}`, {
+        name: 'hijacked_schedule',
+        profile_id: userProfileId,
+        cron_expression: '0 4 * * *',
+        timezone: 'UTC',
+        enabled: false,
+      });
+      const userBPutBody = await userBPutResp.text();
+      expect(userBPutResp.status(), userBPutBody).toBe(403);
+      expect(userBPutBody).not.toContain(scheduleId);
+
+      const userBTriggerResp = await authedPost(
+        page,
+        userBToken,
+        `/schedules/${scheduleId}/trigger`,
+        {},
+      );
+      const userBTriggerBody = await userBTriggerResp.text();
+      expect(userBTriggerResp.status(), userBTriggerBody).toBe(403);
+      expect(userBTriggerBody).not.toContain(scheduleId);
+
+      const ownerGetResp = await authedGet(page, userAToken, `/schedules/${scheduleId}`);
+      expect(ownerGetResp.status(), await ownerGetResp.text()).toBe(200);
+      const ownerSchedule = (await ownerGetResp.json()) as ScheduleResponse;
+      expect(ownerSchedule.created_by).toBe(USER_A);
+      expect(ownerSchedule.profile_id).toBe(userProfileId);
+
+      const adminGetResp = await authedGet(page, adminToken, `/schedules/${scheduleId}`);
+      expect(adminGetResp.status(), await adminGetResp.text()).toBe(200);
+      const adminSchedule = (await adminGetResp.json()) as ScheduleResponse;
+      expect(adminSchedule.created_by).toBe(USER_A);
+      expect(adminSchedule.profile_id).toBe(userProfileId);
+    } finally {
+      if (scheduleId) {
+        await authedDelete(page, userAToken, `/schedules/${encodeURIComponent(scheduleId)}`).catch(
+          () => {},
+        );
+      }
+      if (userProfileId) {
+        await authedDelete(page, userAToken, `/profiles/${encodeURIComponent(userProfileId)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
+
+  test('R-API-2.6 GET /runs/{admin_run}/artifacts* 以 userA token → 403', async ({ page }) => {
     test.setTimeout(180_000);
 
     let playwrightProfileId: string | null = null;
@@ -680,7 +764,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.6 GET /runs/{own_run}/artifacts* 以 owner user token → 200', async ({ page }) => {
+  test('R-API-2.7 GET /runs/{own_run}/artifacts* 以 owner user token → 200', async ({ page }) => {
     test.setTimeout(180_000);
 
     let playwrightProfileId: string | null = null;
@@ -753,7 +837,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.7 GET /runs/{run}/diff|report|stream 遵守 owner/admin 边界', async ({
+  test('R-API-2.8 GET /runs/{run}/diff|report|stream 遵守 owner/admin 边界', async ({
     page,
   }) => {
     test.setTimeout(120_000);
@@ -816,7 +900,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.8 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
+  test('R-API-2.9 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
     const stamp = Date.now();
     const secret = `ghp_delete_scope_${stamp}`;
     let credentialId: string | null = null;
