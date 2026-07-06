@@ -871,14 +871,17 @@ async def pull_test_suite(
     suite_path = _safe_suite_path(tests_root, suite_name)
     ref = suite.ref or "HEAD"
 
-    # Re-inject the credential recorded at clone time. Unlike clone this is
-    # lenient — a since-deleted credential just means an unauthenticated fetch
-    # (git fails on its own if the repo is private) rather than a hard error.
+    # Re-inject the credential recorded at clone time. Existing credentials are
+    # re-authorized against the caller; a since-deleted credential remains
+    # lenient and degrades to an unauthenticated fetch.
     secret: str | None = None
     if suite.credential_ref:
-        enc = await store.get_credential_secret(suite.credential_ref)
-        if enc is not None:
-            secret = CredentialCipher(cfg.secret_key).decrypt(enc)
+        cred = await store.get_credential(suite.credential_ref)
+        if cred is not None:
+            _require_owner_access(cred.created_by, current_user)
+            enc = await store.get_credential_secret(suite.credential_ref)
+            if enc is not None:
+                secret = CredentialCipher(cfg.secret_key).decrypt(enc)
 
     async with _git_auth_env(secret) as env:
         # ``--`` separates the refspec from options so a ref can never be parsed

@@ -4601,6 +4601,35 @@ def test_pull_injects_stored_credential_off_argv(
     assert env.get("QARUNNER_GIT_PASS") == "ghp_pulltoken"
 
 
+def test_pull_with_others_recorded_credential_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    (tests_root / "s").mkdir(parents=True)
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _seed_encrypted_credential(container, cred_id="cred-bob", owner="bob", secret="ghp_bob")
+    _save_suite_in_store(
+        container.store,
+        name="s",
+        source="git",
+        repo_url="https://example.com/org/repo.git",
+        ref="main",
+        credential_ref="cred-bob",
+        created_by="alice",
+    )
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    _forbid_git(monkeypatch)
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/s/pull")
+
+    assert resp.status_code == 403
+    assert "cred-bob" not in resp.text
+    assert "ghp_bob" not in resp.text
+
+
 def test_pull_with_deleted_credential_falls_back_unauthenticated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4624,6 +4653,37 @@ def test_pull_with_deleted_credential_falls_back_unauthenticated(
         resp = client.post("/tests/s/pull")
     assert resp.status_code == 200
     # No resolvable credential → no auth env injected (parent env inherited).
+    assert mock.call_args_list[0].kwargs.get("env") is None
+
+
+def test_pull_credential_deleted_midflight_degrades_to_no_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    (tests_root / "s").mkdir(parents=True)
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    container = _make_container()
+    _seed_encrypted_credential(container, cred_id="cred-1", owner="test_user", secret="ghp_x")
+    _save_suite_in_store(
+        container.store,
+        name="s",
+        source="git",
+        repo_url="https://example.com/org/repo.git",
+        ref="main",
+        credential_ref="cred-1",
+    )
+
+    async def _gone(_credential_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(container.store, "get_credential_secret", _gone)
+    app = create_app(container)
+    mock = _patch_git(monkeypatch, _git_proc(0), _git_proc(0))
+
+    with TestClient(app) as client:
+        resp = client.post("/tests/s/pull")
+
+    assert resp.status_code == 200
     assert mock.call_args_list[0].kwargs.get("env") is None
 
 
