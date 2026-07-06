@@ -1069,7 +1069,7 @@ async def get_test_tree(
                 key=lambda x: (not x.is_dir(), x.name.lower()),
             )
             for entry in entries:
-                if entry.name.startswith(".") or entry.name.startswith("__"):
+                if entry.is_symlink() or entry.name.startswith(".") or entry.name.startswith("__"):
                     continue
                 relative_path = str(entry.relative_to(base_dir))
                 if entry.is_dir():
@@ -1116,8 +1116,11 @@ async def get_test_markers(
 
     def _parse_markers() -> list[str]:
         markers = set()
+        suite_root = suite_dir.resolve()
         for py_file in suite_dir.glob("**/*.py"):
             if py_file.name.startswith(".") or py_file.name.startswith("__"):
+                continue
+            if not py_file.resolve().is_relative_to(suite_root):
                 continue
             try:
                 content = py_file.read_text(encoding="utf-8", errors="replace")

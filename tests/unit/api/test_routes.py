@@ -3221,6 +3221,47 @@ def test_test_suite_path_errors_hide_tests_root(
     assert str(tests_dir) not in resp.text
 
 
+def test_test_suite_scans_do_not_follow_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_dir = tmp_path / "test_suites"
+    tests_dir.mkdir()
+    suite_dir = tests_dir / "suite"
+    suite_dir.mkdir()
+    (suite_dir / "test_inside.py").write_text(
+        "import pytest\n\n@pytest.mark.inside\ndef test_inside():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_test = outside / "test_secret.py"
+    outside_test.write_text(
+        "import pytest\n\n@pytest.mark.external_secret\ndef test_secret():\n    pass\n",
+        encoding="utf-8",
+    )
+    (suite_dir / "escape_dir").symlink_to(outside, target_is_directory=True)
+    (suite_dir / "test_secret_link.py").symlink_to(outside_test)
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        tree_resp = client.get("/tests/suite/tree")
+        markers_resp = client.get("/tests/suite/markers")
+
+    assert tree_resp.status_code == 200
+    tree_text = str(tree_resp.json())
+    assert "test_inside.py" in tree_text
+    assert "escape_dir" not in tree_text
+    assert "test_secret_link.py" not in tree_text
+    assert "test_secret.py" not in tree_text
+
+    assert markers_resp.status_code == 200
+    assert "inside" in markers_resp.json()
+    assert "external_secret" not in markers_resp.json()
+
+
 def test_get_tree_includes_playwright_specs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
