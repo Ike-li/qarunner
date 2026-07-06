@@ -1121,6 +1121,76 @@ test.describe('R-API-2 越权单资源', () => {
       }
     }
   });
+
+  test('R-API-2.12 POST /runs/{run}/rerun 遵守 owner/admin 边界', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    const cleanupRuns: Array<{ token: string; id: string }> = [];
+
+    const waitTerminal = async (token: string, runId: string) => {
+      await expect(async () => {
+        const detailResp = await authedGet(page, token, `/runs/${encodeURIComponent(runId)}`);
+        expect(detailResp.status(), await detailResp.text()).toBe(200);
+        const detail = (await detailResp.json()) as RunResponse;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+    };
+
+    try {
+      const originalResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(originalResp.status(), await originalResp.text()).toBe(202);
+      const original = (await originalResp.json()) as RunResponse;
+      cleanupRuns.push({ token: userAToken, id: original.id });
+      expect(original.created_by).toBe(USER_A);
+
+      const userBRerunResp = await authedPost(
+        page,
+        userBToken,
+        `/runs/${encodeURIComponent(original.id)}/rerun`,
+        {},
+      );
+      const userBRerunBody = await userBRerunResp.text();
+      expect(userBRerunResp.status(), userBRerunBody).toBe(403);
+      expect(userBRerunBody).not.toContain(original.id);
+
+      const ownerRerunResp = await authedPost(
+        page,
+        userAToken,
+        `/runs/${encodeURIComponent(original.id)}/rerun`,
+        {},
+      );
+      expect(ownerRerunResp.status(), await ownerRerunResp.text()).toBe(202);
+      const ownerRerun = (await ownerRerunResp.json()) as RunResponse;
+      cleanupRuns.push({ token: userAToken, id: ownerRerun.id });
+      expect(ownerRerun.created_by).toBe(USER_A);
+
+      const adminRerunResp = await authedPost(
+        page,
+        adminToken,
+        `/runs/${encodeURIComponent(original.id)}/rerun`,
+        {},
+      );
+      expect(adminRerunResp.status(), await adminRerunResp.text()).toBe(202);
+      const adminRerun = (await adminRerunResp.json()) as RunResponse;
+      cleanupRuns.push({ token: adminToken, id: adminRerun.id });
+      expect(adminRerun.created_by).toBe(E2E_ADMIN);
+    } finally {
+      for (const run of cleanupRuns) {
+        await waitTerminal(run.token, run.id);
+        await authedDelete(page, run.token, `/runs/${encodeURIComponent(run.id)}`).catch(() => {});
+      }
+    }
+  });
 });
 
 // ── R-API-3  Admin protection rules ──────────────────────────────────────
