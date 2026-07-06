@@ -1915,13 +1915,17 @@ test.describe('R-API-3 admin 保护', () => {
 
   test('R-API-3.2 DELETE /users/{自己} → 400（不能删自己）', async ({ page }) => {
     const resp = await authedDelete(page, adminToken, `/users/${E2E_ADMIN}`);
-    expect(resp.status()).toBe(400);
+    const body = await resp.text();
+    expect(resp.status(), body).toBe(400);
+    expect(body).not.toContain(E2E_ADMIN);
   });
 
   test('R-API-3.3 PUT /users/{最后一个 admin} 降级 → 400', async ({ page }) => {
     // The system has exactly one admin (seeded). Trying to demote them should fail.
     const resp = await authedPut(page, adminToken, `/users/${E2E_ADMIN}`, { role: 'user' });
-    expect(resp.status()).toBe(400);
+    const body = await resp.text();
+    expect(resp.status(), body).toBe(400);
+    expect(body).not.toContain(E2E_ADMIN);
   });
 
   test('R-API-3.4 POST /runs/cleanup 非管理员 → 403', async ({ page }) => {
