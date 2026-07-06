@@ -3,9 +3,11 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 import {
   createProfile,
   deleteProfile,
+  deleteRun,
   loginAndGetContext,
   pollRunToTerminal,
 } from './helpers/api';
+import { E2E_USER } from './fixtures/auth';
 
 const SUITE_NAME = 'sample_playwright';
 
@@ -13,6 +15,7 @@ interface RunResponse {
   id: string;
   runner: string;
   status: string;
+  created_by: string;
   summary: { total: number; passed: number; failed: number; error: number } | null;
 }
 
@@ -118,6 +121,72 @@ test.describe('Playwright runner artifacts', () => {
       await expect(traceDownload).toHaveAttribute('href', /\/runs\/[^/]+\/artifacts\//);
     } finally {
       if (profileId) await deleteProfile(adminCtx, profileId);
+      await adminCtx.dispose();
+    }
+  });
+
+  test('admin drawer exposes artifacts for a user-owned Playwright run', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    const adminCtx = await loginAndGetContext('admin');
+    const userCtx = await loginAndGetContext('user');
+    let profileId: string | null = null;
+    let runId: string | null = null;
+    try {
+      profileId = await createProfile(userCtx, {
+        name: `PWR user artifacts ${Date.now()}`,
+        tests_path: SUITE_NAME,
+        runner: 'playwright',
+      });
+
+      runId = await triggerPlaywrightRun(userCtx, profileId);
+      const status = await pollRunToTerminal(userCtx, runId, 120_000, 2_000);
+      expect(status).toBe('completed');
+
+      const detailResp = await userCtx.get(`/runs/${encodeURIComponent(runId)}`);
+      expect(detailResp.status(), await detailResp.text()).toBe(200);
+      const detail = (await detailResp.json()) as RunResponse;
+      expect(detail.runner).toBe('playwright');
+      expect(detail.created_by).toBe(E2E_USER);
+
+      const artifacts = await expectDownloadableArtifacts(adminCtx, runId);
+      const trace = artifacts.find((artifact) => artifact.path.endsWith('trace.zip'));
+      expect(trace).toBeTruthy();
+
+      await openRunDrawer(page, runId);
+      await page.getByTestId('drawer-tab-report').click();
+
+      await expect(page.getByTestId('run-artifacts')).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId('run-artifacts-download-all')).toHaveAttribute(
+        'href',
+        `/runs/${runId}/artifacts.zip`,
+      );
+
+      await expect(page.getByTestId('run-artifact-group-trace')).toContainText('trace.zip');
+      await expect(page.getByTestId('run-artifact-group-screenshot')).toContainText('image/png');
+      await expect(page.getByTestId('run-artifact-group-video')).toContainText('video/webm');
+      await expect(page.getByTestId('run-artifacts-forbidden')).toHaveCount(0);
+      await expect(page.getByTestId('run-artifacts-error')).toHaveCount(0);
+
+      const traceDownload = page
+        .getByTestId('run-artifact-group-trace')
+        .getByRole('link')
+        .filter({ hasText: 'trace.zip' })
+        .first();
+      await expect(traceDownload).toHaveAttribute(
+        'href',
+        `/runs/${runId}/artifacts/${encodeURIComponent(trace!.path)}`,
+      );
+    } finally {
+      if (runId) {
+        await deleteRun(userCtx, runId).catch(() => {});
+      }
+      if (profileId) {
+        await deleteProfile(userCtx, profileId).catch(() => {});
+      }
+      await userCtx.dispose();
       await adminCtx.dispose();
     }
   });
