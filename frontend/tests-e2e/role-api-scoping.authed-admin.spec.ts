@@ -1227,6 +1227,61 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
+  test('R-API-2.16 GET /runs/{run}/report/{path} 遵守 owner/admin 边界', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+
+    let runId: string | null = null;
+    try {
+      const runResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: true,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(runResp.status(), await runResp.text()).toBe(202);
+      const run = (await runResp.json()) as RunResponse;
+      runId = run.id;
+      expect(run.runner).toBe('pytest');
+      expect(run.created_by).toBe(USER_A);
+
+      await expect(async () => {
+        const detailResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId!)}`);
+        expect(detailResp.status(), await detailResp.text()).toBe(200);
+        const detail = (await detailResp.json()) as RunResponse;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(detail.status);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+
+      const reportAssetEndpoint = `/runs/${encodeURIComponent(runId!)}/report/index.html`;
+
+      for (const token of [userAToken, adminToken]) {
+        const reportAssetResp = await authedGet(page, token, reportAssetEndpoint);
+        const reportAssetBody = await reportAssetResp.text();
+        // Live Allure generation is best-effort in this environment; owner/admin
+        // may see the generated asset or a report-availability 404, but must not
+        // be rejected by authorization.
+        expect([200, 404], reportAssetBody).toContain(reportAssetResp.status());
+        expect(reportAssetResp.status(), reportAssetBody).not.toBe(403);
+      }
+
+      const userBResp = await authedGet(page, userBToken, reportAssetEndpoint);
+      const userBBody = await userBResp.text();
+      expect(userBResp.status(), userBBody).toBe(403);
+      expect(userBBody).not.toContain(runId!);
+      expect(userBBody).not.toContain('index.html');
+    } finally {
+      if (runId) {
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
+      }
+    }
+  });
+
   test('R-API-2.10 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
     const stamp = Date.now();
     const secret = `ghp_delete_scope_${stamp}`;

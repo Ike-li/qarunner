@@ -199,6 +199,7 @@ test.describe('R-API-5 anonymous API', () => {
       const endpoints = [
         `/runs/${encodeURIComponent(runId)}/diff`,
         `/runs/${encodeURIComponent(runId)}/report`,
+        `/runs/${encodeURIComponent(runId)}/report/index.html`,
         `/runs/${encodeURIComponent(runId)}/stream`,
       ];
 
