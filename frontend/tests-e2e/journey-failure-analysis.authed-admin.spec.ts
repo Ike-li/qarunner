@@ -103,11 +103,15 @@ test.describe('Journey 3 — exploratory failure analysis', () => {
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible({ timeout: 10000 });
 
-    // Total executions > 0 because J2 + J3 beforeAll created runs.
-    const totalText = await page.getByTestId('stat-total').textContent();
-    expect(totalText).toBeTruthy();
-    const totalNum = parseInt(totalText!.replace(/\D/g, ''), 10);
-    expect(totalNum).toBeGreaterThan(0);
+    // Total executions > 0 because J2 + J3 beforeAll created runs. The card
+    // itself is visible before /runs finishes loading, so wait for the rendered
+    // value rather than reading the initial zero state.
+    await expect(async () => {
+      const totalText = await page.getByTestId('stat-total').locator('h2').textContent();
+      expect(totalText).toBeTruthy();
+      const totalNum = parseInt(totalText!.replace(/\D/g, ''), 10);
+      expect(totalNum).toBeGreaterThan(0);
+    }).toPass({ timeout: 15_000, intervals: [500] });
 
     // Stat cards for success-rate / failed / active queue should all be present.
     await expect(page.getByTestId('stat-success-rate')).toBeVisible();
