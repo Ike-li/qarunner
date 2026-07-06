@@ -606,6 +606,117 @@ test.describe('R-API-1 静默过滤', () => {
       }
     }
   });
+
+  test('R-API-1.7 GET /schedules 非 admin 只见自己的且 profile_id 不泄露他人 schedule', async ({
+    page,
+  }) => {
+    let adminProfileId: string | null = null;
+    let userProfileId: string | null = null;
+    let adminScheduleId: string | null = null;
+    let userScheduleId: string | null = null;
+
+    try {
+      const adminProfileResp = await authedPost(page, adminToken, '/profiles', {
+        name: `r1_schedule_admin_${Date.now()}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(adminProfileResp.status(), await adminProfileResp.text()).toBe(201);
+      adminProfileId = (await adminProfileResp.json()).id;
+
+      const userProfileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `r1_schedule_user_${Date.now()}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(userProfileResp.status(), await userProfileResp.text()).toBe(201);
+      userProfileId = (await userProfileResp.json()).id;
+
+      const adminScheduleResp = await authedPost(page, adminToken, '/schedules', {
+        name: `r1_schedule_admin_${Date.now()}`,
+        profile_id: adminProfileId,
+        cron_expression: '0 3 * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      expect(adminScheduleResp.status(), await adminScheduleResp.text()).toBe(201);
+      const adminSchedule = (await adminScheduleResp.json()) as ScheduleResponse;
+      adminScheduleId = adminSchedule.id;
+      expect(adminSchedule.created_by).toBe(E2E_ADMIN);
+
+      const userScheduleResp = await authedPost(page, userAToken, '/schedules', {
+        name: `r1_schedule_user_${Date.now()}`,
+        profile_id: userProfileId,
+        cron_expression: '0 4 * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      expect(userScheduleResp.status(), await userScheduleResp.text()).toBe(201);
+      const userSchedule = (await userScheduleResp.json()) as ScheduleResponse;
+      userScheduleId = userSchedule.id;
+      expect(userSchedule.created_by).toBe(USER_A);
+
+      const userListResp = await authedGet(page, userAToken, '/schedules');
+      expect(userListResp.status(), await userListResp.text()).toBe(200);
+      const userSchedules = (await userListResp.json()) as ScheduleResponse[];
+      const userScheduleIds = userSchedules.map((schedule) => schedule.id);
+      expect(userScheduleIds).toContain(userScheduleId);
+      expect(userScheduleIds).not.toContain(adminScheduleId);
+
+      const filteredByAdminProfileResp = await authedGet(
+        page,
+        userAToken,
+        `/schedules?profile_id=${encodeURIComponent(adminProfileId!)}`,
+      );
+      expect(filteredByAdminProfileResp.status(), await filteredByAdminProfileResp.text()).toBe(
+        200,
+      );
+      const filteredByAdminProfile =
+        (await filteredByAdminProfileResp.json()) as ScheduleResponse[];
+      expect(filteredByAdminProfile.map((schedule) => schedule.id)).not.toContain(adminScheduleId);
+
+      const filteredOwnProfileResp = await authedGet(
+        page,
+        userAToken,
+        `/schedules?profile_id=${encodeURIComponent(userProfileId!)}`,
+      );
+      expect(filteredOwnProfileResp.status(), await filteredOwnProfileResp.text()).toBe(200);
+      const filteredOwnProfile = (await filteredOwnProfileResp.json()) as ScheduleResponse[];
+      expect(filteredOwnProfile.map((schedule) => schedule.id)).toContain(userScheduleId);
+
+      const adminListResp = await authedGet(page, adminToken, '/schedules');
+      expect(adminListResp.status(), await adminListResp.text()).toBe(200);
+      const adminSchedules = (await adminListResp.json()) as ScheduleResponse[];
+      const adminScheduleIds = adminSchedules.map((schedule) => schedule.id);
+      expect(adminScheduleIds).toContain(adminScheduleId);
+      expect(adminScheduleIds).toContain(userScheduleId);
+    } finally {
+      if (adminScheduleId) {
+        await authedDelete(
+          page,
+          adminToken,
+          `/schedules/${encodeURIComponent(adminScheduleId)}`,
+        ).catch(() => {});
+      }
+      if (userScheduleId) {
+        await authedDelete(
+          page,
+          userAToken,
+          `/schedules/${encodeURIComponent(userScheduleId)}`,
+        ).catch(() => {});
+      }
+      if (adminProfileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(adminProfileId)}`).catch(
+          () => {},
+        );
+      }
+      if (userProfileId) {
+        await authedDelete(page, userAToken, `/profiles/${encodeURIComponent(userProfileId)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
 });
 
 // ── R-API-2  Cross-role single-resource access ───────────────────────────
