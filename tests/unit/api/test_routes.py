@@ -3204,6 +3204,23 @@ def parse_error_here(
         assert resp_markers_missing.json() == []
 
 
+@pytest.mark.parametrize("endpoint", ["tree", "markers"])
+def test_test_suite_path_errors_hide_tests_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    tests_dir = tmp_path / "test_suites"
+    tests_dir.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_dir))
+
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get(f"/tests/%2E%2E/{endpoint}")
+
+    assert resp.status_code == 400
+    assert str(tests_dir) not in resp.text
+
+
 def test_get_tree_includes_playwright_specs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

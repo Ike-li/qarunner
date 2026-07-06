@@ -1054,8 +1054,8 @@ async def get_test_tree(
 
     try:
         suite_path = safe_subpath(cfg.tests_root, suite_name)
-    except UnsafePath as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except UnsafePath:
+        raise HTTPException(status_code=400, detail="Invalid suite path") from None
 
     suite_dir = Path(suite_path)
     if not suite_dir.is_dir():
@@ -1107,8 +1107,8 @@ async def get_test_markers(
 
     try:
         suite_path = safe_subpath(cfg.tests_root, suite_name)
-    except UnsafePath as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except UnsafePath:
+        raise HTTPException(status_code=400, detail="Invalid suite path") from None
 
     suite_dir = Path(suite_path)
     if not suite_dir.is_dir():
