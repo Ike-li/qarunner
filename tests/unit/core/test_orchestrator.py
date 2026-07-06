@@ -575,6 +575,48 @@ class TestExecute:
         assert stored.status == RunStatus.COMPLETED
 
     @pytest.mark.asyncio
+    async def test_execute_fails_before_runner_when_run_id_escapes_artifacts_root(
+        self, tmp_path
+    ):
+        tests_root = tmp_path / "tests"
+        suite_dir = tests_root / "suite"
+        suite_dir.mkdir(parents=True)
+        workspace = tmp_path / "workspace"
+        artifacts_root = workspace / "artifacts"
+        protected_dir = workspace / "protected"
+        artifacts_root.mkdir(parents=True)
+        protected_dir.mkdir()
+        protected_file = protected_dir / "keep.txt"
+        protected_file.write_text("KEEP", encoding="utf-8")
+        process = FakeProcessRunner(
+            handler=lambda cmd, cwd, env, timeout: ProcessResult(
+                exit_code=0, stdout="ok", stderr="", duration_ms=1
+            )
+        )
+        orch = _make_orchestrator(
+            process=process,
+            tests_root=str(tests_root),
+            artifacts_root=str(artifacts_root),
+        )
+        run = Run(
+            id="..",
+            status=RunStatus.QUEUED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite",
+            created_at=datetime.now(UTC),
+        )
+        await orch._store.save(run)
+
+        await orch.execute(run.id)
+
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.FAILED
+        assert "UnsafePath" in (stored.error or "")
+        assert process.calls == []
+        assert protected_file.read_text(encoding="utf-8") == "KEEP"
+
+    @pytest.mark.asyncio
     async def test_execute_cancelled_error_persists_cancelled_status(self, tmp_path):
         (tmp_path / "suite").mkdir()
 

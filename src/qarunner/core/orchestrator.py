@@ -284,14 +284,14 @@ class RunOrchestrator:
             # 2. Build command — results_dir must be absolute per plan
             from pathlib import Path
 
-            results_dir = str((Path(self._artifacts_root) / run.id / "results").resolve())
+            run_dir = Path(safe_subpath(self._artifacts_root, run.id))
+            results_dir = str(run_dir / "results")
             tests_dir = safe_subpath(self._tests_root, run.tests_path)
 
-            run_dir = Path(self._artifacts_root) / run.id
             try:
                 run_dir.mkdir(parents=True, exist_ok=True)
             except OSError:
-                run_dir = Path("./artifacts") / run.id
+                run_dir = Path(safe_subpath("./artifacts", run.id))
                 run_dir.mkdir(parents=True, exist_ok=True)
             stdout_file = str(run_dir / "stdout.log")
             stderr_file = str(run_dir / "stderr.log")
