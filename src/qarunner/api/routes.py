@@ -721,9 +721,10 @@ async def link_test_suite(
     try:
         os.symlink(payload.path, link_path)
     except Exception as e:
+        msg = _scrub_paths(str(e), str(link_path), str(tests_root))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create symlink: {str(e)}",
+            detail=f"Failed to create symlink: {msg}",
         ) from e
 
     # Verify if target path is resolved and is an accessible directory

@@ -4383,6 +4383,29 @@ def test_link_overwrite_unregistered_dir_non_admin_forbidden(
     assert existing.exists()
 
 
+def test_link_symlink_failure_hides_tests_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    local = tmp_path / "proj"
+    local.mkdir()
+
+    def _fail_symlink(src: str, dst: Path) -> None:
+        raise OSError(f"cannot link {src} -> {dst}")
+
+    monkeypatch.setattr("os.symlink", _fail_symlink)
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/tests/link", json={"path": str(local)})
+
+    assert resp.status_code == 500
+    assert "Failed to create symlink" in resp.json()["detail"]
+    assert str(tests_root) not in resp.text
+
+
 # ── External test suites: git clone / pull / delete (stage 2) ────────────
 
 
