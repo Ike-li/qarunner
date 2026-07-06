@@ -1937,6 +1937,96 @@ test.describe('R-API-2 越权单资源', () => {
       }
     }
   });
+
+  test('R-API-2.19 GET|DELETE /schedules/{schedule} 遵守 owner/admin 边界', async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const profileName = `r2_schedule_resource_profile_${stamp}`;
+    const scheduleName = `r2_schedule_resource_${stamp}`;
+    let profileId: string | null = null;
+    let scheduleId: string | null = null;
+
+    try {
+      const profileResp = await authedPost(page, userAToken, '/profiles', {
+        name: profileName,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(profileResp.status(), await profileResp.text()).toBe(201);
+      profileId = (await profileResp.json()).id;
+
+      const scheduleResp = await authedPost(page, userAToken, '/schedules', {
+        name: scheduleName,
+        profile_id: profileId,
+        cron_expression: '0 8 * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      expect(scheduleResp.status(), await scheduleResp.text()).toBe(201);
+      scheduleId = ((await scheduleResp.json()) as ScheduleResponse).id;
+
+      const userBGetResp = await authedGet(
+        page,
+        userBToken,
+        `/schedules/${encodeURIComponent(scheduleId)}`,
+      );
+      const userBGetBody = await userBGetResp.text();
+      expect(userBGetResp.status(), userBGetBody).toBe(403);
+      expect(userBGetBody).not.toContain(scheduleId);
+      expect(userBGetBody).not.toContain(scheduleName);
+      expect(userBGetBody).not.toContain(profileName);
+
+      const userBDeleteResp = await authedDelete(
+        page,
+        userBToken,
+        `/schedules/${encodeURIComponent(scheduleId)}`,
+      );
+      const userBDeleteBody = await userBDeleteResp.text();
+      expect(userBDeleteResp.status(), userBDeleteBody).toBe(403);
+      expect(userBDeleteBody).not.toContain(scheduleId);
+      expect(userBDeleteBody).not.toContain(scheduleName);
+      expect(userBDeleteBody).not.toContain(profileName);
+
+      const ownerGetResp = await authedGet(
+        page,
+        userAToken,
+        `/schedules/${encodeURIComponent(scheduleId)}`,
+      );
+      expect(ownerGetResp.status(), await ownerGetResp.text()).toBe(200);
+      const ownerSchedule = (await ownerGetResp.json()) as ScheduleResponse;
+      expect(ownerSchedule.id).toBe(scheduleId);
+      expect(ownerSchedule.name).toBe(scheduleName);
+      expect(ownerSchedule.profile_id).toBe(profileId);
+      expect(ownerSchedule.created_by).toBe(USER_A);
+
+      const adminGetResp = await authedGet(
+        page,
+        adminToken,
+        `/schedules/${encodeURIComponent(scheduleId)}`,
+      );
+      expect(adminGetResp.status(), await adminGetResp.text()).toBe(200);
+
+      const adminDeleteResp = await authedDelete(
+        page,
+        adminToken,
+        `/schedules/${encodeURIComponent(scheduleId)}`,
+      );
+      expect(adminDeleteResp.status(), await adminDeleteResp.text()).toBe(200);
+      scheduleId = null;
+    } finally {
+      if (scheduleId) {
+        await authedDelete(page, adminToken, `/schedules/${encodeURIComponent(scheduleId)}`).catch(
+          () => {},
+        );
+      }
+      if (profileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(profileId)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
 });
 
 // ── R-API-3  Admin protection rules ──────────────────────────────────────
