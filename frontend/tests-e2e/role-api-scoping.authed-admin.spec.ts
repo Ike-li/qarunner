@@ -18,6 +18,7 @@ const USER_A_PW = 'RoleA-Test-2026!';
 const USER_B_PW = 'RoleB-Test-2026!';
 const PLAYWRIGHT_SUITE = 'sample_playwright';
 const PYTEST_SUITE = 'sample_tests';
+const ADMIN_PROFILE_TESTS_PATH = '/tmp/fake';
 
 let adminToken: string;
 let userAToken: string;
@@ -794,11 +795,13 @@ test.describe('R-API-1 静默过滤', () => {
 
 test.describe('R-API-2 越权单资源', () => {
   let adminProfileId: string;
+  let adminProfileName: string;
 
   test.beforeEach(async ({ page }) => {
+    adminProfileName = `r2_admin_${Date.now()}`;
     const resp = await authedPost(page, adminToken, '/profiles', {
-      name: `r2_admin_${Date.now()}`,
-      tests_path: '/tmp/fake',
+      name: adminProfileName,
+      tests_path: ADMIN_PROFILE_TESTS_PATH,
       runner: 'pytest',
     });
     expect(resp.ok()).toBeTruthy();
@@ -814,7 +817,11 @@ test.describe('R-API-2 越权单资源', () => {
       name: 'hacked_name',
       tests_path: '/tmp/hacked',
     });
-    expect(resp.status()).toBe(403);
+    const body = await resp.text();
+    expect(resp.status(), body).toBe(403);
+    expect(body).not.toContain(adminProfileId);
+    expect(body).not.toContain(adminProfileName);
+    expect(body).not.toContain(ADMIN_PROFILE_TESTS_PATH);
   });
 
   test('R-API-2.2 PUT /profiles/{不存在 id} 以 userA token → 404', async ({ page }) => {
@@ -838,6 +845,7 @@ test.describe('R-API-2 越权单资源', () => {
       expect(profileResp.status(), await profileResp.text()).toBe(201);
       const profile = await profileResp.json();
       profileId = profile.id;
+      const profileName = profile.name as string;
       expect(profile.created_by).toBe(USER_A);
 
       const userBTriggerResp = await authedPost(
@@ -849,6 +857,8 @@ test.describe('R-API-2 越权单资源', () => {
       const userBTriggerBody = await userBTriggerResp.text();
       expect(userBTriggerResp.status(), userBTriggerBody).toBe(403);
       expect(userBTriggerBody).not.toContain(profileId!);
+      expect(userBTriggerBody).not.toContain(profileName);
+      expect(userBTriggerBody).not.toContain(PYTEST_SUITE);
 
       const userBDeleteResp = await authedDelete(
         page,
@@ -858,6 +868,8 @@ test.describe('R-API-2 越权单资源', () => {
       const userBDeleteBody = await userBDeleteResp.text();
       expect(userBDeleteResp.status(), userBDeleteBody).toBe(403);
       expect(userBDeleteBody).not.toContain(profileId!);
+      expect(userBDeleteBody).not.toContain(profileName);
+      expect(userBDeleteBody).not.toContain(PYTEST_SUITE);
 
       const adminDeleteResp = await authedDelete(
         page,
