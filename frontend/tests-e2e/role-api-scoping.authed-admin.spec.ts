@@ -1222,6 +1222,28 @@ test.describe('R-API-3 admin 保护', () => {
     });
     expect(resp.status()).toBe(403);
   });
+
+  test('R-API-3.5 非管理员 PUT|DELETE /users/{username} → 403 且不改变用户', async ({
+    page,
+  }) => {
+    const putResp = await authedPut(page, userAToken, `/users/${USER_B}`, {
+      role: 'admin',
+    });
+    const putBody = await putResp.text();
+    expect(putResp.status(), putBody).toBe(403);
+    expect(putBody).not.toContain(USER_B);
+
+    const deleteResp = await authedDelete(page, userAToken, `/users/${USER_B}`);
+    const deleteBody = await deleteResp.text();
+    expect(deleteResp.status(), deleteBody).toBe(403);
+    expect(deleteBody).not.toContain(USER_B);
+
+    const userBMeResp = await authedGet(page, userBToken, '/auth/me');
+    expect(userBMeResp.status(), await userBMeResp.text()).toBe(200);
+    const userBMe = await userBMeResp.json();
+    expect(userBMe.username).toBe(USER_B);
+    expect(userBMe.role).toBe('user');
+  });
 });
 
 // ── R-API-4  Executor mode restrictions ──────────────────────────────────
