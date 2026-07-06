@@ -1526,7 +1526,7 @@ def test_metrics_owner_scoped_for_non_admin() -> None:
         container.store,
         id="r-bob",
         created_by="bob",
-        tests_path="suite/",
+        tests_path="bob_private_suite/",
         status=RunStatus.COMPLETED,
         created_at=recent,
         finished_at=recent + timedelta(seconds=5),
@@ -1538,9 +1538,13 @@ def test_metrics_owner_scoped_for_non_admin() -> None:
     _override_user(app, "alice", UserRole.USER)
     with TestClient(app) as client:
         resp = client.get("/metrics")
+    body_text = resp.text
     body = resp.json()
     assert body["total_runs"] == 1  # only alice's run
     assert body["pass_rate_7d"] == 1.0
+    assert len(body["suites"]) == 1
+    assert body["suites"][0]["tests_path"] == "suite/"
+    assert "bob_private_suite/" not in body_text
 
 
 def test_metrics_per_suite_breakdown() -> None:
