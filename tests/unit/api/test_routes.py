@@ -3707,6 +3707,23 @@ def test_create_profile_rejects_nonpositive_timeout() -> None:
     assert resp.status_code == 422
 
 
+def test_create_profile_forbidden_for_other_users_registered_suite() -> None:
+    container = _make_container()
+    _save_suite_in_store(container.store, name="bob_suite", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/profiles",
+            json={"name": "Bob Suite Profile", "tests_path": "bob_suite", "runner": "pytest"},
+        )
+
+    assert resp.status_code == 403
+    assert "bob_suite" not in resp.text
+    assert container.store._profiles == {}
+
+
 def test_profile_crud_endpoints() -> None:
     container = _make_container()
     app = create_app(container)

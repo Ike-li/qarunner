@@ -1219,6 +1219,7 @@ async def create_profile(
 ) -> TestProfileResponse:
     """Create and persist a new named execution profile."""
     container = request.app.state.container
+    await _require_tests_path_suite_access(container, req.tests_path, current_user)
     profile = await container.profile_service.create(req, created_by=current_user.username)
     return profile_to_response(profile)
 
