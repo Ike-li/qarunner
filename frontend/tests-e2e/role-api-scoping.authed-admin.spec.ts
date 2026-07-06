@@ -642,7 +642,57 @@ test.describe('R-API-2 越权单资源', () => {
     expect(resp.status()).toBe(404);
   });
 
-  test('R-API-2.3 DELETE /runs/{admin_run} 以 userA token → 403', async ({ page }) => {
+  test('R-API-2.3 DELETE|trigger /profiles/{profile} 遵守 owner/admin 边界', async ({
+    page,
+  }) => {
+    let profileId: string | null = null;
+    try {
+      const profileResp = await authedPost(page, userAToken, '/profiles', {
+        name: `r2_profile_scope_${Date.now()}`,
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+      });
+      expect(profileResp.status(), await profileResp.text()).toBe(201);
+      const profile = await profileResp.json();
+      profileId = profile.id;
+      expect(profile.created_by).toBe(USER_A);
+
+      const userBTriggerResp = await authedPost(
+        page,
+        userBToken,
+        `/profiles/${encodeURIComponent(profileId!)}/trigger`,
+        {},
+      );
+      const userBTriggerBody = await userBTriggerResp.text();
+      expect(userBTriggerResp.status(), userBTriggerBody).toBe(403);
+      expect(userBTriggerBody).not.toContain(profileId!);
+
+      const userBDeleteResp = await authedDelete(
+        page,
+        userBToken,
+        `/profiles/${encodeURIComponent(profileId!)}`,
+      );
+      const userBDeleteBody = await userBDeleteResp.text();
+      expect(userBDeleteResp.status(), userBDeleteBody).toBe(403);
+      expect(userBDeleteBody).not.toContain(profileId!);
+
+      const adminDeleteResp = await authedDelete(
+        page,
+        adminToken,
+        `/profiles/${encodeURIComponent(profileId!)}`,
+      );
+      expect(adminDeleteResp.status(), await adminDeleteResp.text()).toBe(200);
+      profileId = null;
+    } finally {
+      if (profileId) {
+        await authedDelete(page, adminToken, `/profiles/${encodeURIComponent(profileId)}`).catch(
+          () => {},
+        );
+      }
+    }
+  });
+
+  test('R-API-2.4 DELETE /runs/{admin_run} 以 userA token → 403', async ({ page }) => {
     // Create a run as admin (needs tests_path, not profile_id)
     const runResp = await authedPost(page, adminToken, '/runs', {
       tests_path: '/tmp/fake_tests',
@@ -663,7 +713,7 @@ test.describe('R-API-2 越权单资源', () => {
     await authedDelete(page, adminToken, `/runs/${runId}`);
   });
 
-  test('R-API-2.4 DELETE /schedules/{admin_schedule} 以 userA token → 403', async ({ page }) => {
+  test('R-API-2.5 DELETE /schedules/{admin_schedule} 以 userA token → 403', async ({ page }) => {
     // Create a schedule as admin
     const schedResp = await authedPost(page, adminToken, '/schedules', {
       name: 'admin_sched_r2',
@@ -686,7 +736,7 @@ test.describe('R-API-2 越权单资源', () => {
     await authedDelete(page, adminToken, `/schedules/${schedId}`);
   });
 
-  test('R-API-2.5 GET|PUT|trigger /schedules/{user_schedule} 遵守 owner/admin 边界', async ({
+  test('R-API-2.6 GET|PUT|trigger /schedules/{user_schedule} 遵守 owner/admin 边界', async ({
     page,
   }) => {
     let userProfileId: string | null = null;
@@ -764,7 +814,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.6 GET /runs/{admin_run}/artifacts* 以 userA token → 403', async ({ page }) => {
+  test('R-API-2.7 GET /runs/{admin_run}/artifacts* 以 userA token → 403', async ({ page }) => {
     test.setTimeout(180_000);
 
     let playwrightProfileId: string | null = null;
@@ -842,7 +892,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.7 GET /runs/{own_run}/artifacts* 以 owner user token → 200', async ({ page }) => {
+  test('R-API-2.8 GET /runs/{own_run}/artifacts* 以 owner user token → 200', async ({ page }) => {
     test.setTimeout(180_000);
 
     let playwrightProfileId: string | null = null;
@@ -915,7 +965,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.8 GET /runs/{run}/diff|report|stream 遵守 owner/admin 边界', async ({
+  test('R-API-2.9 GET /runs/{run}/diff|report|stream 遵守 owner/admin 边界', async ({
     page,
   }) => {
     test.setTimeout(120_000);
@@ -978,7 +1028,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.9 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
+  test('R-API-2.10 DELETE /credentials/{credential} 遵守 owner/admin 边界', async ({ page }) => {
     const stamp = Date.now();
     const secret = `ghp_delete_scope_${stamp}`;
     let credentialId: string | null = null;
@@ -1019,7 +1069,7 @@ test.describe('R-API-2 越权单资源', () => {
     }
   });
 
-  test('R-API-2.10 /tests/link|delete 遵守 suite owner/admin 边界', async ({ page }) => {
+  test('R-API-2.11 /tests/link|delete 遵守 suite owner/admin 边界', async ({ page }) => {
     const suiteName = `r2_suite_scope_${Date.now()}`;
     let linked = false;
 
