@@ -713,9 +713,10 @@ async def link_test_suite(
             else:
                 shutil.rmtree(link_path)
         except Exception as e:
+            msg = _scrub_paths(str(e), str(link_path), str(tests_root))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to clear existing test suite entry: {str(e)}",
+                detail=f"Failed to clear existing test suite entry: {msg}",
             ) from e
 
     try:

@@ -4406,6 +4406,32 @@ def test_link_symlink_failure_hides_tests_root(
     assert str(tests_root) not in resp.text
 
 
+def test_link_clear_existing_failure_hides_tests_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tests_root = tmp_path / "external_tests"
+    tests_root.mkdir()
+    monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(tests_root))
+    existing = tests_root / "proj"
+    existing.mkdir()
+    local = tmp_path / "target" / "proj"
+    local.mkdir(parents=True)
+
+    def _fail_rmtree(path: Path) -> None:
+        raise OSError(f"cannot remove {path}")
+
+    monkeypatch.setattr("shutil.rmtree", _fail_rmtree)
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.post("/tests/link", json={"path": str(local)})
+
+    assert resp.status_code == 500
+    assert "Failed to clear existing" in resp.json()["detail"]
+    assert str(tests_root) not in resp.text
+    assert existing.exists()
+
+
 # ── External test suites: git clone / pull / delete (stage 2) ────────────
 
 
