@@ -1783,7 +1783,7 @@ async def stream_run_logs(
     import asyncio
 
     cfg = container.settings
-    stdout_file = Path(cfg.artifacts_root) / run_id / "stdout.log"
+    run_dir = Path(cfg.artifacts_root) / run_id
     terminal_states = (
         RunStatus.COMPLETED,
         RunStatus.FAILED,
@@ -1794,11 +1794,13 @@ async def stream_run_logs(
     async def event_generator():
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _SSE_MAX_FOLLOW_SECONDS
+        stdout_file: Path | None = None
         # Wait up to 5 seconds for the file to be created initially
         for _ in range(50):
             if await request.is_disconnected():
                 return
-            if stdout_file.exists():
+            stdout_file = _safe_run_log_file(run_dir, "stdout.log")
+            if stdout_file is not None:
                 break
             try:
                 run = await container.store.get(run_id)
@@ -1808,7 +1810,7 @@ async def stream_run_logs(
                 break
             await asyncio.sleep(0.1)
 
-        if not stdout_file.exists():
+        if stdout_file is None:
             yield "data: [System] Log file not found.\n\n"
             return
 

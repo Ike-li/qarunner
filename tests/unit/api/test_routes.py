@@ -2590,6 +2590,27 @@ def test_stream_run_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         assert payloads == ["line1", "line2"]
 
 
+def test_stream_run_logs_does_not_follow_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
+    _make_run_in_store(container.store, id="run_stream_symlink", status=RunStatus.COMPLETED)
+    secret = tmp_path / "secret.log"
+    secret.write_text("STREAMSECRET\n", encoding="utf-8")
+    run_dir = tmp_path / "run_stream_symlink"
+    run_dir.mkdir()
+    (run_dir / "stdout.log").symlink_to(secret)
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/runs/run_stream_symlink/stream")
+
+    assert resp.status_code == 200
+    assert "[System] Log file not found." in resp.text
+    assert "STREAMSECRET" not in resp.text
+
+
 def test_user_registration_and_login() -> None:
     container = _make_container()
     app = create_app(container)
