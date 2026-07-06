@@ -1100,6 +1100,7 @@ test.describe('R-API-2 越权单资源', () => {
         const userResp = await authedGet(page, userAToken, endpoint);
         const userBody = await userResp.text();
         expect(userResp.status(), userBody).toBe(403);
+        expect(userBody).not.toContain(runId!);
         expect(userBody).not.toContain(artifactPath);
       }
     } finally {
