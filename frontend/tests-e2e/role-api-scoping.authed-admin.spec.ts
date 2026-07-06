@@ -891,6 +891,7 @@ test.describe('R-API-2 越权单资源', () => {
     test.setTimeout(120_000);
 
     let runId: string | null = null;
+    const deleteRunEnvSecret = `delete_run_scope_secret_${Date.now()}`;
     try {
       const runResp = await authedPost(page, adminToken, '/runs', {
         tests_path: PYTEST_SUITE,
@@ -901,7 +902,7 @@ test.describe('R-API-2 越权单资源', () => {
         selected_files: [],
         selected_markers: [],
         extra_args: '',
-        env: {},
+        env: { DELETE_RUN_SCOPE_TOKEN: deleteRunEnvSecret },
       });
       expect(runResp.status(), await runResp.text()).toBe(202);
       const run = (await runResp.json()) as RunResponse;
@@ -912,6 +913,7 @@ test.describe('R-API-2 越权单资源', () => {
       const delBody = await delResp.text();
       expect(delResp.status(), delBody).toBe(403);
       expect(delBody).not.toContain(runId);
+      expect(delBody).not.toContain(deleteRunEnvSecret);
     } finally {
       if (runId) {
         await expect(async () => {
@@ -1196,6 +1198,7 @@ test.describe('R-API-2 越权单资源', () => {
     test.setTimeout(120_000);
 
     let runId: string | null = null;
+    const runEndpointEnvSecret = `run_endpoint_scope_secret_${Date.now()}`;
     try {
       const runResp = await authedPost(page, userAToken, '/runs', {
         tests_path: PYTEST_SUITE,
@@ -1206,7 +1209,7 @@ test.describe('R-API-2 越权单资源', () => {
         selected_files: [],
         selected_markers: [],
         extra_args: '',
-        env: {},
+        env: { RUN_ENDPOINT_SCOPE_TOKEN: runEndpointEnvSecret },
       });
       expect(runResp.status(), await runResp.text()).toBe(202);
       const run = await runResp.json();
@@ -1245,6 +1248,7 @@ test.describe('R-API-2 越权单资源', () => {
         const userBBody = await userBResp.text();
         expect(userBResp.status(), userBBody).toBe(403);
         expect(userBBody).not.toContain(runId!);
+        expect(userBBody).not.toContain(runEndpointEnvSecret);
       }
     } finally {
       if (runId) {
