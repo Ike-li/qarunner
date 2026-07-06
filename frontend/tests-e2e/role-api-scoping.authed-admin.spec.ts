@@ -17,6 +17,7 @@ const USER_B = `e2e_role_b_${Date.now()}`;
 const USER_A_PW = 'RoleA-Test-2026!';
 const USER_B_PW = 'RoleB-Test-2026!';
 const PLAYWRIGHT_SUITE = 'sample_playwright';
+const PYTEST_SUITE = 'sample_tests';
 
 let adminToken: string;
 let userAToken: string;
@@ -408,6 +409,69 @@ test.describe('R-API-2 越权单资源', () => {
           userAToken,
           `/profiles/${encodeURIComponent(playwrightProfileId)}`,
         ).catch(() => {});
+      }
+    }
+  });
+
+  test('R-API-2.7 GET /runs/{run}/diff|report|stream 遵守 owner/admin 边界', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+
+    let runId: string | null = null;
+    try {
+      const runResp = await authedPost(page, userAToken, '/runs', {
+        tests_path: PYTEST_SUITE,
+        runner: 'pytest',
+        args: [],
+        allure: false,
+        timeout: 60,
+        selected_files: [],
+        selected_markers: [],
+        extra_args: '',
+        env: {},
+      });
+      expect(runResp.status(), await runResp.text()).toBe(202);
+      const run = await runResp.json();
+      runId = run.id;
+      expect(run.runner).toBe('pytest');
+      expect(run.created_by).toBe(USER_A);
+
+      let terminalStatus = run.status as string;
+      await expect(async () => {
+        const detailResp = await authedGet(page, userAToken, `/runs/${encodeURIComponent(runId!)}`);
+        expect(detailResp.status()).toBe(200);
+        const detail = await detailResp.json();
+        terminalStatus = detail.status;
+        expect(['completed', 'failed', 'timeout', 'interrupted']).toContain(terminalStatus);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+
+      const diffEndpoint = `/runs/${encodeURIComponent(runId!)}/diff`;
+      const reportEndpoint = `/runs/${encodeURIComponent(runId!)}/report`;
+      const streamEndpoint = `/runs/${encodeURIComponent(runId!)}/stream`;
+
+      for (const token of [userAToken, adminToken]) {
+        const diffResp = await authedGet(page, token, diffEndpoint);
+        expect(diffResp.status(), await diffResp.text()).toBe(200);
+
+        const streamResp = await authedGet(page, token, streamEndpoint);
+        expect(streamResp.status(), await streamResp.text()).toBe(200);
+
+        const reportResp = await authedGet(page, token, reportEndpoint);
+        // The run disables Allure, so report may be absent. It must not fail
+        // because owner/admin authorization was denied.
+        expect([200, 404], await reportResp.text()).toContain(reportResp.status());
+      }
+
+      for (const endpoint of [diffEndpoint, reportEndpoint, streamEndpoint]) {
+        const userBResp = await authedGet(page, userBToken, endpoint);
+        const userBBody = await userBResp.text();
+        expect(userBResp.status(), userBBody).toBe(403);
+        expect(userBBody).not.toContain(runId!);
+      }
+    } finally {
+      if (runId) {
+        await authedDelete(page, userAToken, `/runs/${encodeURIComponent(runId)}`).catch(() => {});
       }
     }
   });
