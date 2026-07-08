@@ -575,9 +575,7 @@ class TestExecute:
         assert stored.status == RunStatus.COMPLETED
 
     @pytest.mark.asyncio
-    async def test_execute_fails_before_runner_when_run_id_escapes_artifacts_root(
-        self, tmp_path
-    ):
+    async def test_execute_fails_before_runner_when_run_id_escapes_artifacts_root(self, tmp_path):
         tests_root = tmp_path / "tests"
         suite_dir = tests_root / "suite"
         suite_dir.mkdir(parents=True)

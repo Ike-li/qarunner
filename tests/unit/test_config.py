@@ -19,6 +19,12 @@ _SETTINGS_ENV_KEYS = [
     "QARUNNER_MAX_CONCURRENCY",
     "QARUNNER_FLAKY_MIN_OBSERVATIONS",
     "QARUNNER_FLAKY_FLIP_THRESHOLD",
+    "QARUNNER_AI_PROVIDER",
+    "QARUNNER_AI_API_KEY",
+    "QARUNNER_AI_MODEL",
+    "QARUNNER_AI_BASE_URL",
+    "QARUNNER_AI_ANALYSIS_MAX_LOG_BYTES",
+    "QARUNNER_AI_REQUEST_TIMEOUT_SECONDS",
 ]
 
 
@@ -38,17 +44,35 @@ class TestSettings:
         assert s.max_concurrency == 4
         assert s.flaky_min_observations == 4
         assert s.flaky_flip_threshold == 3
+        assert s.ai_provider == "anthropic"
+        assert s.ai_api_key == ""
+        assert s.ai_model == "claude-opus-4-8"
+        assert s.ai_base_url == ""
+        assert s.ai_analysis_max_log_bytes == 16384
+        assert s.ai_request_timeout_seconds == 60.0
 
     def test_override(self, monkeypatch):
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", "/custom/tests")
         monkeypatch.setenv("QARUNNER_MAX_CONCURRENCY", "8")
         monkeypatch.setenv("QARUNNER_FLAKY_MIN_OBSERVATIONS", "6")
         monkeypatch.setenv("QARUNNER_FLAKY_FLIP_THRESHOLD", "4")
+        monkeypatch.setenv("QARUNNER_AI_PROVIDER", "openai")
+        monkeypatch.setenv("QARUNNER_AI_API_KEY", "sk-test")
+        monkeypatch.setenv("QARUNNER_AI_MODEL", "gpt-4o")
+        monkeypatch.setenv("QARUNNER_AI_BASE_URL", "https://gw.example.com/v1")
+        monkeypatch.setenv("QARUNNER_AI_ANALYSIS_MAX_LOG_BYTES", "8192")
+        monkeypatch.setenv("QARUNNER_AI_REQUEST_TIMEOUT_SECONDS", "30")
         s = Settings()
         assert s.tests_root == "/custom/tests"
         assert s.max_concurrency == 8
         assert s.flaky_min_observations == 6
         assert s.flaky_flip_threshold == 4
+        assert s.ai_provider == "openai"
+        assert s.ai_api_key == "sk-test"
+        assert s.ai_model == "gpt-4o"
+        assert s.ai_base_url == "https://gw.example.com/v1"
+        assert s.ai_analysis_max_log_bytes == 8192
+        assert s.ai_request_timeout_seconds == 30.0
 
 
 @pytest.mark.parametrize(

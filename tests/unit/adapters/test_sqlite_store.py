@@ -10,7 +10,10 @@ from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.errors import RunNotFound
 from qarunner.models import (
     Credential,
+    DiagnosisConfidence,
+    FailureDiagnosis,
     ReportRef,
+    RootCauseCategory,
     Run,
     RunStatus,
     TestCaseResult,
@@ -352,6 +355,44 @@ async def test_profile_crud(store: SqliteStore) -> None:
 
     retrieved2 = await store.get_profile("profile-001")
     assert retrieved2 is None
+
+
+async def test_ai_diagnosis_roundtrip_upsert_and_cascade(store: SqliteStore) -> None:
+    run = _make_run(id="run-ai")
+    await store.save(run)
+    assert await store.get_ai_diagnosis("run-ai") is None
+
+    diagnosis = FailureDiagnosis(
+        category=RootCauseCategory.ASSERTION,
+        confidence=DiagnosisConfidence.HIGH,
+        summary="an assertion failed",
+        evidence=["expected 200"],
+        is_likely_regression=True,
+    )
+    await store.save_ai_diagnosis(
+        "run-ai", diagnosis, "anthropic", "claude-x", datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    got = await store.get_ai_diagnosis("run-ai")
+    assert got is not None
+    assert got.category == RootCauseCategory.ASSERTION
+    assert got.is_likely_regression is True
+    assert got.evidence == ["expected 200"]
+
+    # Upsert: re-generating replaces rather than duplicating.
+    await store.save_ai_diagnosis(
+        "run-ai",
+        diagnosis.model_copy(update={"summary": "revised"}),
+        "openai",
+        "gpt-x",
+        datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    got2 = await store.get_ai_diagnosis("run-ai")
+    assert got2 is not None
+    assert got2.summary == "revised"
+
+    # FK ON DELETE CASCADE: deleting the run drops its cached diagnosis.
+    await store.delete_run("run-ai")
+    assert await store.get_ai_diagnosis("run-ai") is None
 
 
 async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:

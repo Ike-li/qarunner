@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from qarunner.models import (
     MAX_TIMEOUT_SECONDS,
     CaseHistoryPoint,
+    FailureDiagnosis,
     RegressionDiff,
     ReportRef,
     Run,
@@ -153,6 +154,19 @@ class CaseHistoryResponse(BaseModel):
     points: list[CaseHistoryPoint] = Field(default_factory=list)
     flaky: bool = False
     flip_count: int = 0
+
+
+class AiAnalysisResponse(BaseModel):
+    """AI failure diagnosis for a run (read-only, cross-run stage 4).
+
+    ``enabled`` reflects whether an LLM provider is configured — when False the
+    UI hides the feature. ``diagnosis`` is null when not yet generated or when
+    the run has no failing cases (then ``detail`` explains why).
+    """
+
+    enabled: bool
+    diagnosis: FailureDiagnosis | None = None
+    detail: str | None = None
 
 
 class LoginRequest(BaseModel):

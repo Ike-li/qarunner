@@ -11,10 +11,12 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from qarunner.adapters.allure_cli_reporter import AllureCliReporter
+from qarunner.adapters.anthropic_analyzer import AnthropicFailureAnalyzer
 from qarunner.adapters.apscheduler_schedule import ApschedulerSchedulePort
 from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
 from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.adapters.junit_collector import JunitCollector
+from qarunner.adapters.openai_analyzer import OpenAiFailureAnalyzer
 from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.adapters.subprocess_runner import SubprocessRunner
 from qarunner.adapters.system_clock import SystemClock
@@ -29,6 +31,7 @@ from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.core.schedule_service import ScheduleService
 from qarunner.models import User, UserRole
+from qarunner.ports.ai import FailureAnalyzer
 from qarunner.ports.schedule import SchedulePort
 from qarunner.ports.store import Store
 
@@ -49,6 +52,28 @@ class Container:
     profile_service: ProfileService
     login_throttle: LoginThrottle
     settings: Settings
+    ai_analyzer: FailureAnalyzer | None = None
+
+
+def _build_ai_analyzer(cfg: Settings) -> FailureAnalyzer | None:
+    """Construct the configured provider adapter, or None when AI is disabled.
+
+    An empty api_key or an unknown provider yields None — the endpoints then
+    report the feature as disabled rather than failing.
+    """
+    if not cfg.ai_api_key:
+        return None
+    kwargs = {
+        "api_key": cfg.ai_api_key,
+        "model": cfg.ai_model,
+        "base_url": cfg.ai_base_url,
+        "timeout": cfg.ai_request_timeout_seconds,
+    }
+    if cfg.ai_provider == "anthropic":
+        return AnthropicFailureAnalyzer(**kwargs)
+    if cfg.ai_provider == "openai":
+        return OpenAiFailureAnalyzer(**kwargs)
+    return None
 
 
 def create_container(settings: Settings | None = None) -> Container:
@@ -114,6 +139,7 @@ def create_container(settings: Settings | None = None) -> Container:
         profile_service=profile_service,
         login_throttle=login_throttle,
         settings=cfg,
+        ai_analyzer=_build_ai_analyzer(cfg),
     )
 
 

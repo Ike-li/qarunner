@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from qarunner.core.flaky import FlakyPolicy, flakiness
 from qarunner.errors import RunNotFound
-from qarunner.models import CaseHistoryPoint, Run, RunStatus, TestCaseResult
+from qarunner.models import CaseHistoryPoint, FailureDiagnosis, Run, RunStatus, TestCaseResult
 
 
 @dataclass
@@ -16,6 +16,7 @@ class InMemoryRunStore:
 
     _runs: dict[str, Run] = field(default_factory=dict)
     _cases: dict[str, list[TestCaseResult]] = field(default_factory=dict)
+    _ai_diagnoses: dict[str, FailureDiagnosis] = field(default_factory=dict)
 
     async def save(self, run: Run) -> None:
         self._runs[run.id] = run
@@ -41,6 +42,12 @@ class InMemoryRunStore:
 
     async def get_cases_for_run(self, run_id: str) -> list[TestCaseResult]:
         return list(self._cases.get(run_id, []))
+
+    async def save_ai_diagnosis(self, run_id, diagnosis, provider, model, created_at):
+        self._ai_diagnoses[run_id] = diagnosis
+
+    async def get_ai_diagnosis(self, run_id):
+        return self._ai_diagnoses.get(run_id)
 
     async def get_case_history(
         self,

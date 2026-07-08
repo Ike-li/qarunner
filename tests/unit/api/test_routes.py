@@ -71,6 +71,7 @@ class FakeStore:
     _users: dict[str, dict] = field(default_factory=dict)
     _credentials: dict[str, tuple] = field(default_factory=dict)
     _cases: dict[str, list] = field(default_factory=dict)
+    _ai_diagnoses: dict[str, object] = field(default_factory=dict)
     count_flaky_calls: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -156,6 +157,12 @@ class FakeStore:
 
     async def get_cases_for_run(self, run_id: str) -> list:
         return list(self._cases.get(run_id, []))
+
+    async def save_ai_diagnosis(self, run_id, diagnosis, provider, model, created_at) -> None:
+        self._ai_diagnoses[run_id] = diagnosis
+
+    async def get_ai_diagnosis(self, run_id):
+        return self._ai_diagnoses.get(run_id)
 
     async def get_case_history(
         self,
@@ -1033,9 +1040,7 @@ def test_run_artifact_endpoints_do_not_follow_artifact_dir_symlink_escape(
     (outside_artifacts / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
     run_results = artifacts_root / "pw-nested-link" / "results"
     run_results.mkdir(parents=True)
-    (run_results / "playwright-results").symlink_to(
-        outside_artifacts, target_is_directory=True
-    )
+    (run_results / "playwright-results").symlink_to(outside_artifacts, target_is_directory=True)
 
     app = create_app(container)
     with TestClient(app) as client:

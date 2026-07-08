@@ -98,6 +98,17 @@ class Settings(BaseSettings):
     # (pass→fail→pass→fail) rather than a one-off regression + fix.
     flaky_min_observations: int = Field(default=4, ge=1)
     flaky_flip_threshold: int = Field(default=3, ge=1)
+    # AI failure-diagnosis (optional). Empty ``ai_api_key`` disables the feature
+    # and the UI hides it — the platform never fails to start on a missing key
+    # (unlike secret_key/admin_password). ``ai_provider`` selects the SDK
+    # (anthropic | openai); ``ai_base_url`` allows a self-hosted gateway/proxy;
+    # ``ai_analysis_max_log_bytes`` bounds the stdout/stderr tail sent to the LLM.
+    ai_provider: str = "anthropic"
+    ai_api_key: str = ""
+    ai_model: str = "claude-opus-4-8"
+    ai_base_url: str = ""
+    ai_analysis_max_log_bytes: int = 16384
+    ai_request_timeout_seconds: float = 60.0
 
     @field_validator("secret_key")
     @classmethod

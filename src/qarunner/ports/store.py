@@ -14,6 +14,7 @@ from typing import Protocol, runtime_checkable
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
+    FailureDiagnosis,
     Run,
     TestCaseResult,
     TestProfile,
@@ -197,6 +198,21 @@ class Store(
         flip_threshold: int = 3,
     ) -> int:
         """Count unique test cases matching the configured flaky policy."""
+        ...
+
+    async def save_ai_diagnosis(
+        self,
+        run_id: str,
+        diagnosis: FailureDiagnosis,
+        provider: str,
+        model: str,
+        created_at: datetime,
+    ) -> None:
+        """Cache a run's AI failure diagnosis (upsert; one row per run)."""
+        ...
+
+    async def get_ai_diagnosis(self, run_id: str) -> FailureDiagnosis | None:
+        """Return a run's cached diagnosis, or None if not yet generated."""
         ...
 
     async def dequeue_next_queued(self) -> str | None:

@@ -1,7 +1,7 @@
 import {
   Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, ChevronDown, ChevronRight,
   Clock, Copy, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Shuffle,
-  Terminal, Trash2, X, XCircle,
+  Sparkles, Terminal, Trash2, X, XCircle,
 } from 'lucide-react'
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
@@ -13,6 +13,7 @@ import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
 import type { TranslationKey } from '../i18n'
 import type { CaseHistory, RunArtifact, RunDiff, TestCaseResult } from '../types'
+import { AiInsightsTab } from './AiInsightsTab'
 
 const DIFF_TONE_COLOR: Record<DiffTone, string> = {
   danger: '#ef4444',
@@ -548,6 +549,15 @@ export function RunDetailsDrawer() {
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }} data-testid="drawer-tab-diff">
                     <GitCompare size={14} />
                     <span>{d.t('diffTab')}</span>
+                  </span>
+                }
+              />
+              <Tabs.TabPane
+                itemKey="ai-insights"
+                tab={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }} data-testid="drawer-tab-ai">
+                    <Sparkles size={14} />
+                    <span>{d.t('aiTab')}</span>
                   </span>
                 }
               />
@@ -1112,6 +1122,10 @@ export function RunDetailsDrawer() {
                   </>
                 )}
               </div>
+            )}
+
+            {d.terminal.drawerTab === 'ai-insights' && d.runs.selectedRunId && (
+              <AiInsightsTab runId={d.runs.selectedRunId} apiFetch={d.apiFetch} t={d.t} />
             )}
           </div>
         )}

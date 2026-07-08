@@ -23,6 +23,12 @@ This directory keeps the existing Playwright project boundaries:
   `report-viewer.authed-admin.spec.ts` and `run-diff.authed-admin.spec.ts` remain runnable under
   `test:ui:legacy-duplicates`, but the normal mocked UI layer uses `run-details` as the authority.
 
+- AI Analysis tab contract: `ai-insights.authed-admin.spec.ts`.
+  Owns the fourth drawer tab (`drawer-tab-ai`): disabled/degraded state (no API key), empty +
+  on-demand Generate, the structured diagnosis card (category/confidence/evidence/next-steps/
+  regression badge), Regenerate, and the transport-error state. Fully mocks `/runs/{id}/ai-analysis`
+  so it is deterministic without a real LLM key.
+
 - Trigger modal contract: `trigger-modal.authed-admin.spec.ts`.
   `trigger-run.authed-admin.spec.ts` is retained as a legacy duplicate until file deletion is
   approved.

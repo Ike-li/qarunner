@@ -17,6 +17,7 @@ from qarunner.errors import RunNotFound
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
+    FailureDiagnosis,
     ReportRef,
     Run,
     RunStatus,
@@ -167,6 +168,21 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_runs_owner_status ON runs(created_by, status);",
             "CREATE INDEX IF NOT EXISTS idx_runs_locked_status "
             "ON runs(locked, status, finished_at);",
+        ),
+    ),
+    # v10: cached AI failure diagnosis, one row per run (UPSERT on re-generate).
+    # Read-only analysis output; CASCADE-deleted with the parent run.
+    (
+        10,
+        (
+            "CREATE TABLE IF NOT EXISTS run_ai_diagnosis ("
+            "run_id TEXT PRIMARY KEY, "
+            "diagnosis_json TEXT NOT NULL, "
+            "provider TEXT NOT NULL, "
+            "model TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, "
+            "FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE"
+            ");",
         ),
     ),
 )
@@ -568,6 +584,40 @@ class SqliteStore:
             )
             for r in rows
         ]
+
+    async def save_ai_diagnosis(
+        self,
+        run_id: str,
+        diagnosis: FailureDiagnosis,
+        provider: str,
+        model: str,
+        created_at: datetime,
+    ) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO run_ai_diagnosis "
+                "(run_id, diagnosis_json, provider, model, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    diagnosis.model_dump_json(),
+                    provider,
+                    model,
+                    _dt_to_iso(created_at),
+                ),
+            )
+            await db.commit()
+
+    async def get_ai_diagnosis(self, run_id: str) -> FailureDiagnosis | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT diagnosis_json FROM run_ai_diagnosis WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return FailureDiagnosis.model_validate_json(row[0])
 
     async def get_case_history(
         self,

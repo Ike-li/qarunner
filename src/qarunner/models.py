@@ -255,6 +255,44 @@ class CaseHistoryPoint(BaseModel):
     status: str
 
 
+class RootCauseCategory(enum.StrEnum):
+    """Root-cause buckets for an AI failure diagnosis (read-only analysis)."""
+
+    NEW_FAILURE = "new_failure"  # newly-red case vs baseline — likely a regression
+    HISTORICAL_FLAKY = "historical_flaky"  # oscillating history, not a real break
+    ENVIRONMENT = "environment"  # infra/network/dependency, not the test's fault
+    ASSERTION = "assertion"  # a genuine assertion mismatch
+    TIMEOUT = "timeout"  # exceeded the run/step time budget
+    PERMISSION_PATH = "permission_path"  # permission denied / missing path
+
+
+class DiagnosisConfidence(enum.StrEnum):
+    """How confident the diagnosis is."""
+
+    HIGH = "HIGH"
+    MED = "MED"
+    LOW = "LOW"
+
+
+class NextStep(BaseModel):
+    """One actionable next step suggested by a failure diagnosis."""
+
+    kind: str  # rerun_profile | inspect_log | check_regression | inspect_diff | other
+    action: str
+    reference: str | None = None  # profile_id / log anchor / baseline run_id, etc.
+
+
+class FailureDiagnosis(BaseModel):
+    """Structured AI diagnosis of why a run failed. Read-only — never edits code."""
+
+    category: RootCauseCategory
+    confidence: DiagnosisConfidence
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+    is_likely_regression: bool = False
+    next_steps: list[NextStep] = Field(default_factory=list)
+
+
 class ReportRef(BaseModel):
     """Reference to allure report artifacts."""
 

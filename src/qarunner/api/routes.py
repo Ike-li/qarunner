@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import Container, get_current_admin, get_current_user
 from qarunner.api.schemas import (
+    AiAnalysisResponse,
     CaseHistoryResponse,
     CloneTestSuiteRequest,
     CredentialCreateRequest,
@@ -59,6 +60,7 @@ from qarunner.api.schemas import (
 from qarunner.core import flaky, regression, trend
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.core.credentials import CredentialCipher
+from qarunner.core.failure_analysis import build_failure_context
 from qarunner.errors import (
     InvalidScheduleRequest,
     LoginLockedOut,
@@ -132,9 +134,7 @@ def _is_shared_suite(suite: TestSuite, admin_user: str) -> bool:
     return suite.created_by in {admin_user, "system"}
 
 
-async def _visible_suite_names(
-    container: Container, names: list[str], user: User
-) -> list[str]:
+async def _visible_suite_names(container: Container, names: list[str], user: User) -> list[str]:
     """Filter recorded suite names for non-admin users; keep unrecorded dirs visible."""
     if user.role == UserRole.ADMIN:
         return names
@@ -142,7 +142,8 @@ async def _visible_suite_names(
     return [
         name
         for name in names
-        if (suite := suites_by_name.get(name)) is None or suite.created_by == user.username
+        if (suite := suites_by_name.get(name)) is None
+        or suite.created_by == user.username
         or _is_shared_suite(suite, container.settings.admin_user)
     ]
 
@@ -1585,12 +1586,8 @@ async def get_run(
 
     cfg = container.settings
     run_dir = _safe_run_artifact_dir(cfg.artifacts_root, run_id)
-    stdout_file = (
-        _safe_run_log_file(run_dir, "stdout.log") if run_dir is not None else None
-    )
-    stderr_file = (
-        _safe_run_log_file(run_dir, "stderr.log") if run_dir is not None else None
-    )
+    stdout_file = _safe_run_log_file(run_dir, "stdout.log") if run_dir is not None else None
+    stderr_file = _safe_run_log_file(run_dir, "stderr.log") if run_dir is not None else None
 
     if stdout_file is None:
         run_dir_fallback = _safe_run_artifact_dir("./artifacts", run_id)
@@ -1691,6 +1688,112 @@ async def get_case_history(
     )
     is_flaky, flips = flaky.flakiness([p.status for p in points], policy=policy)
     return CaseHistoryResponse(points=points, flaky=is_flaky, flip_count=flips)
+
+
+def _run_stdout_tail(artifacts_root: str, run_id: str, max_bytes: int) -> str:
+    """Return a run's stdout tail, trimmed to ``max_bytes`` for the LLM context."""
+    run_dir = _safe_run_artifact_dir(artifacts_root, run_id)
+    if run_dir is None:
+        return ""
+    stdout_file = _safe_run_log_file(run_dir, "stdout.log")
+    if stdout_file is None:
+        return ""
+    return (_read_log_tail(stdout_file) or "")[-max_bytes:]
+
+
+@router.get("/runs/{run_id}/ai-analysis", response_model=AiAnalysisResponse)
+async def get_ai_analysis(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> AiAnalysisResponse:
+    """Return a run's cached AI failure diagnosis (cross-run stage 4).
+
+    ``enabled`` reflects whether an LLM provider is configured; ``diagnosis`` is
+    null until one is generated via POST. Owner-scoped like the other run views.
+    """
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+    cached = await container.store.get_ai_diagnosis(run_id)
+    return AiAnalysisResponse(enabled=container.ai_analyzer is not None, diagnosis=cached)
+
+
+@router.post("/runs/{run_id}/ai-analysis", response_model=AiAnalysisResponse)
+async def create_ai_analysis(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> AiAnalysisResponse:
+    """Generate and cache an AI diagnosis of why a run failed (read-only).
+
+    Aggregates the run's failed cases, log tail, baseline diff, pass-rate trend,
+    and per-case flaky history — all owner-scoped exactly like /diff and
+    /cases/history — then asks the configured provider for a structured
+    diagnosis. Never modifies tests or code. Returns ``enabled: false`` when no
+    provider is configured, and an empty diagnosis with ``detail`` when the run
+    has no failing cases.
+    """
+    container = request.app.state.container
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, current_user)
+
+    analyzer = container.ai_analyzer
+    if analyzer is None:
+        return AiAnalysisResponse(enabled=False)
+
+    cfg = container.settings
+    cases = await container.store.get_cases_for_run(run_id)
+
+    all_runs = await container.store.list()
+    if current_user.role != UserRole.ADMIN:
+        all_runs = [r for r in all_runs if r.created_by == current_user.username]
+
+    baseline = regression.select_baseline(run, all_runs)
+    baseline_diff = None
+    if baseline is not None:
+        base_cases = await container.store.get_cases_for_run(baseline.id)
+        baseline_diff = regression.diff(base_cases, cases)
+
+    trend_points = trend.trend_points(all_runs, run.tests_path)
+
+    policy = flaky.FlakyPolicy(
+        min_observations=cfg.flaky_min_observations,
+        flip_threshold=cfg.flaky_flip_threshold,
+    )
+    created_by = None if current_user.role == UserRole.ADMIN else current_user.username
+    flaky_identities: set[tuple[str, str]] = set()
+    for c in cases:
+        if c.status not in ("failed", "error"):
+            continue
+        history = await container.store.get_case_history(
+            run.tests_path, c.suite, c.name, 20, created_by, run.profile_id
+        )
+        if flaky.flakiness([p.status for p in history], policy=policy)[0]:
+            flaky_identities.add((c.suite, c.name))
+
+    log_tail = _run_stdout_tail(cfg.artifacts_root, run_id, cfg.ai_analysis_max_log_bytes)
+    allure_url = (
+        f"/runs/{run_id}/report" if run.report is not None and run.report.html_generated else None
+    )
+
+    context = build_failure_context(
+        run, cases, log_tail, baseline_diff, trend_points, flaky_identities, allure_url
+    )
+    if context is None:
+        return AiAnalysisResponse(enabled=True, detail="No failing cases to diagnose.")
+
+    diagnosis = await analyzer.analyze(context)
+    await container.store.save_ai_diagnosis(
+        run_id, diagnosis, cfg.ai_provider, cfg.ai_model, datetime.now(UTC)
+    )
+    return AiAnalysisResponse(enabled=True, diagnosis=diagnosis)
 
 
 def _resolve_report_file(report: ReportRef, artifacts_root: str) -> Path:
