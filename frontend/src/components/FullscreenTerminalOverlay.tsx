@@ -2,6 +2,7 @@ import { Check, Copy, Download, Search, Terminal, X, ZoomIn, ZoomOut } from 'luc
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
+import { LogsBody } from './LogsBody'
 
 /** Fullscreen read-only terminal overlay opened from the drawer logs tab. Mirrors
  *  the inline console (search/level/font + word-wrap + auto-scroll toggles) over
@@ -186,46 +187,11 @@ export function FullscreenTerminalOverlay() {
           ref={d.fullscreenTerminalRef}
           style={{ fontSize: `${d.terminal.terminalFontSize}px` }}
         >
-          {d.runs.isStreaming ? (
-            filteredStreamed ? (
-              <pre className={styles.stdoutPre}>{d.terminal.renderFormattedLogs(filteredStreamed)}</pre>
-            ) : d.runs.streamedStdout ? (
-              <span className={styles.terminalPlaceholder}>
-                {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
-              </span>
-            ) : (
-              <span className={styles.terminalPlaceholder}>
-                <span className={styles.waitingLogs}>
-                  <span className={styles.pulsingText}>{d.t('waitingLogs')}</span>
-                </span>
-              </span>
-            )
-          ) : (selectedRun.stdout || selectedRun.stderr || d.runs.streamedStdout) ? (
-            (filteredStdout || filteredStderr || filteredStreamed) ? (
-              <>
-                {(filteredStdout || (d.runs.selectedRunDetails ? null : filteredStreamed)) && (
-                  <pre className={styles.stdoutPre}>
-                    {d.terminal.renderFormattedLogs(filteredStdout || filteredStreamed)}
-                  </pre>
-                )}
-                {filteredStderr && <pre className={styles.stderrPre}>{d.terminal.renderFormattedLogs(filteredStderr)}</pre>}
-              </>
-            ) : (
-              <span className={styles.terminalPlaceholder}>
-                {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
-              </span>
-            )
-          ) : d.runs.detailsLoading ? (
-            <span className={styles.terminalPlaceholder}>
-              <span className={styles.waitingLogs}>
-                <span className={styles.pulsingText}>{d.lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
-              </span>
-            </span>
-          ) : (
-            <span className={styles.terminalPlaceholder}>
-              {d.t('noLogsAvailable')}
-            </span>
-          )}
+          <LogsBody
+            filteredStdout={filteredStdout}
+            filteredStderr={filteredStderr}
+            filteredStreamed={filteredStreamed}
+          />
         </div>
       </div>
     </div>
