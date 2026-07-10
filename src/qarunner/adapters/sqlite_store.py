@@ -948,8 +948,7 @@ class SqliteStore:
         """
         async with self._connect() as db:
             cursor = await db.execute(
-                "UPDATE runs SET status = ?, finished_at = ? "
-                "WHERE id = ? AND status IN (?, ?)",
+                "UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND status IN (?, ?)",
                 (
                     RunStatus.CANCELLED.value,
                     finished_at,
@@ -1115,6 +1114,23 @@ class SqliteStore:
             )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None:
+        # Narrow column update (mirrors claim_schedule_run's leader-election
+        # write): a full-row save_schedule() here would clobber a concurrent
+        # PUT/DELETE landing while the caller awaited orchestrator.create()
+        # (BUG-6) — PUT's new field values, or DELETE's row removal (a
+        # full-row UPSERT has nothing to conflict with once the row is gone,
+        # so it would silently re-INSERT the just-deleted schedule). A plain
+        # UPDATE on a missing row is a no-op, which is exactly what's wanted.
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE test_schedules SET next_run_at = ? WHERE id = ?",
+                (_dt_to_iso(next_run_at), schedule_id),
+            )
+            await db.commit()
 
     async def get_schedule(self, schedule_id: str) -> TestSchedule | None:
         async with self._connect() as db:

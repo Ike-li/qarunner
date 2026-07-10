@@ -23,6 +23,16 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const [streamedStdout, setStreamedStdout] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
 
+  // B2: fetchSelectedRunDetails is called from several async call sites
+  // (polling, SSE reconnect, status-transition) that don't know whether the
+  // selection has moved on by the time their response arrives. Declared
+  // ahead of fetchSelectedRunDetails (rather than down with the other SSE
+  // refs) so that callback can read it.
+  const selectedRunIdRef = useRef(selectedRunId)
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId
+  }, [selectedRunId])
+
   // ── fetch helpers ──────────────────────────────────────────────────────
 
   const fetchRuns = useCallback(async () => {
@@ -45,16 +55,19 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
       setDetailsError(false)
       try {
         const resp = await apiFetch(`/runs/${runId}`)
+        if (selectedRunIdRef.current !== runId) return // stale: selection moved on
         if (!resp.ok) throw new Error(`Run details request failed: ${resp.status}`)
         const data = await resp.json()
+        if (selectedRunIdRef.current !== runId) return // stale: selection moved on
         setSelectedRunDetails(data)
         setDetailsError(false)
       } catch (err) {
+        if (selectedRunIdRef.current !== runId) return
         console.error('Error fetching run details:', err)
         setSelectedRunDetails((prev) => (prev?.id === runId ? null : prev))
         setDetailsError(true)
       } finally {
-        setDetailsLoading(false)
+        if (selectedRunIdRef.current === runId) setDetailsLoading(false)
       }
     },
     [apiFetch],
@@ -161,12 +174,11 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   // ── SSE streaming ──────────────────────────────────────────────────────
 
   // Snapshot refs so the SSE effect doesn't depend on frequently-changing state.
+  // (selectedRunIdRef itself is declared earlier, alongside fetchSelectedRunDetails.)
   const runsRef = useRef(runs)
-  const selectedRunIdRef = useRef(selectedRunId)
   const selectedRunDetailsRef = useRef(selectedRunDetails)
 
   useEffect(() => { runsRef.current = runs }, [runs])
-  useEffect(() => { selectedRunIdRef.current = selectedRunId }, [selectedRunId])
   useEffect(() => {
     selectedRunDetailsRef.current = selectedRunDetails
   }, [selectedRunDetails])

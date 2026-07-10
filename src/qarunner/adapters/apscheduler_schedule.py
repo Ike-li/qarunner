@@ -100,18 +100,19 @@ class ApschedulerSchedulePort:
                 run_req, created_by="system:schedule", profile_id=schedule.profile_id
             )
 
-            # Update schedule execution times
-            now = datetime.now(UTC)
-            schedule = schedule.model_copy(update={"last_run_at": now})
-
-            # Calculate next run time
+            # BUG-6: orchestrator.create() awaits, so a PUT/DELETE on this
+            # schedule may land before we get here. A full-row save_schedule()
+            # using the snapshot read at the top of this method would clobber
+            # those changes — or resurrect a concurrently deleted row, since a
+            # full-row UPSERT has nothing to conflict with once it's gone.
+            # Persist only next_run_at, narrowly, the same way
+            # claim_schedule_run narrowly owns last_run_at.
             try:
                 next_at = cron.next_run(schedule.cron_expression, schedule.timezone)
-                schedule = schedule.model_copy(update={"next_run_at": next_at})
             except Exception:
                 logger.exception("Failed to calculate next run time for schedule %s", schedule_id)
-
-            await self._store.save_schedule(schedule)
+            else:
+                await self._store.update_schedule_next_run(schedule_id, next_at)
         except Exception:
             logger.exception("Error executing scheduled run for schedule %s", schedule_id)
 

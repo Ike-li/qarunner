@@ -112,6 +112,10 @@ class ScheduleStore(Protocol):
 
     async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool: ...
 
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None: ...
+
 
 @runtime_checkable
 class SuiteStore(Protocol):

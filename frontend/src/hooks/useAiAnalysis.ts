@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { ApiFetch } from './useApi'
 
 export interface NextStep {
@@ -40,8 +40,13 @@ const INITIAL: AiAnalysisState = {
  */
 export function useAiAnalysis(apiFetch: ApiFetch) {
   const [state, setState] = useState<AiAnalysisState>(INITIAL)
+  // B1: load()/generate() can be called again (a fast switch to another run)
+  // before an earlier call's response arrives. Track the most recent call so
+  // a stale response can't overwrite state a newer call already produced.
+  const latestCallRef = useRef(0)
 
-  const _apply = useCallback((body: Record<string, unknown>) => {
+  const _apply = useCallback((body: Record<string, unknown>, callId: number) => {
+    if (callId !== latestCallRef.current) return
     setState({
       diagnosis: (body.diagnosis as FailureDiagnosis | null) ?? null,
       enabled: Boolean(body.enabled),
@@ -53,14 +58,17 @@ export function useAiAnalysis(apiFetch: ApiFetch) {
 
   const _run = useCallback(
     async (runId: string, opts: RequestInit | undefined) => {
+      const callId = ++latestCallRef.current
       try {
         const resp = await apiFetch(`/runs/${runId}/ai-analysis`, opts)
+        if (callId !== latestCallRef.current) return
         if (!resp.ok) {
           setState(s => ({ ...s, loading: false, error: true }))
           return
         }
-        _apply(await resp.json())
+        _apply(await resp.json(), callId)
       } catch {
+        if (callId !== latestCallRef.current) return
         setState(s => ({ ...s, loading: false, error: true }))
       }
     },

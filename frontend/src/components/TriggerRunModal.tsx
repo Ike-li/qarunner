@@ -34,8 +34,11 @@ export function TriggerRunModal() {
     d.form.handleSaveProfile(e, d.selectedFiles, d.selectedMarkers, () => {
       d.profiles.fetchProfiles()
     })
-  const onDeleteProfile = (profileId: string, e?: React.MouseEvent) => {
-    d.profiles.handleDeleteProfile(profileId, e)
+  const onDeleteProfile = async (profileId: string, e?: React.MouseEvent) => {
+    // B3: same fix as ProjectSidebar — only clear the selection if the
+    // delete actually happened, not on a cancelled confirm or a failure.
+    const deleted = await d.profiles.handleDeleteProfile(profileId, e)
+    if (!deleted) return
     if (d.form.selectedProfileId === profileId) d.form.setSelectedProfileId('')
   }
 

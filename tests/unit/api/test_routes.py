@@ -339,6 +339,13 @@ class FakeStore:
     async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool:
         return True
 
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None:
+        existing = self._schedules.get(schedule_id)
+        if existing is not None:
+            self._schedules[schedule_id] = existing.model_copy(update={"next_run_at": next_run_at})
+
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         return 0
 

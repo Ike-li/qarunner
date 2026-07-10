@@ -407,8 +407,12 @@ export function ProjectSidebar() {
 	                                  icon={<IconDelete style={{ fontSize: '10px' }} />}
 	                                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
 	                                  data-testid={`profile-delete-${profile.id}`}
-	                                  onClick={(e) => {
-                                    d.profiles.handleDeleteProfile(profile.id, e);
+	                                  onClick={async (e) => {
+                                    // B3: only clear profile-scoped selection state if the
+                                    // delete actually happened — not on a cancelled confirm
+                                    // or a failed request.
+                                    const deleted = await d.profiles.handleDeleteProfile(profile.id, e);
+                                    if (!deleted) return;
                                     if (d.form.selectedProfileId===profile.id) d.form.setSelectedProfileId('')
                                     if (d.selectedProfileFilter===profile.id) d.setSelectedProfileFilter(null)
                                   }}

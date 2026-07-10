@@ -91,6 +91,38 @@ describe('useAiAnalysis', () => {
     expect(result.current.error).toBe(true)
   })
 
+  it('B1: a stale load() response does not clobber a newer selection', async () => {
+    // r1's request is slow and resolves only after we've already switched to r2.
+    let resolveR1!: (v: unknown) => void
+    const r1Promise = new Promise((resolve) => {
+      resolveR1 = resolve
+    })
+    const apiFetch = vi.fn((path: string) => {
+      if (path === '/runs/r1/ai-analysis') return r1Promise as Promise<Response>
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ enabled: true, diagnosis: { ..._DIAG, category: 'timeout' }, detail: null }),
+      } as unknown as Response)
+    })
+    const { result } = renderHook(() => useAiAnalysis(apiFetch))
+
+    let loadR1Done: Promise<void>
+    act(() => {
+      loadR1Done = result.current.load('r1')
+    })
+    await act(async () => {
+      await result.current.load('r2')
+    })
+    expect(result.current.diagnosis?.category).toBe('timeout')
+
+    // The stale r1 response now arrives — it must be discarded, not applied.
+    await act(async () => {
+      resolveR1({ ok: true, json: async () => ({ enabled: true, diagnosis: _DIAG, detail: null }) })
+      await loadR1Done
+    })
+    expect(result.current.diagnosis?.category).toBe('timeout')
+  })
+
   it('reset restores the initial state', async () => {
     const apiFetch = okFetch({ enabled: false, diagnosis: null, detail: 'no failures' })
     const { result } = renderHook(() => useAiAnalysis(apiFetch))
