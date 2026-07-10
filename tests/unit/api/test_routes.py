@@ -177,6 +177,21 @@ class FakeStore:
         runs = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
         return runs if limit is None else runs[:limit]
 
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        """BUG-3: atomically set CANCELLED only if still QUEUED or RUNNING."""
+        run = self._runs.get(run_id)
+        if run is None:
+            return False
+        if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+            self._runs[run_id] = run.model_copy(
+                update={
+                    "status": RunStatus.CANCELLED,
+                    "finished_at": datetime.fromisoformat(finished_at),
+                }
+            )
+            return True
+        return False
+
     async def save_cases(self, run_id, tests_path, created_at, cases) -> None:
         self._cases[run_id] = list(cases)
 

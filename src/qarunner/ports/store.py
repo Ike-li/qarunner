@@ -35,6 +35,15 @@ class RunStore(Protocol):
 
     async def list(self, limit: int | None = None) -> list[Run]: ...
 
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        """Atomically set CANCELLED only if the run is still QUEUED or RUNNING.
+
+        Returns True if the update was applied, False if the run was already
+        in a terminal state (no-op) — prevents overwriting a legitimate
+        COMPLETED/FAILED/TIMEOUT with CANCELLED.
+        """
+        ...
+
     async def save_cases(
         self,
         run_id: str,
@@ -75,6 +84,15 @@ class UserStore(Protocol):
 
     async def update_role(self, username: str, role: str) -> bool:
         """Set a user's role. Returns True if the user existed (P1-3)."""
+        ...
+
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        """Atomically change role only if more than one admin remains.
+
+        Returns True if the update was applied, False if the user is the
+        last admin (no-op) — prevents two concurrent demotion requests from
+        both succeeding and leaving zero admins.
+        """
         ...
 
     async def increment_token_version(self, username: str) -> bool:

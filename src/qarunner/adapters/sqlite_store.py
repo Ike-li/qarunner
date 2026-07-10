@@ -193,6 +193,17 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
 )
 
 
+# The `runs` row shape shared by every SELECT that reconstructs a full Run
+# (get/list/get_old_unlocked_runs) — kept in one place so the column list and
+# _row_to_run's positional indices can't drift out of sync across call sites.
+_RUN_COLUMNS = (
+    "id, status, runner, created_by, tests_path, args_json, allure_enabled, "
+    "timeout, executor_mode, summary_json, report_json, exit_code, error, "
+    "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+    "profile_id"
+)
+
+
 class SqliteStore:
     """RunStore backed by aiosqlite, opening a fresh connection per operation.
 
@@ -535,11 +546,7 @@ class SqliteStore:
     async def get(self, run_id: str) -> Run:
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id "
-                "FROM runs WHERE id = ?",
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE id = ?",
                 (run_id,),
             )
             row = await cursor.fetchone()
@@ -553,13 +560,7 @@ class SqliteStore:
         # of that user's runs) rely on this. Hot dashboard-facing endpoints
         # pass a bounding limit instead (PERF: SqliteStore.list() had no
         # ceiling at all, and was the shared data source for 5 of them).
-        query = (
-            "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-            "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-            "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-            "profile_id "
-            "FROM runs ORDER BY created_at DESC"
-        )
+        query = f"SELECT {_RUN_COLUMNS} FROM runs ORDER BY created_at DESC"
         params: tuple[int, ...] = ()
         if limit is not None:
             query += " LIMIT ?"
@@ -1014,11 +1015,7 @@ class SqliteStore:
         cutoff_iso = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id "
-                "FROM runs "
+                f"SELECT {_RUN_COLUMNS} FROM runs "
                 "WHERE finished_at <= ? AND locked = 0 "
                 "AND status IN ('completed', 'failed', 'timeout')",
                 (cutoff_iso,),
