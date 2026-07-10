@@ -229,9 +229,17 @@ export function UserManagementModal() {
                         ? (d.lang === 'zh' ? `已清理 ${data.cleaned_runs} 条运行记录` : `Cleaned ${data.cleaned_runs} runs`)
                         : (d.lang === 'zh' ? '无可清理的记录' : 'Nothing to clean'))
                       d.runs.fetchRuns()
+                    } else {
+                      // B5: a non-ok response (e.g. bad retention_days, server
+                      // error) fell through silently, same as the network-error case.
+                      const err = await resp.json()
+                      alert(err.detail || (d.lang === 'zh' ? '清理失败，请重试' : 'Cleanup failed. Please try again.'))
                     }
                   } catch (err) {
+                    // B5: this catch had no user-visible failure path — a network
+                    // error looked like the button silently did nothing.
                     console.error('Cleanup failed', err)
+                    alert(d.lang === 'zh' ? '清理失败，请重试' : 'Cleanup failed. Please try again.')
                   } finally {
                     u.setIsCleaningStorage(false)
                   }

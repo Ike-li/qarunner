@@ -21,7 +21,11 @@ export async function apiMutate(
     alert(err.detail || fallbackMsg)
     return null
   } catch (err) {
+    // B4: a network/transport failure must surface to the user the same way
+    // a non-ok response does — otherwise cancel/delete/rerun etc. look like
+    // they silently did nothing.
     console.error(`Mutation failed: ${opts.method ?? 'GET'} ${path}`, err)
+    alert(fallbackMsg)
     return null
   }
 }
