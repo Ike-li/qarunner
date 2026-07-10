@@ -105,7 +105,7 @@ def _duration_ms(raw: str | None) -> int:
     unparseable XML); the case is kept with zero duration instead."""
     try:
         return int(float(raw or "0") * 1000)
-    except ValueError:
+    except (ValueError, OverflowError):
         return 0
 
 

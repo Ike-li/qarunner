@@ -497,10 +497,15 @@ def test_create_run_unknown_runner_400() -> None:
 
 
 def test_create_run_unsafe_path_400() -> None:
+    # Value is irrelevant here: raise_unsafe_path makes the fake orchestrator
+    # unconditionally raise UnsafePath, so this exercises the route's error
+    # mapping, not path validation itself — must stay a value RunRequest's
+    # own tests_path validator (BUG-25) accepts, or it 422s before reaching
+    # the orchestrator at all.
     container = _make_container(raise_unsafe_path=True)
     app = create_app(container)
     with TestClient(app) as client:
-        resp = client.post("/runs", json={"tests_path": "../../etc", "runner": "pytest"})
+        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest"})
     assert resp.status_code == 400
 
 
@@ -526,6 +531,28 @@ def test_create_run_forbidden_for_other_users_registered_suite() -> None:
 
     assert resp.status_code == 403
     assert "bob_suite" not in resp.text
+    assert container.orchestrator.last_req is None
+
+
+def test_create_run_rejects_traversal_past_owned_suite() -> None:
+    """BUG-25: the owner-scope check only inspects the first path segment of
+    tests_path — "alice_suite/../victim_suite" would pass that check (alice
+    owns alice_suite) while orchestrator.create() actually resolves and runs
+    against victim_suite, a suite alice doesn't own. Must be rejected before
+    it ever reaches the owner check or the orchestrator."""
+    container = _make_container()
+    _save_suite_in_store(container.store, name="alice_suite", created_by="alice")
+    _save_suite_in_store(container.store, name="victim_suite", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "alice_suite/../victim_suite", "runner": "pytest"},
+        )
+
+    assert resp.status_code == 422
     assert container.orchestrator.last_req is None
 
 
@@ -4767,6 +4794,24 @@ def test_trigger_profile_creates_profile_bound_run_from_profile() -> None:
     assert orch.last_req.extra_args == "--headed"
     assert orch.last_req.timeout == 120
     assert orch.last_req.env == {"BASE_URL": "http://app"}
+
+
+def test_trigger_profile_with_unregistered_tests_path_skips_suite_check() -> None:
+    """A profile whose tests_path doesn't resolve to a registered suite name
+    (e.g. a bare "." — legal input, just not a suite reference) has nothing
+    for the owner-scope suite check to look up, so it's skipped rather than
+    treated as a 403 or 404."""
+    container = _make_container()
+    _seed_trigger_profile(container)
+    profile = container.store._profiles["profile-x"]  # type: ignore[attr-defined]
+    container.store._profiles["profile-x"] = profile.model_copy(  # type: ignore[attr-defined]
+        update={"tests_path": "."}
+    )
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/profiles/profile-x/trigger")
+    assert resp.status_code == 202
 
 
 def test_trigger_profile_forbidden_for_non_owner() -> None:

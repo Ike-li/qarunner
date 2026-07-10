@@ -22,6 +22,7 @@ from qarunner.models import (
     TestSummary,
     TrendPoint,
     UserRole,
+    _reject_path_traversal,
 )
 
 # BUG-17: private/internal address prefixes for SSRF protection on webhook_url.
@@ -111,6 +112,11 @@ class TestProfileCreateRequest(BaseModel):
     # Feishu bot webhook URL for run-completion notifications.
     webhook_url: str | None = None
 
+    @field_validator("tests_path")
+    @classmethod
+    def _validate_tests_path(cls, value: str) -> str:
+        return _reject_path_traversal(value)
+
     @field_validator("webhook_url")
     @classmethod
     def _validate_webhook_url(cls, value: str | None) -> str | None:
@@ -133,6 +139,11 @@ class TestProfileUpdateRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     # Feishu bot webhook URL for run-completion notifications.
     webhook_url: str | None = None
+
+    @field_validator("tests_path")
+    @classmethod
+    def _validate_tests_path(cls, value: str) -> str:
+        return _reject_path_traversal(value)
 
     @field_validator("webhook_url")
     @classmethod

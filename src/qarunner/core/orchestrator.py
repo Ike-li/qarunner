@@ -275,6 +275,7 @@ class RunOrchestrator:
             return
 
         runner = self._registry.get(run.runner)
+        reached_terminal_outcome = False
 
         try:
             # 1. Mark RUNNING — the poller's dequeue_next_queued() already
@@ -407,6 +408,7 @@ class RunOrchestrator:
                 report=report,
                 finished_at=self._clock.now(),
             )
+            reached_terminal_outcome = True
             await self._store.save(run)
 
             # Track notification task so drain() can wait for it (BUG-11).
@@ -421,12 +423,20 @@ class RunOrchestrator:
             # RUNNING. Persist a terminal CANCELLED state, then re-raise to keep
             # cancellation semantics intact (the runner's own finally already
             # killed the subprocess / container).
+            #
+            # BUG-9: if the cancel raced past step 7 — the test already ran to
+            # completion, ``run`` already holds the real terminal status plus
+            # summary/report — relabelling it CANCELLED here would produce a
+            # contradictory record (cancelled, yet with full results
+            # attached). The outcome is a fait accompli by then; just make
+            # sure it's actually persisted instead of overwriting it.
             try:
-                run = _replace(
-                    run,
-                    status=RunStatus.CANCELLED,
-                    finished_at=self._clock.now(),
-                )
+                if not reached_terminal_outcome:
+                    run = _replace(
+                        run,
+                        status=RunStatus.CANCELLED,
+                        finished_at=self._clock.now(),
+                    )
                 await self._store.save(run)
             except Exception:  # pragma: no cover — needs real asyncio task cancellation
                 logger.exception("failed to persist cancelled state for run %s", run_id)

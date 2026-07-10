@@ -230,3 +230,16 @@ def test_profile_create_request_rejects_invalid_webhook_url() -> None:
 def test_profile_update_request_rejects_invalid_webhook_url() -> None:
     with pytest.raises(ValidationError, match="private/internal address"):
         TestProfileUpdateRequest(name="p", tests_path="t/", webhook_url="https://10.0.0.1/x")
+
+
+# ── tests_path traversal rejection (BUG-25) ─────────────────────────────
+
+
+def test_profile_create_request_rejects_tests_path_traversal() -> None:
+    with pytest.raises(ValidationError, match="must not contain"):
+        TestProfileCreateRequest(name="p", tests_path="suiteA/../victimSuite")
+
+
+def test_profile_update_request_rejects_tests_path_traversal() -> None:
+    with pytest.raises(ValidationError, match="must not contain"):
+        TestProfileUpdateRequest(name="p", tests_path="suiteA/../victimSuite")

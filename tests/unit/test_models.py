@@ -212,6 +212,33 @@ class TestRunRequestValidation:
         assert RunRequest(tests_path="t", timeout=1).timeout == 1
         assert RunRequest(tests_path="t", timeout=cap).timeout == cap
 
+    @pytest.mark.parametrize(
+        "tests_path",
+        [
+            "suiteA/../victimSuite",
+            "..",
+            "../victimSuite",
+            "suiteA/../../victimSuite",
+            "suiteA/..",
+            "suiteA\\..\\victimSuite",  # backslash form, same segment once normalised
+        ],
+    )
+    def test_rejects_tests_path_with_traversal_segment(self, tests_path: str):
+        """A '..' segment lets the owner-scope check (which only inspects the
+        first path component) and the actual execution path (which resolves
+        the full string) disagree about which suite is being touched —
+        letting a user run tests against, and read the results of, a suite
+        they don't own. Reject it outright at the API boundary."""
+        from qarunner.models import RunRequest
+
+        with pytest.raises(ValidationError, match="must not contain"):
+            RunRequest(tests_path=tests_path)
+
+    def test_accepts_tests_path_without_traversal(self):
+        from qarunner.models import RunRequest
+
+        assert RunRequest(tests_path="suiteA/sub/dir").tests_path == "suiteA/sub/dir"
+
     def test_defaults_executor_mode_to_docker(self):
         from qarunner.models import RunRequest
 

@@ -52,8 +52,14 @@ export function FullscreenReportOverlay() {
               </span>
             </div>
           )}
+          {/* S2: the report is generated from untrusted test code (attacker-influenced
+              step/attachment names) and served same-origin with no CSP. `sandbox`
+              blocks top-navigation hijack, popups, plugins and pointer-lock even
+              though `allow-same-origin` (kept so Allure's own same-origin data
+              fetches still work) doesn't fully isolate it from the parent session. */}
           <iframe src={`/runs/${selectedRun.id}/report`} className={styles.fullscreenReportIframe}
             onLoad={() => setIsIframeLoading(false)} title="Allure Fullscreen Report"
+            sandbox="allow-scripts allow-same-origin"
             data-testid="fullscreen-report-iframe" />
         </div>
       </div>
