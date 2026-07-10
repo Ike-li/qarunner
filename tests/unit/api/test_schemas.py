@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from qarunner.api.schemas import RunListResponse, RunResponse, profile_to_response, run_to_response
+import pytest
+from pydantic import ValidationError
+
+from qarunner.api.schemas import (
+    RunListResponse,
+    RunResponse,
+    TestProfileCreateRequest,
+    TestProfileUpdateRequest,
+    _validate_webhook_url_field,
+    profile_to_response,
+    run_to_response,
+)
 from qarunner.models import (
     ReportRef,
     Run,
@@ -154,3 +165,68 @@ def test_run_list_response() -> None:
     assert len(resp.runs) == 2
     assert resp.runs[0].id == "a"
     assert resp.runs[1].id == "b"
+
+
+# ── webhook_url SSRF validation (BUG-17) ────────────────────────────────
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_validate_webhook_url_field_allows_blank(value: str | None) -> None:
+    assert _validate_webhook_url_field(value) == value
+
+
+def test_validate_webhook_url_field_rejects_non_https() -> None:
+    with pytest.raises(ValueError, match="must use https"):
+        _validate_webhook_url_field("http://hooks.example.com/x")
+
+
+def test_validate_webhook_url_field_rejects_missing_hostname() -> None:
+    with pytest.raises(ValueError, match="valid hostname"):
+        _validate_webhook_url_field("https:///no-host")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://localhost/hook",
+        "https://127.0.0.1/hook",
+        "https://[::1]/hook",  # IPv6 literals need bracket syntax in a URL
+        "https://0.0.0.0/hook",
+        "https://metadata.google.internal/hook",
+    ],
+)
+def test_validate_webhook_url_field_rejects_private_hostnames(url: str) -> None:
+    with pytest.raises(ValueError, match="localhost"):
+        _validate_webhook_url_field(url)
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    [
+        "10.0.0.5",
+        "172.16.0.1",
+        "172.31.255.254",
+        "192.168.1.1",
+        "169.254.169.254",  # cloud metadata endpoint — the classic SSRF target
+    ],
+)
+def test_validate_webhook_url_field_rejects_private_prefixes(hostname: str) -> None:
+    with pytest.raises(ValueError, match="private/internal address"):
+        _validate_webhook_url_field(f"https://{hostname}/hook")
+
+
+def test_validate_webhook_url_field_accepts_valid_https_url() -> None:
+    url = "https://hooks.example.com/services/T00/B00/xyz"
+    assert _validate_webhook_url_field(url) == url
+
+
+def test_profile_create_request_rejects_invalid_webhook_url() -> None:
+    with pytest.raises(ValidationError, match="must use https"):
+        TestProfileCreateRequest(
+            name="p", tests_path="t/", webhook_url="http://hooks.example.com/x"
+        )
+
+
+def test_profile_update_request_rejects_invalid_webhook_url() -> None:
+    with pytest.raises(ValidationError, match="private/internal address"):
+        TestProfileUpdateRequest(name="p", tests_path="t/", webhook_url="https://10.0.0.1/x")

@@ -161,6 +161,27 @@ class TestDrain:
         await orch.drain(timeout=2.0)
         assert orch._scheduler.drained == 1
 
+    @pytest.mark.asyncio
+    async def test_drain_waits_for_pending_notify_tasks(self):
+        """BUG-11: graceful shutdown waits for in-flight notifications
+        (e.g. webhooks) to finish before the store closes, not just for the
+        scheduler to stop accepting new runs."""
+        orch = _make_orchestrator()
+        finished = False
+
+        async def _slow_notify() -> None:
+            nonlocal finished
+            await asyncio.sleep(0.01)
+            finished = True
+
+        task = asyncio.create_task(_slow_notify())
+        orch._notify_tasks.add(task)
+        task.add_done_callback(orch._notify_tasks.discard)
+
+        await orch.drain(timeout=2.0)
+
+        assert finished is True
+
 
 class TestCreate:
     """RunOrchestrator.create() validates, persists, and schedules."""

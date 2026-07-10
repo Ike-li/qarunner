@@ -130,6 +130,38 @@ def test_lifespan_runs_without_error() -> None:
     assert store.closed is True
 
 
+def test_lifespan_skips_cookie_secure_warning_when_enabled(caplog) -> None:
+    """BUG-12: the plaintext-cookie startup warning only fires when
+    cookie_secure is actually False — a properly configured HTTPS
+    deployment shouldn't see it."""
+    from datetime import UTC, datetime
+
+    from qarunner.api.deps import get_current_user
+    from qarunner.models import User, UserRole
+
+    async def mock_get_current_user() -> User:
+        return User(username="test_user", role=UserRole.ADMIN, created_at=datetime.now(UTC))
+
+    store = _FakeStore()
+    orch = _FakeOrch(store=store)
+    container = Container(
+        orchestrator=orch,
+        store=store,
+        task_scheduler=FakeScheduler(),
+        scheduler=FakeSchedulePort(),
+        schedule_service=None,
+        profile_service=None,
+        login_throttle=None,
+        settings=Settings(cookie_secure=True),
+    )  # type: ignore[arg-type]
+    app = create_app(container)
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    with caplog.at_level("WARNING", logger="qarunner.api.app"), TestClient(app) as client:
+        resp = client.get("/runs")
+    assert resp.status_code == 200
+    assert not any("plaintext HTTP" in rec.getMessage() for rec in caplog.records)
+
+
 def test_lifespan_without_container_creates_one(monkeypatch) -> None:
     """When no container is injected, lifespan creates a real one."""
     import tempfile

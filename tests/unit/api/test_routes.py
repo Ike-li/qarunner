@@ -91,7 +91,12 @@ class FakeStore:
         }
 
     async def get_user(self, username: str) -> dict | None:
-        return self._users.get(username)
+        # Snapshot, not a live reference — mirrors SqliteStore.get_user(), which
+        # rebuilds a fresh dict from a DB row on every call. Callers that read
+        # `existing` before a later mutation (e.g. update_user's demote-then-
+        # skip-redundant-update path) must not see in-place changes here.
+        record = self._users.get(username)
+        return dict(record) if record is not None else None
 
     async def create_user(self, username: str, password_hash: str, role: str) -> None:
         from datetime import UTC, datetime
@@ -3061,6 +3066,76 @@ def test_delete_user_admin_removes_target() -> None:
     assert "bob" not in container.store._users  # type: ignore[attr-defined]
 
 
+def test_delete_user_cascades_owned_resources() -> None:
+    """BUG-14: deleting a user removes every run/profile/schedule/credential/
+    suite they own, so no orphaned owner references remain — and leaves
+    other users' resources of the same kinds untouched."""
+    container = _make_container()
+    _seed_user(container.store, "bob")
+    store = container.store
+    _make_run_in_store(store, id="run-bob", created_by="bob")
+    _make_run_in_store(store, id="run-carol", created_by="carol")
+    store._profiles["profile-bob"] = TestProfile(  # type: ignore[attr-defined]
+        id="profile-bob", name="p", tests_path="t/", created_by="bob", created_at=NOW
+    )
+    store._profiles["profile-carol"] = TestProfile(  # type: ignore[attr-defined]
+        id="profile-carol", name="p", tests_path="t/", created_by="carol", created_at=NOW
+    )
+    store._schedules["sched-bob"] = TestSchedule(  # type: ignore[attr-defined]
+        id="sched-bob",
+        name="s",
+        # Deliberately not profile-bob: deleting that profile cascades onto
+        # any schedule bound to it (see FakeStore.delete_profile), which
+        # would delete sched-bob as a side effect and mask whether
+        # delete_user's own schedule-cleanup loop actually runs.
+        profile_id="profile-unrelated",
+        cron_expression="* * * * *",
+        created_by="bob",
+        created_at=NOW,
+    )
+    store._schedules["sched-carol"] = TestSchedule(  # type: ignore[attr-defined]
+        id="sched-carol",
+        name="s",
+        profile_id="profile-carol",
+        cron_expression="* * * * *",
+        created_by="carol",
+        created_at=NOW,
+    )
+    store._credentials["cred-bob"] = (  # type: ignore[attr-defined]
+        Credential(id="cred-bob", name="c", type="https_token", created_by="bob", created_at=NOW),
+        "encrypted",
+    )
+    store._credentials["cred-carol"] = (  # type: ignore[attr-defined]
+        Credential(
+            id="cred-carol", name="c", type="https_token", created_by="carol", created_at=NOW
+        ),
+        "encrypted",
+    )
+    store._suites["suite-bob"] = TestSuite(  # type: ignore[attr-defined]
+        name="suite-bob", created_by="bob", created_at=NOW
+    )
+    store._suites["suite-carol"] = TestSuite(  # type: ignore[attr-defined]
+        name="suite-carol", created_by="carol", created_at=NOW
+    )
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+
+    with TestClient(app) as client:
+        resp = client.delete("/users/bob")
+
+    assert resp.status_code == 200
+    assert "run-bob" not in store._runs  # type: ignore[attr-defined]
+    assert "profile-bob" not in store._profiles  # type: ignore[attr-defined]
+    assert "sched-bob" not in store._schedules  # type: ignore[attr-defined]
+    assert "cred-bob" not in store._credentials  # type: ignore[attr-defined]
+    assert "suite-bob" not in store._suites  # type: ignore[attr-defined]
+    assert "run-carol" in store._runs  # type: ignore[attr-defined]
+    assert "profile-carol" in store._profiles  # type: ignore[attr-defined]
+    assert "sched-carol" in store._schedules  # type: ignore[attr-defined]
+    assert "cred-carol" in store._credentials  # type: ignore[attr-defined]
+    assert "suite-carol" in store._suites  # type: ignore[attr-defined]
+
+
 def test_delete_user_cannot_delete_self() -> None:
     container = _make_container()  # default test_user is admin
     app = create_app(container)
@@ -3368,6 +3443,117 @@ def test_login_succeeds_after_lockout_window_expires() -> None:
         ok = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
         assert ok.status_code == 200
         assert "access_token" in ok.json()
+
+
+def test_logout_revokes_token_via_cookie() -> None:
+    """BUG-5+13: logout bumps token_version so every other JWT for that
+    user (cookie or bearer) is invalidated immediately."""
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        login = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        assert login.status_code == 200
+        assert client.cookies.get("token") is not None
+
+        resp = client.post("/auth/logout")
+        assert resp.status_code == 204
+
+    assert container.store._users["test_user"]["token_version"] == 1  # type: ignore[attr-defined]
+
+
+def test_logout_revokes_token_via_bearer_header() -> None:
+    """Same revocation, reached via the Authorization header fallback when
+    no cookie is present (e.g. a programmatic API client)."""
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        login = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        token = login.json()["access_token"]
+        client.cookies.clear()
+
+        resp = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 204
+
+    assert container.store._users["test_user"]["token_version"] == 1  # type: ignore[attr-defined]
+
+
+def test_revoked_token_is_rejected_after_logout() -> None:
+    """BUG-5+13: a JWT captured before logout no longer authenticates
+    anything afterwards, since its embedded token_version is now stale."""
+    container = _make_container()
+    app = create_app(container)
+    # /auth/me depends on the real get_current_user — create_app() stubs it
+    # out by default for route tests that don't care about auth internals;
+    # drop the stub so this test exercises the actual token_version check.
+    del app.dependency_overrides[get_current_user]
+    with TestClient(app) as client:
+        login = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        old_token = login.json()["access_token"]
+
+        client.post("/auth/logout")
+        client.cookies.clear()  # logout's delete_cookie already cleared it; be explicit
+
+        resp = client.get("/auth/me", headers={"Authorization": f"Bearer {old_token}"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Token has been revoked"
+
+
+def test_logout_without_any_token_still_succeeds() -> None:
+    """Revocation is best-effort: logout always returns 204 even when there
+    is no token to revoke."""
+    app = create_app(_make_container())
+    with TestClient(app) as client:
+        resp = client.post("/auth/logout")
+    assert resp.status_code == 204
+
+
+def test_logout_with_garbage_bearer_token_still_succeeds() -> None:
+    """A present-but-undecodable token must not crash logout — revocation
+    is best-effort, not a hard requirement (BUG-5+13's docstring)."""
+    app = create_app(_make_container())
+    with TestClient(app) as client:
+        resp = client.post("/auth/logout", headers={"Authorization": "Bearer not-a-real-jwt"})
+    assert resp.status_code == 204
+
+
+def test_client_ip_uses_trusted_proxy_x_forwarded_for() -> None:
+    """BUG-8: behind a trusted reverse proxy, the login-throttle key uses the
+    left-most X-Forwarded-For entry instead of the proxy's own peer address —
+    so two distinct client IPs behind that proxy get independent lockouts."""
+    throttle = LoginThrottle(clock=FakeClock(), threshold=2, base_seconds=60.0)
+    settings = Settings(trusted_proxies="testclient")  # matches TestClient's peer host
+    app = create_app(_make_container(login_throttle=throttle, settings=settings))
+    with TestClient(app) as client:
+        headers_a = {"X-Forwarded-For": "9.9.9.9"}
+        for _ in range(2):
+            bad = client.post(
+                "/auth/login",
+                json={"username": "test_user", "password": "nope"},
+                headers=headers_a,
+            )
+            assert bad.status_code == 401
+        locked = client.post(
+            "/auth/login",
+            json={"username": "test_user", "password": "nope"},
+            headers=headers_a,
+        )
+        assert locked.status_code == 429
+
+        # A different forwarded IP behind the same trusted proxy is a separate
+        # throttle bucket — proves the key was derived from X-Forwarded-For,
+        # not the shared proxy peer address.
+        other_ip = client.post(
+            "/auth/login",
+            json={"username": "test_user", "password": "nope"},
+            headers={"X-Forwarded-For": "8.8.8.8"},
+        )
+        assert other_ip.status_code == 401
+
+        # No X-Forwarded-For header at all falls back to the raw peer
+        # address — yet another independent bucket from either IP above.
+        no_header = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+        assert no_header.status_code == 401
 
 
 def test_successful_login_resets_failure_counter() -> None:

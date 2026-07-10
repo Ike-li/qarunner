@@ -270,6 +270,48 @@ async def test_user_delete_and_update(store: SqliteStore) -> None:
     assert await store.delete_user("dave") is False
 
 
+async def test_demote_if_not_last_admin_no_op_when_sole_admin(store: SqliteStore) -> None:
+    """BUG-6: the seeded default admin is the only admin — demoting it must
+    be refused so the platform can't lock itself out of every admin route."""
+    admins = [u for u in await store.list_users() if u["role"] == "admin"]
+    assert len(admins) == 1
+    sole_admin = admins[0]["username"]
+
+    demoted = await store.demote_if_not_last_admin(sole_admin, "user")
+
+    assert demoted is False
+    assert (await store.get_user(sole_admin))["role"] == "admin"
+
+
+async def test_demote_if_not_last_admin_succeeds_with_second_admin(store: SqliteStore) -> None:
+    await store.create_user("second-admin", "hashed", "admin")
+
+    demoted = await store.demote_if_not_last_admin("second-admin", "user")
+
+    assert demoted is True
+    assert (await store.get_user("second-admin"))["role"] == "user"
+
+
+async def test_cancel_if_inflight_transitions_queued_run(store: SqliteStore) -> None:
+    await store.save(_make_run(id="run-inflight", status=RunStatus.QUEUED))
+
+    changed = await store.cancel_if_inflight("run-inflight", "2025-01-01T00:00:05+00:00")
+
+    assert changed is True
+    assert (await store.get("run-inflight")).status == RunStatus.CANCELLED
+
+
+async def test_cancel_if_inflight_is_no_op_on_terminal_run(store: SqliteStore) -> None:
+    """A run that already finished (COMPLETED/FAILED/TIMEOUT) must not be
+    silently overwritten with CANCELLED by a late cancel request."""
+    await store.save(_make_run(id="run-done", status=RunStatus.COMPLETED))
+
+    changed = await store.cancel_if_inflight("run-done", "2025-01-01T00:00:05+00:00")
+
+    assert changed is False
+    assert (await store.get("run-done")).status == RunStatus.COMPLETED
+
+
 async def test_schema_migration_adds_created_by(tmp_path) -> None:
     import aiosqlite
 

@@ -98,6 +98,14 @@ def test_settings_rejects_placeholder_admin_password(bad: str) -> None:
         Settings(admin_password=bad)
 
 
+def test_settings_rejects_secret_key_shorter_than_32_chars() -> None:
+    """A genuine (non-placeholder) secret that's simply too short for HS256
+    must still be refused — length is checked independently of the
+    placeholder blocklist."""
+    with pytest.raises(ValidationError, match="at least 32 characters"):
+        Settings(secret_key="short-but-not-a-placeholder")
+
+
 def test_settings_secret_key_required(monkeypatch) -> None:
     """SEC-2: a missing QARUNNER_SECRET_KEY refuses startup."""
     monkeypatch.delenv("QARUNNER_SECRET_KEY", raising=False)
