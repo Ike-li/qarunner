@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { summarizeRuns } from '../runStats'
 import type { Run } from '../types'
 import { apiMutate } from './useApi'
@@ -358,8 +358,12 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     runs.find((r) => r.id === selectedRunId) ||
     null
 
-  const completedRuns = runs.filter((r) => r.status === 'completed')
-  const runStats = summarizeRuns(runs)
+  // PERF: .filter()/summarizeRuns() build a new array/object every render
+  // even when `runs` hasn't changed — memoize so the final api object below
+  // (and everything DashboardContext feeds it into) can actually stay
+  // referentially stable across the 1.5s poll cycle.
+  const completedRuns = useMemo(() => runs.filter((r) => r.status === 'completed'), [runs])
+  const runStats = useMemo(() => summarizeRuns(runs), [runs])
 
   // ── close drawer ───────────────────────────────────────────────────────
 
@@ -371,47 +375,58 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     setIsStreaming(false)
   }, [])
 
-  return {
-    // state
-    runs,
-    loading,
-    selectedRunId,
-    setSelectedRunId,
-    selectedRunDetails,
-    closeDrawer,
-    detailsLoading,
-    detailsError,
-    streamedStdout,
-    isStreaming,
-    selectedRun,
-    // actions
-    fetchRuns,
-    fetchSelectedRunDetails,
-    handleToggleLock,
-    handleCancelRun,
-    handleDeleteRun,
-    handleRerunRun,
-    // derived
-    totalRuns: runStats.totalRuns,
-    completedRuns,
-    overallSuccessRate: runStats.overallSuccessRate,
-    activeRunsCount: runStats.activeRunsCount,
-    failedRunsCount: runStats.failedRunsCount,
-    manualRunsCount: runStats.manualRunsCount,
-    scheduledRunsCount: runStats.scheduledRunsCount,
-    passedTestCases: runStats.passedTestCases,
-    failedTestCases: runStats.failedTestCases,
-    totalTestCases: runStats.totalTestCases,
-    // reset
-    _reset: () => {
-      setRuns([])
-      setLoading(true)
-      setSelectedRunId(null)
-      setSelectedRunDetails(null)
-      setDetailsLoading(false)
-      setDetailsError(false)
-      setStreamedStdout('')
-      setIsStreaming(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setRuns([])
+    setLoading(true)
+    setSelectedRunId(null)
+    setSelectedRunDetails(null)
+    setDetailsLoading(false)
+    setDetailsError(false)
+    setStreamedStdout('')
+    setIsStreaming(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        // state
+        runs,
+        loading,
+        selectedRunId,
+        setSelectedRunId,
+        selectedRunDetails,
+        closeDrawer,
+        detailsLoading,
+        detailsError,
+        streamedStdout,
+        isStreaming,
+        selectedRun,
+        // actions
+        fetchRuns,
+        fetchSelectedRunDetails,
+        handleToggleLock,
+        handleCancelRun,
+        handleDeleteRun,
+        handleRerunRun,
+        // derived
+        totalRuns: runStats.totalRuns,
+        completedRuns,
+        overallSuccessRate: runStats.overallSuccessRate,
+        activeRunsCount: runStats.activeRunsCount,
+        failedRunsCount: runStats.failedRunsCount,
+        manualRunsCount: runStats.manualRunsCount,
+        scheduledRunsCount: runStats.scheduledRunsCount,
+        passedTestCases: runStats.passedTestCases,
+        failedTestCases: runStats.failedTestCases,
+        totalTestCases: runStats.totalTestCases,
+        // reset
+        _reset,
+      }) as const,
+    [
+      runs, loading, selectedRunId, selectedRunDetails, closeDrawer, detailsLoading,
+      detailsError, streamedStdout, isStreaming, selectedRun, fetchRuns,
+      fetchSelectedRunDetails, handleToggleLock, handleCancelRun, handleDeleteRun,
+      handleRerunRun, runStats, completedRuns, _reset,
+    ],
+  )
 }

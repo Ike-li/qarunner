@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { UserProfile } from '../types'
 
 interface UseAuthOpts {
@@ -76,29 +76,46 @@ export function useAuth({ apiFetch }: UseAuthOpts) {
     [apiFetch, loginUsername, loginPassword, probeAuth],
   )
 
-  return {
-    // Auth gate
-    isAuthenticated,
-    currentUser,
-    // Login form
-    loginUsername,
-    setLoginUsername,
-    loginPassword,
-    setLoginPassword,
-    loginError,
-    setLoginError,
-    loginLoading,
-    // Actions
-    probeAuth,
-    handleLoginSubmit,
-    // State reset (called by clearSession)
-    _reset: () => {
-      setIsAuthenticated(false)
-      setCurrentUser(null)
-      setLoginUsername('')
-      setLoginPassword('')
-      setLoginError(null)
-      setLoginLoading(false)
-    },
-  } as const
+  // State reset (called by clearSession)
+  const _reset = useCallback(() => {
+    setIsAuthenticated(false)
+    setCurrentUser(null)
+    setLoginUsername('')
+    setLoginPassword('')
+    setLoginError(null)
+    setLoginLoading(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        // Auth gate
+        isAuthenticated,
+        currentUser,
+        // Login form
+        loginUsername,
+        setLoginUsername,
+        loginPassword,
+        setLoginPassword,
+        loginError,
+        setLoginError,
+        loginLoading,
+        // Actions
+        probeAuth,
+        handleLoginSubmit,
+        // State reset (called by clearSession)
+        _reset,
+      }) as const,
+    [
+      isAuthenticated,
+      currentUser,
+      loginUsername,
+      loginPassword,
+      loginError,
+      loginLoading,
+      probeAuth,
+      handleLoginSubmit,
+      _reset,
+    ],
+  )
 }

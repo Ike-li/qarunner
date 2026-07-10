@@ -28,7 +28,7 @@ class _FakeStore:
     async def get(self, run_id: str) -> Run:
         raise RunNotFound(run_id)
 
-    async def list(self) -> list[Run]:
+    async def list(self, limit: int | None = None) -> list[Run]:
         return []
 
     async def initialize(self) -> None:

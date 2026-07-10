@@ -547,15 +547,25 @@ class SqliteStore:
             raise RunNotFound(run_id)
         return _row_to_run(row)
 
-    async def list(self) -> list[Run]:
+    async def list(self, limit: int | None = None) -> list[Run]:
+        # limit=None (the default) stays unbounded — callers that must see
+        # every run regardless of volume (e.g. delete_user's cascade cleanup
+        # of that user's runs) rely on this. Hot dashboard-facing endpoints
+        # pass a bounding limit instead (PERF: SqliteStore.list() had no
+        # ceiling at all, and was the shared data source for 5 of them).
+        query = (
+            "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
+            "timeout, executor_mode, summary_json, report_json, exit_code, error, "
+            "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+            "profile_id "
+            "FROM runs ORDER BY created_at DESC"
+        )
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
         async with self._connect() as db:
-            cursor = await db.execute(
-                "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id "
-                "FROM runs ORDER BY created_at DESC"
-            )
+            cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
 
@@ -662,41 +672,64 @@ class SqliteStore:
         created_by: str | None = None,
         profile_id: str | None = None,
     ) -> list[CaseHistoryPoint]:
-        """One case's recent outcomes, oldest-first.
+        """One case's recent outcomes, oldest-first. See get_case_histories."""
+        result = await self.get_case_histories(
+            tests_path, [(suite, name)], limit, created_by, profile_id
+        )
+        return result[(suite, name)]
 
-        ``created_by`` and ``profile_id`` join ``runs`` to scope the history.
-        With no run-level filters, the query stays on the denormalised
-        ``run_test_cases`` table and its ``idx_cases_case`` index.
+    async def get_case_histories(
+        self,
+        tests_path: str,
+        cases: list[tuple[str, str]],
+        limit: int = 20,
+        created_by: str | None = None,
+        profile_id: str | None = None,
+    ) -> dict[tuple[str, str], list[CaseHistoryPoint]]:
+        """Recent outcomes for several (suite, name) cases, oldest-first each.
+
+        PERF: batches every case onto one connection instead of one per case
+        (create_ai_analysis loops over each failed case's history — that used
+        to mean one fresh SQLite connection per case). ``created_by`` and
+        ``profile_id`` join ``runs`` to scope the history; with no run-level
+        filters, each query stays on the denormalised ``run_test_cases``
+        table and its ``idx_cases_case`` index.
         """
+        result: dict[tuple[str, str], list[CaseHistoryPoint]] = {}
         async with self._connect() as db:
-            if created_by is None and profile_id is None:
-                cursor = await db.execute(
-                    "SELECT created_at, status FROM run_test_cases "
-                    "WHERE tests_path = ? AND suite = ? AND name = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (tests_path, suite, name, limit),
-                )
-            else:
-                clauses = ["c.tests_path = ?", "c.suite = ?", "c.name = ?"]
-                params: list[object] = [tests_path, suite, name]
-                if created_by is not None:
-                    clauses.append("r.created_by = ?")
-                    params.append(created_by)
-                if profile_id is not None:
-                    clauses.append("r.profile_id = ?")
-                    params.append(profile_id)
-                params.append(limit)
-                cursor = await db.execute(
-                    "SELECT c.created_at, c.status FROM run_test_cases c "
-                    "JOIN runs r ON c.run_id = r.id "
-                    f"WHERE {' AND '.join(clauses)} "
-                    "ORDER BY c.created_at DESC LIMIT ?",
-                    params,
-                )
-            rows = await cursor.fetchall()
-        # DESC + LIMIT keeps the most recent window; reverse to oldest-first for
-        # the timeline and the flaky flip-count.
-        return [CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1]) for r in reversed(rows)]
+            for suite, name in cases:
+                if created_by is None and profile_id is None:
+                    cursor = await db.execute(
+                        "SELECT created_at, status FROM run_test_cases "
+                        "WHERE tests_path = ? AND suite = ? AND name = ? "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (tests_path, suite, name, limit),
+                    )
+                else:
+                    clauses = ["c.tests_path = ?", "c.suite = ?", "c.name = ?"]
+                    params: list[object] = [tests_path, suite, name]
+                    if created_by is not None:
+                        clauses.append("r.created_by = ?")
+                        params.append(created_by)
+                    if profile_id is not None:
+                        clauses.append("r.profile_id = ?")
+                        params.append(profile_id)
+                    params.append(limit)
+                    cursor = await db.execute(
+                        "SELECT c.created_at, c.status FROM run_test_cases c "
+                        "JOIN runs r ON c.run_id = r.id "
+                        f"WHERE {' AND '.join(clauses)} "
+                        "ORDER BY c.created_at DESC LIMIT ?",
+                        params,
+                    )
+                rows = await cursor.fetchall()
+                # DESC + LIMIT keeps the most recent window; reverse to
+                # oldest-first for the timeline and the flaky flip-count.
+                result[(suite, name)] = [
+                    CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1])
+                    for r in reversed(rows)
+                ]
+        return result
 
     async def count_flaky_tests(
         self,

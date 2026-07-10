@@ -133,6 +133,22 @@ async def test_list_ordered_by_created_at_desc(store: SqliteStore) -> None:
     assert [r.id for r in result] == ["run-002", "run-001"]
 
 
+async def test_list_default_is_unbounded(store: SqliteStore) -> None:
+    # Callers that must see every run (e.g. delete_user's cascade cleanup)
+    # rely on list() with no limit= staying unbounded.
+    for i in range(3):
+        await store.save(_make_run(id=f"run-{i}", created_at=datetime(2025, 1, i + 1, tzinfo=UTC)))
+    result = await store.list()
+    assert len(result) == 3
+
+
+async def test_list_respects_limit_newest_first(store: SqliteStore) -> None:
+    for i in range(3):
+        await store.save(_make_run(id=f"run-{i}", created_at=datetime(2025, 1, i + 1, tzinfo=UTC)))
+    result = await store.list(limit=2)
+    assert [r.id for r in result] == ["run-2", "run-1"]  # newest 2, DESC order preserved
+
+
 async def test_save_with_summary(store: SqliteStore) -> None:
     summary = TestSummary(total=10, passed=8, failed=1, skipped=1, error=0, duration_ms=5000)
     run = _make_run(summary=summary, status=RunStatus.COMPLETED)
@@ -1206,6 +1222,67 @@ async def test_get_case_history_profile_scoped(store: SqliteStore) -> None:
 
     hist = await store.get_case_history("suite_a", "s", "t", profile_id="profile-a")
     assert [p.status for p in hist] == ["passed", "passed"]
+
+
+async def test_get_case_histories_batches_multiple_cases_one_connection(
+    store: SqliteStore,
+) -> None:
+    """PERF: create_ai_analysis looped get_case_history per failed case, each
+    opening its own connection (N+1). get_case_histories answers every case
+    in one connection instead."""
+    for i, (suite, name, st) in enumerate(
+        [("s1", "t1", "failed"), ("s1", "t1", "passed"), ("s2", "t2", "failed")]
+    ):
+        run = _make_run(
+            id=f"h{i}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, i + 1, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"h{i}",
+            "suite_a",
+            run.created_at,
+            [TestCaseResult(suite=suite, name=name, status=st, duration_ms=0)],
+        )
+
+    result = await store.get_case_histories("suite_a", [("s1", "t1"), ("s2", "t2")])
+
+    assert [p.status for p in result[("s1", "t1")]] == ["failed", "passed"]  # oldest-first
+    assert [p.status for p in result[("s2", "t2")]] == ["failed"]
+
+
+async def test_get_case_histories_owner_and_profile_scoped(store: SqliteStore) -> None:
+    for rid, owner, profile_id in [("ha", "alice", "prof-a"), ("hb", "bob", "prof-b")]:
+        run = _make_run(
+            id=rid,
+            tests_path="suite_a",
+            created_by=owner,
+            profile_id=profile_id,
+            status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            rid,
+            "suite_a",
+            run.created_at,
+            [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
+        )
+
+    admin_view = await store.get_case_histories("suite_a", [("s", "t")])
+    assert len(admin_view[("s", "t")]) == 2
+
+    alice_view = await store.get_case_histories("suite_a", [("s", "t")], created_by="alice")
+    assert len(alice_view[("s", "t")]) == 1
+
+    profile_a_view = await store.get_case_histories("suite_a", [("s", "t")], profile_id="prof-a")
+    assert len(profile_a_view[("s", "t")]) == 1
+
+
+async def test_get_case_histories_empty_cases_returns_empty_dict(store: SqliteStore) -> None:
+    assert await store.get_case_histories("suite_a", []) == {}
 
 
 async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:

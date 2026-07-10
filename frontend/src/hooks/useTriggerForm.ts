@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { Profile } from '../types'
 import { buildProfilePayload } from '../profilePayload'
 
@@ -248,28 +248,38 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
     [apiFetch, editingProfileId, profileName, profileDesc, testsPath, selectedRunner, customArgs, timeoutSeconds, makeEnvPayload, resetForm],
   )
 
-  return {
-    // state
-    testsPath, setTestsPath,
-    selectedRunner, setSelectedRunner,
-    customArgs, setCustomArgs,
-    allureEnabled, setAllureEnabled,
-    timeoutSeconds, setTimeoutSeconds, handleTimeoutSecondsChange,
-    envVars, setEnvVars,
-    editingProfileId, setEditingProfileId,
-    selectedProfileId, setSelectedProfileId,
-    profileName, setProfileName,
-    profileDesc, setProfileDesc,
-    isSavingProfile, setIsSavingProfile,
-    isSubmitting,
-    formError,
-    // helpers
-    makeEnvPayload,
-    resetForm,
-    // actions
-    openEditProfile,
-    handleTriggerRun,
-    handleSaveProfile,
-    handleUpdateProfile,
-  } as const
+  return useMemo(
+    () =>
+      ({
+        // state
+        testsPath, setTestsPath,
+        selectedRunner, setSelectedRunner,
+        customArgs, setCustomArgs,
+        allureEnabled, setAllureEnabled,
+        timeoutSeconds, setTimeoutSeconds, handleTimeoutSecondsChange,
+        envVars, setEnvVars,
+        editingProfileId, setEditingProfileId,
+        selectedProfileId, setSelectedProfileId,
+        profileName, setProfileName,
+        profileDesc, setProfileDesc,
+        isSavingProfile, setIsSavingProfile,
+        isSubmitting,
+        formError,
+        // helpers
+        makeEnvPayload,
+        resetForm,
+        // actions
+        openEditProfile,
+        handleTriggerRun,
+        handleSaveProfile,
+        handleUpdateProfile,
+      }) as const,
+    [
+      testsPath, selectedRunner, customArgs, allureEnabled, timeoutSeconds,
+      handleTimeoutSecondsChange, envVars, editingProfileId, selectedProfileId,
+      profileName, profileDesc, isSavingProfile, isSubmitting, formError,
+      makeEnvPayload, resetForm, openEditProfile, handleTriggerRun,
+      handleSaveProfile, handleUpdateProfile,
+    ],
+  )
 }

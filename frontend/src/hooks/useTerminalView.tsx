@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import styles from '../App.module.css'
 import { classifyLogLine, matchesLogLevel } from '../logUtils'
 
@@ -28,7 +28,7 @@ export function useTerminalView() {
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState<boolean>(true)
 
 
-  const copyToClipboard = (text: string) => {
+  const copyToClipboard = useCallback((text: string) => {
     try {
       void navigator.clipboard?.writeText(text).catch(() => undefined)
     } catch {
@@ -37,10 +37,10 @@ export function useTerminalView() {
     }
     setCopySuccess(true)
     setTimeout(() => setCopySuccess(false), 2000)
-  }
+  }, [])
 
   // Log filtering helper (matchesLogLevel lives in ./logUtils, unit-tested)
-  const getFilteredLogs = (text: string) => {
+  const getFilteredLogs = useCallback((text: string) => {
     if (!text) return '';
     let lines = text.split('\n');
 
@@ -56,19 +56,19 @@ export function useTerminalView() {
     }
 
     return lines.join('\n');
-  };
+  }, [logLevelFilter, logSearchQuery]);
 
   // Map the (pure, unit-tested) line classification to its styled span.
-  const formatLogLine = (line: string) => {
+  const formatLogLine = useCallback((line: string) => {
     const kind = classifyLogLine(line)
     if (kind === 'header') return <span className={styles.logHeaderLine}>{line}</span>
     if (kind === 'success') return <span className={styles.logSuccessLine}>{line}</span>
     if (kind === 'error') return <span className={styles.logErrorLine}>{line}</span>
     if (kind === 'warning') return <span className={styles.logWarningLine}>{line}</span>
     return <span>{line}</span>
-  }
+  }, [])
 
-  const renderFormattedLogs = (text: string) => {
+  const renderFormattedLogs = useCallback((text: string) => {
     if (!text) return null
     const lines = text.split('\n')
     return lines.map((line, idx) => (
@@ -77,9 +77,9 @@ export function useTerminalView() {
         <span className={styles.terminalLineContent}>{formatLogLine(line)}</span>
       </div>
     ))
-  }
+  }, [formatLogLine])
 
-  return {
+  return useMemo(() => ({
     drawerTab,
     setDrawerTab,
     copySuccess,
@@ -103,5 +103,20 @@ export function useTerminalView() {
     getFilteredLogs,
     formatLogLine,
     renderFormattedLogs,
-  }
+  }), [
+    drawerTab,
+    copySuccess,
+    logLevelFilter,
+    isTerminalHeightExpanded,
+    terminalFontSize,
+    logSearchQuery,
+    isTerminalFullscreen,
+    isReportFullscreen,
+    isWordWrapEnabled,
+    isAutoScrollEnabled,
+    copyToClipboard,
+    getFilteredLogs,
+    formatLogLine,
+    renderFormattedLogs,
+  ])
 }

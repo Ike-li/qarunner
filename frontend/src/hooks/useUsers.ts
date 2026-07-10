@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { UserProfile } from '../types'
 import { apiMutate } from './useApi'
 
@@ -139,37 +139,50 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
     [apiFetch],
   )
 
-  return {
-    usersList,
-    usersLoading,
-    newUsername,
-    setNewUsername,
-    newPassword,
-    setNewPassword,
-    newUserRole,
-    setNewUserRole,
-    newUserError,
-    setNewUserError,
-    newUserLoading,
-    retentionDays,
-    handleRetentionDaysChange,
-    isCleaningStorage,
-    setIsCleaningStorage,
-    isAdmin,
-    currentUsername: currentUser?.username ?? null,
-    fetchUsers,
-    handleCreateUserSubmit,
-    handleDeleteUser,
-    handleUpdateUserRole,
-    handleUpdateUserPassword,
-    _reset: () => {
-      setUsersList([])
-      setUsersLoading(false)
-      setNewUsername('')
-      setNewPassword('')
-      setNewUserRole('user')
-      setNewUserError(null)
-      setNewUserLoading(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setUsersList([])
+    setUsersLoading(false)
+    setNewUsername('')
+    setNewPassword('')
+    setNewUserRole('user')
+    setNewUserError(null)
+    setNewUserLoading(false)
+  }, [])
+
+  const currentUsername = currentUser?.username ?? null
+
+  return useMemo(
+    () =>
+      ({
+        usersList,
+        usersLoading,
+        newUsername,
+        setNewUsername,
+        newPassword,
+        setNewPassword,
+        newUserRole,
+        setNewUserRole,
+        newUserError,
+        setNewUserError,
+        newUserLoading,
+        retentionDays,
+        handleRetentionDaysChange,
+        isCleaningStorage,
+        setIsCleaningStorage,
+        isAdmin,
+        currentUsername,
+        fetchUsers,
+        handleCreateUserSubmit,
+        handleDeleteUser,
+        handleUpdateUserRole,
+        handleUpdateUserPassword,
+        _reset,
+      }) as const,
+    [
+      usersList, usersLoading, newUsername, newPassword, newUserRole, newUserError,
+      newUserLoading, retentionDays, handleRetentionDaysChange, isCleaningStorage,
+      isAdmin, currentUsername, fetchUsers, handleCreateUserSubmit, handleDeleteUser,
+      handleUpdateUserRole, handleUpdateUserPassword, _reset,
+    ],
+  )
 }

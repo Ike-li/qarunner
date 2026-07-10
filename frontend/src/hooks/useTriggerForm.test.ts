@@ -58,4 +58,12 @@ describe('useTriggerForm', () => {
       expect(result.current.timeoutSeconds).toBe(120)
     })
   })
+
+  it('PERF: the returned object is referentially stable across a re-render with no state change', () => {
+    const apiFetch = vi.fn()
+    const { result, rerender } = renderHook(() => useTriggerForm({ apiFetch }))
+    const first = result.current
+    rerender()
+    expect(result.current).toBe(first)
+  })
 })

@@ -50,4 +50,23 @@ describe('useRuns', () => {
     // The stale run-a response must not have overwritten run-b's details.
     expect(result.current.selectedRunDetails?.id).toBe('run-b')
   })
+
+  it('PERF: the returned object is referentially stable across a re-render with no state change', async () => {
+    const apiFetch = vi.fn(() =>
+      Promise.resolve({ ok: true, json: async () => ({ runs: [] }) } as unknown as Response),
+    )
+    const { result, rerender } = renderHook(
+      (props: { enabled: boolean }) => useRuns({ apiFetch, ...props }),
+      { initialProps: { enabled: false } },
+    )
+    const first = result.current
+
+    // A re-render triggered by something unrelated (e.g. a sibling context
+    // consumer updating) must not produce a new object — otherwise every
+    // DashboardContext consumer downstream re-renders needlessly.
+    rerender({ enabled: false })
+
+    expect(result.current).toBe(first)
+    expect(result.current.completedRuns).toBe(first.completedRuns)
+  })
 })

@@ -173,8 +173,9 @@ class FakeStore:
         except KeyError:
             raise RunNotFound(run_id) from None
 
-    async def list(self) -> list[Run]:
-        return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+    async def list(self, limit: int | None = None) -> list[Run]:
+        runs = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+        return runs if limit is None else runs[:limit]
 
     async def save_cases(self, run_id, tests_path, created_at, cases) -> None:
         self._cases[run_id] = list(cases)
@@ -211,6 +212,21 @@ class FakeStore:
                     rows.append((run.created_at, c.status))
         rows.sort(key=lambda x: x[0], reverse=True)
         return [CaseHistoryPoint(created_at=ca, status=st) for ca, st in reversed(rows[:limit])]
+
+    async def get_case_histories(
+        self,
+        tests_path,
+        cases,
+        limit=20,
+        created_by=None,
+        profile_id=None,
+    ) -> dict:
+        return {
+            (suite, name): await self.get_case_history(
+                tests_path, suite, name, limit, created_by, profile_id
+            )
+            for suite, name in cases
+        }
 
     async def count_flaky_tests(
         self,

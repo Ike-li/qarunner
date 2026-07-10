@@ -11,6 +11,22 @@ describe('useProfiles', () => {
     vi.restoreAllMocks()
   })
 
+  it('PERF: the returned object is referentially stable across a re-render with no state change', () => {
+    const apiFetch = vi.fn()
+    const { result, rerender } = renderHook(
+      (props: { enabled: boolean; lang: string }) => useProfiles({ apiFetch, ...props }),
+      { initialProps: { enabled: false, lang: 'en' } },
+    )
+    const first = result.current
+
+    // A re-render triggered by something unrelated (e.g. a sibling context
+    // consumer updating) must not produce a new object — otherwise every
+    // DashboardContext consumer downstream re-renders needlessly.
+    rerender({ enabled: false, lang: 'en' })
+
+    expect(result.current).toBe(first)
+  })
+
   describe('B3: handleDeleteProfile return value', () => {
     it('resolves false when the user cancels the confirmation, without calling the API', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(false)

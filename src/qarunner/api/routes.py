@@ -88,6 +88,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# PERF: SqliteStore.list() was unbounded and is the shared data source for
+# every dashboard-facing endpoint below — a ceiling, not a real page size, so
+# it's set high enough that no realistic dataset today hits it (this is an
+# internal team tool, not a public SaaS). Endpoints that must see every run
+# regardless of volume (e.g. delete_user's cascade cleanup) call list() with
+# no limit= and stay unbounded.
+_DASHBOARD_RUNS_LIMIT = 5000
+
 
 def _require_owner_access(created_by: str, user: User) -> None:
     """Raise 403 unless *user* owns the resource (by ``created_by``) or is admin.
@@ -590,6 +598,9 @@ async def delete_user(
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
     # BUG-22: cascade-delete orphaned runs/profiles/schedules/credentials before
     # deleting the user, so records don't become invisible to all non-admins.
+    # Deliberately unbounded (no limit=) — must see every run this user owns,
+    # not just the newest _DASHBOARD_RUNS_LIMIT, or old runs would survive
+    # the cascade as orphans.
     runs = await container.store.list()
     for r in runs:
         if r.created_by == username:
@@ -1437,7 +1448,7 @@ async def list_runs(
 ) -> RunListResponse:
     """List runs, newest first (non-admins see only their own)."""
     container = request.app.state.container
-    runs = await container.store.list()
+    runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     if current_user.role != UserRole.ADMIN:
         runs = [r for r in runs if r.created_by == current_user.username]
     return RunListResponse(runs=[run_to_response(r) for r in runs])
@@ -1458,7 +1469,7 @@ async def get_runs_trend(
     own runs); points are COMPLETED runs carrying a summary, oldest-first.
     """
     container = request.app.state.container
-    runs = await container.store.list()
+    runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     if current_user.role != UserRole.ADMIN:
         runs = [r for r in runs if r.created_by == current_user.username]
     if profile_id is not None:
@@ -1478,7 +1489,7 @@ async def get_metrics(
     Owner-scoped: non-admins see only their own runs.
     """
     container = request.app.state.container
-    runs = await container.store.list()
+    runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     owner = current_user.username if current_user.role != UserRole.ADMIN else None
     if owner is not None:
         runs = [r for r in runs if r.created_by == owner]
@@ -1703,7 +1714,7 @@ async def get_run_diff(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
     _require_run_access(head, current_user)
 
-    all_runs = await container.store.list()
+    all_runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     # Owner-scope the baseline candidates exactly like GET /runs and
     # /runs/trend: a non-admin must not get another user's run picked as the
     # baseline, which would leak that run's id + per-case results through the
@@ -1820,7 +1831,7 @@ async def create_ai_analysis(
     cfg = container.settings
     cases = await container.store.get_cases_for_run(run_id)
 
-    all_runs = await container.store.list()
+    all_runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     if current_user.role != UserRole.ADMIN:
         all_runs = [r for r in all_runs if r.created_by == current_user.username]
 
@@ -1837,15 +1848,17 @@ async def create_ai_analysis(
         flip_threshold=cfg.flaky_flip_threshold,
     )
     created_by = None if current_user.role == UserRole.ADMIN else current_user.username
-    flaky_identities: set[tuple[str, str]] = set()
-    for c in cases:
-        if c.status not in ("failed", "error"):
-            continue
-        history = await container.store.get_case_history(
-            run.tests_path, c.suite, c.name, 20, created_by, run.profile_id
-        )
-        if flaky.flakiness([p.status for p in history], policy=policy)[0]:
-            flaky_identities.add((c.suite, c.name))
+    # PERF: batch every failed/error case's history onto one connection
+    # instead of one get_case_history() call (and connection) per case.
+    failed_identities = [(c.suite, c.name) for c in cases if c.status in ("failed", "error")]
+    histories = await container.store.get_case_histories(
+        run.tests_path, failed_identities, 20, created_by, run.profile_id
+    )
+    flaky_identities: set[tuple[str, str]] = {
+        identity
+        for identity, history in histories.items()
+        if flaky.flakiness([p.status for p in history], policy=policy)[0]
+    }
 
     log_tail = _run_stdout_tail(cfg.artifacts_root, run_id, cfg.ai_analysis_max_log_bytes)
     allure_url = (

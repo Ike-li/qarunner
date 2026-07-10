@@ -62,6 +62,25 @@ describe('useUsers', () => {
     expect(result.current.usersList).toEqual(users)
   })
 
+  it('PERF: the returned object is referentially stable across a re-render with no state change', () => {
+    const apiFetch = vi.fn(async () => new Response(JSON.stringify({ users: [] })))
+    const currentUser: UserProfile = {
+      username: 'alice',
+      role: 'user',
+      created_at: '2026-01-01T00:00:00Z',
+    }
+
+    const { result, rerender } = renderHook(
+      (props: { currentUser: UserProfile }) => useUsers({ apiFetch, ...props }),
+      { initialProps: { currentUser } },
+    )
+
+    const first = result.current
+    rerender({ currentUser })
+
+    expect(result.current).toBe(first)
+  })
+
   describe('handleRetentionDaysChange', () => {
     const currentUser: UserProfile = {
       username: 'admin-user',

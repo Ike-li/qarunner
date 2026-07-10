@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Profile } from '../types'
 
 interface UseProfilesOpts {
@@ -95,15 +95,21 @@ export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UsePr
     [apiFetch, lang, fetchProfiles, onProfileChanged],
   )
 
-  return {
-    profiles,
-    profileLoadError,
-    fetchProfiles,
-    handleTriggerProfile,
-    handleDeleteProfile,
-    _reset: () => {
-      setProfiles([])
-      setProfileLoadError(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setProfiles([])
+    setProfileLoadError(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        profiles,
+        profileLoadError,
+        fetchProfiles,
+        handleTriggerProfile,
+        handleDeleteProfile,
+        _reset,
+      }) as const,
+    [profiles, profileLoadError, fetchProfiles, handleTriggerProfile, handleDeleteProfile, _reset],
+  )
 }

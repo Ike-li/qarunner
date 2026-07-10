@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { SuiteInfo, TreeNode } from '../types'
 
 interface UseSuitesOpts {
@@ -152,23 +152,32 @@ export function useSuites({ apiFetch, enabled, lang }: UseSuitesOpts) {
     [apiFetch, lang, fetchTests],
   )
 
-  return {
-    tests,
-    suites,
-    suiteLoadError,
-    scannedFilesTree,
-    scannedMarkers,
-    fetchTests,
-    fetchSuiteMetadata,
-    handlePullSuite,
-    handlePrepareSuite,
-    handleDeleteSuite,
-    _reset: () => {
-      setTests([])
-      setSuites([])
-      setScannedFilesTree([])
-      setScannedMarkers([])
-      setSuiteLoadError(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setTests([])
+    setSuites([])
+    setScannedFilesTree([])
+    setScannedMarkers([])
+    setSuiteLoadError(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        tests,
+        suites,
+        suiteLoadError,
+        scannedFilesTree,
+        scannedMarkers,
+        fetchTests,
+        fetchSuiteMetadata,
+        handlePullSuite,
+        handlePrepareSuite,
+        handleDeleteSuite,
+        _reset,
+      }) as const,
+    [
+      tests, suites, suiteLoadError, scannedFilesTree, scannedMarkers, fetchTests,
+      fetchSuiteMetadata, handlePullSuite, handlePrepareSuite, handleDeleteSuite, _reset,
+    ],
+  )
 }

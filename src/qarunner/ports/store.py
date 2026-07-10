@@ -33,7 +33,7 @@ class RunStore(Protocol):
         """Return the run or raise RunNotFound."""
         ...
 
-    async def list(self) -> list[Run]: ...
+    async def list(self, limit: int | None = None) -> list[Run]: ...
 
     async def save_cases(
         self,
@@ -198,6 +198,17 @@ class Store(
         ``None`` (admin) spans all owners. ``profile_id`` optionally narrows the
         history to one saved execution profile.
         """
+        ...
+
+    async def get_case_histories(
+        self,
+        tests_path: str,
+        cases: list[tuple[str, str]],
+        limit: int = 20,
+        created_by: str | None = None,
+        profile_id: str | None = None,
+    ) -> dict[tuple[str, str], list[CaseHistoryPoint]]:
+        """Batched get_case_history for several (suite, name) cases at once."""
         ...
 
     async def count_flaky_tests(
