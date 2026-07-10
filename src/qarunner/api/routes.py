@@ -1448,7 +1448,7 @@ async def get_runs_trend(
     request: Request,
     tests_path: str,
     profile_id: str | None = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1),
     current_user: User = Depends(get_current_user),
 ) -> RunTrendResponse:
     """Pass-rate trend for a suite across its runs (cross-run stage 1).
@@ -1733,7 +1733,7 @@ async def get_case_history(
     suite: str,
     name: str,
     profile_id: str | None = None,
-    limit: int = 20,
+    limit: int = Query(20, ge=1),
     current_user: User = Depends(get_current_user),
 ) -> CaseHistoryResponse:
     """A single test case's recent outcomes + flaky verdict (cross-run stage 3).

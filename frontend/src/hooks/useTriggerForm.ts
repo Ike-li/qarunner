@@ -35,6 +35,23 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
 
   // ── helpers ──────────────────────────────────────────────────────────
 
+  /**
+   * BUG: a bare `Number(value)` accepted NaN (non-numeric input) and
+   * negative/zero values into timeoutSeconds — reject anything that isn't
+   * "" (use the default timeout) or a positive integer, keeping the last
+   * valid value on invalid keystrokes.
+   */
+  const handleTimeoutSecondsChange = useCallback((value: string) => {
+    if (value === '') {
+      setTimeoutSeconds('')
+      return
+    }
+    const n = Number(value)
+    if (Number.isFinite(n) && n >= 1) {
+      setTimeoutSeconds(Math.floor(n))
+    }
+  }, [])
+
   const makeEnvPayload = useCallback(
     () =>
       envVars.reduce(
@@ -237,7 +254,7 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
     selectedRunner, setSelectedRunner,
     customArgs, setCustomArgs,
     allureEnabled, setAllureEnabled,
-    timeoutSeconds, setTimeoutSeconds,
+    timeoutSeconds, setTimeoutSeconds, handleTimeoutSecondsChange,
     envVars, setEnvVars,
     editingProfileId, setEditingProfileId,
     selectedProfileId, setSelectedProfileId,

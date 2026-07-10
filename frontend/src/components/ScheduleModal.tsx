@@ -120,6 +120,8 @@ export function ScheduleModal() {
             <Button
               theme="light"
               icon={<Play size={14} />}
+              loading={s.isTriggeringSchedule}
+              disabled={s.isTriggeringSchedule}
               onClick={async () => {
                 const ok = await s.handleTriggerSchedule(existing.id)
                 if (ok) {

@@ -1656,6 +1656,18 @@ def test_runs_trend_empty_for_unknown_suite() -> None:
     assert resp.json()["points"] == []
 
 
+def test_runs_trend_rejects_nonpositive_limit() -> None:
+    # BUG: limit=0 used to silently mean "all points" (Python's `[-0:]` slice
+    # trap) instead of "no points" — reject non-positive limits outright
+    # rather than let that inversion reach the response body.
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=suite_a&limit=0")
+    assert resp.status_code == 422
+
+
 # ── GET /metrics ────────────────────────────────────────────────────────
 
 
@@ -2082,6 +2094,15 @@ def test_case_history_empty_for_unknown_case() -> None:
         resp = client.get("/cases/history?tests_path=nope&suite=x&name=y")
     assert resp.status_code == 200
     assert resp.json() == {"points": [], "flaky": False, "flip_count": 0}
+
+
+def test_case_history_rejects_nonpositive_limit() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=nope&suite=x&name=y&limit=0")
+    assert resp.status_code == 422
 
 
 def test_run_diff_forbidden_for_non_owner() -> None:

@@ -58,7 +58,10 @@ class AnthropicFailureAnalyzer:
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
+            # BUG: reading the reply (an abnormal/content-filtered shape can
+            # raise here too, e.g. content=None) must share the "never 500"
+            # guarantee below — it used to sit outside the try.
+            return parse_diagnosis(_first_text(resp.content))
         except Exception as exc:  # noqa: BLE001 — provider errors degrade, never 500
             logger.warning("Anthropic diagnosis failed", exc_info=True)
             return degraded_diagnosis(f"AI provider error: {exc}")
-        return parse_diagnosis(_first_text(resp.content))

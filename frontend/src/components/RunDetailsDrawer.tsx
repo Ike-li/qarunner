@@ -3,7 +3,7 @@ import {
   Clock, Copy, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Shuffle,
   Sparkles, Terminal, Trash2, X, XCircle,
 } from 'lucide-react'
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { formatDuration } from '../logUtils'
@@ -124,6 +124,16 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
   const profileId = d.runs.selectedRun?.profile_id
   const label = c.suite ? `${c.suite}::${c.name}` : c.name
 
+  // This fetch is triggered from a click handler, not a useEffect, so there's
+  // no cleanup callback to flip a `cancelled` flag (the pattern this file's
+  // other fetches use) — track mount state instead so a case collapsed/its
+  // row unmounted before the response lands doesn't update stale state.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
   const toggle = () => {
     const next = !expanded
     setExpanded(next)
@@ -138,14 +148,18 @@ function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
           return r.json()
         })
         .then((data: CaseHistory | null) => {
+          if (!mountedRef.current) return
           setHistory(data)
           setHistoryError(false)
         })
         .catch(() => {
+          if (!mountedRef.current) return
           setHistory(null)
           setHistoryError(true)
         })
-        .finally(() => setLoading(false))
+        .finally(() => {
+          if (mountedRef.current) setLoading(false)
+        })
     }
   }
 
@@ -1112,8 +1126,8 @@ export function RunDetailsDrawer() {
                               <span style={{ opacity: 0.7 }}>({b.cases.length})</span>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                              {b.cases.map((c, i) => (
-                                <CaseRow key={i} caseResult={c} />
+                              {b.cases.map((c) => (
+                                <CaseRow key={`${c.suite}::${c.name}`} caseResult={c} />
                               ))}
                             </div>
                           </div>

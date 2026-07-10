@@ -333,7 +333,7 @@ export function TriggerRunModal() {
               placeholder={d.t('timeoutPlaceholder')}
               min="1"
               value={d.form.timeoutSeconds === '' ? '' : String(d.form.timeoutSeconds)}
-              onChange={(val) => d.form.setTimeoutSeconds(val === '' ? '' : Number(val))}
+              onChange={(val) => d.form.handleTimeoutSecondsChange(val)}
             />
             <span className={styles.fieldHelp}>
               {d.t('timeoutHelp')}
@@ -436,6 +436,7 @@ export function TriggerRunModal() {
                 <Button
                   size="small"
                   theme="solid"
+                  disabled={d.form.isSubmitting}
                   onClick={(e) => onSaveProfile(e as any)}
                 >
                   {d.lang === 'zh' ? '确认保存' : 'Save'}

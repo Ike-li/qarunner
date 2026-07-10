@@ -17,6 +17,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
   const [scheduleProfile, setScheduleProfile] = useState<Profile | null>(null)
   const [isSavingSchedule, setIsSavingSchedule] = useState(false)
+  const [isTriggeringSchedule, setIsTriggeringSchedule] = useState(false)
   const [schedName, setSchedName] = useState('')
   const [schedExpression, setSchedExpression] = useState('')
   const [schedTimezone, setSchedTimezone] = useState('UTC')
@@ -195,13 +196,18 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
 
   const handleTriggerSchedule = useCallback(
     async (scheduleId: string): Promise<boolean> => {
-      const resp = await apiMutate(
-        apiFetch,
-        `/schedules/${scheduleId}/trigger`,
-        { method: 'POST' },
-        'Failed to trigger schedule.',
-      )
-      return resp !== null
+      setIsTriggeringSchedule(true)
+      try {
+        const resp = await apiMutate(
+          apiFetch,
+          `/schedules/${scheduleId}/trigger`,
+          { method: 'POST' },
+          'Failed to trigger schedule.',
+        )
+        return resp !== null
+      } finally {
+        setIsTriggeringSchedule(false)
+      }
     },
     [apiFetch],
   )
@@ -223,6 +229,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     previewError,
     scheduleLoadError,
     isSavingSchedule,
+    isTriggeringSchedule,
     fetchSchedules,
     handleOpenScheduleModal,
     handleSaveSchedule,
@@ -240,6 +247,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
       setPreviewError(null)
       setScheduleLoadError(false)
       setIsSavingSchedule(false)
+      setIsTriggeringSchedule(false)
     },
   } as const
 }

@@ -205,7 +205,7 @@ export function UserManagementModal() {
               <Input
                 type="number"
                 value={String(u.retentionDays)}
-                onChange={(v) => u.setRetentionDays(Number(v))}
+                onChange={(v) => u.handleRetentionDaysChange(v)}
                 addonAfter={d.lang === 'zh' ? '天' : 'days'}
                 aria-label={d.lang === 'zh' ? '保留天数' : 'Retention days'}
                 data-testid="retention-days-input"

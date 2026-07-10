@@ -92,3 +92,15 @@ async def test_analyze_degrades_on_none_content():
     diag = await analyzer.analyze(_context())
     # None content → "" → parse_diagnosis("") → degraded.
     assert diag.category == RootCauseCategory.ENVIRONMENT
+
+
+async def test_analyze_degrades_on_empty_choices():
+    """BUG: content-filtered/abnormal replies can come back with an empty
+    ``choices`` list — ``resp.choices[0]`` then raises IndexError *outside*
+    the try/except around the API call, so this "never 500" adapter would
+    500 anyway on exactly the kind of abnormal reply it exists to degrade."""
+    create = AsyncMock(return_value=SimpleNamespace(choices=[]))
+    analyzer = OpenAiFailureAnalyzer(api_key="k", model="gpt-x", client=_fake_client(create))
+    diag = await analyzer.analyze(_context())
+    assert diag.category == RootCauseCategory.ENVIRONMENT
+    assert diag.confidence == DiagnosisConfidence.LOW

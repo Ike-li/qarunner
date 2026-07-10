@@ -53,7 +53,10 @@ class OpenAiFailureAnalyzer:
                     {"role": "user", "content": user},
                 ],
             )
+            # BUG: reading the reply (an abnormal/content-filtered shape can
+            # raise here too, e.g. an empty choices list) must share the
+            # "never 500" guarantee below — it used to sit outside the try.
+            return parse_diagnosis(resp.choices[0].message.content or "")
         except Exception as exc:  # noqa: BLE001 — provider errors degrade, never 500
             logger.warning("OpenAI diagnosis failed", exc_info=True)
             return degraded_diagnosis(f"AI provider error: {exc}")
-        return parse_diagnosis(resp.choices[0].message.content or "")

@@ -93,3 +93,15 @@ async def test_analyze_degrades_when_no_text_block():
     diag = await analyzer.analyze(_context())
     # No text block → empty text → parse_diagnosis("") → degraded.
     assert diag.category == RootCauseCategory.ENVIRONMENT
+
+
+async def test_analyze_degrades_on_malformed_response_shape():
+    """BUG: an abnormal response shape (e.g. content-filtered — content=None
+    instead of []) raised inside _first_text()/parse_diagnosis(), *outside*
+    the try/except around the API call — the "never 500" contract this
+    adapter documents only covered the call itself, not reading the reply."""
+    create = AsyncMock(return_value=SimpleNamespace(content=None))
+    analyzer = AnthropicFailureAnalyzer(api_key="k", model="claude-x", client=_fake_client(create))
+    diag = await analyzer.analyze(_context())
+    assert diag.category == RootCauseCategory.ENVIRONMENT
+    assert diag.confidence == DiagnosisConfidence.LOW

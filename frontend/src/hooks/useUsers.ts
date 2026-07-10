@@ -24,6 +24,19 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
 
   const isAdmin = currentUser?.role === 'admin'
 
+  /**
+   * BUG: a bare `Number(value)` accepted NaN (non-numeric input) and
+   * negative/zero values into retentionDays, which feeds the destructive
+   * storage-cleanup call — reject anything that isn't a positive integer
+   * and keep the last valid value instead.
+   */
+  const handleRetentionDaysChange = useCallback((value: string) => {
+    const n = Number(value)
+    if (Number.isFinite(n) && n >= 1) {
+      setRetentionDays(Math.floor(n))
+    }
+  }, [])
+
   const fetchUsers = useCallback(async () => {
     if (!isAdmin) return
     setUsersLoading(true)
@@ -139,7 +152,7 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
     setNewUserError,
     newUserLoading,
     retentionDays,
-    setRetentionDays,
+    handleRetentionDaysChange,
     isCleaningStorage,
     setIsCleaningStorage,
     isAdmin,

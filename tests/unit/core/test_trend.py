@@ -73,3 +73,11 @@ def test_trend_points_limit_keeps_most_recent_window() -> None:
 
 def test_trend_points_empty_when_no_match() -> None:
     assert trend_points([], "suite_a") == []
+
+
+def test_trend_points_limit_zero_returns_empty() -> None:
+    """BUG: Python's `matching[-0:]` is `matching[0:]` (all elements) — a
+    plain `[-limit:]` slice silently inverts the limit=0 "no data" contract
+    that GET /cases/history (SQL `LIMIT 0`) already honours."""
+    runs = [_run(f"r{d}", "suite_a", d) for d in range(1, 4)]
+    assert trend_points(runs, "suite_a", limit=0) == []
