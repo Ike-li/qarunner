@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Plus, RotateCw, Trash2, Users } from 'lucide-react'
 import { Modal, Banner, Table, Tag, Input, Select, Row, Col, Button } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
@@ -9,6 +10,7 @@ const formatDate = (iso: string) => new Date(iso).toLocaleString()
 export function UserManagementModal() {
   const d = useDashboard()
   const u = d.users
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false)
 
   return (
     <Modal
@@ -73,17 +75,23 @@ export function UserManagementModal() {
                         size="small"
                         theme="borderless"
                         data-testid="user-change-password"
-                        onClick={() => {
+                        disabled={isUpdatingPassword}
+                        onClick={async () => {
+                          if (isUpdatingPassword) return
                           const pw = window.prompt(
                             d.lang === 'zh'
                               ? `为 ${record.username} 设置新密码：`
                               : `New password for ${record.username}:`,
                           )
                           if (pw && pw.trim()) {
-                            u.handleUpdateUserPassword(record.username, pw).then((ok) => {
+                            setIsUpdatingPassword(true)
+                            try {
+                              const ok = await u.handleUpdateUserPassword(record.username, pw)
                               if (ok)
                                 alert(d.lang === 'zh' ? '密码已更新' : 'Password updated')
-                            })
+                            } finally {
+                              setIsUpdatingPassword(false)
+                            }
                           }
                         }}
                       >
@@ -211,6 +219,7 @@ export function UserManagementModal() {
                 loading={u.isCleaningStorage}
                 data-testid="storage-cleanup-button"
                 onClick={async () => {
+                  if (u.isCleaningStorage) return
                   u.setIsCleaningStorage(true)
                   try {
                     const resp = await d.apiFetch(`/runs/cleanup?retention_days=${u.retentionDays}`, { method: 'POST' })

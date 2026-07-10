@@ -149,6 +149,8 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         setFormError('Please enter a profile name.')
         return
       }
+      setIsSubmitting(true)
+      setFormError(null)
       try {
         const resp = await apiFetch('/profiles', {
           method: 'POST',
@@ -176,6 +178,8 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         }
       } catch {
         setFormError('Network error. Failed to save execution profile.')
+      } finally {
+        setIsSubmitting(false)
       }
     },
     [apiFetch, profileName, profileDesc, testsPath, selectedRunner, customArgs, timeoutSeconds, makeEnvPayload],

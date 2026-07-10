@@ -163,15 +163,21 @@ async def _require_tests_path_suite_access(
         await _require_registered_suite_access(container, suite_name, user)
 
 
-def _client_ip(request: Request) -> str:
+def _client_ip(request: Request, trusted_proxies: str = "") -> str:
     """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
 
-    Returns the transport peer address; behind a reverse proxy this is the
-    proxy's IP, so a trusted-proxy ``X-Forwarded-For`` story is needed before
-    relying on it for per-client throttling in such deployments (SEC-6 /
-    deployment hardening).
+    Returns the transport peer address by default.  When ``trusted_proxies`` is
+    non-empty and the peer address is in that set, the leftmost
+    ``X-Forwarded-For`` entry is returned instead — that is the real client IP
+    behind a reverse proxy (BUG-8).
     """
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    if trusted_proxies and peer in {p.strip() for p in trusted_proxies.split(",") if p.strip()}:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # Leftmost entry is the original client per RFC 7239 convention.
+            return xff.split(",")[0].strip()
+    return peer
 
 
 # ── External test-suite git operations (stage 2) ─────────────────────────
@@ -413,7 +419,7 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
     it (XSS). The body still returns the token for programmatic API clients.
     """
     container = request.app.state.container
-    client_ip = _client_ip(request)
+    client_ip = _client_ip(request, container.settings.trusted_proxies)
     throttle_key = f"{req.username}|{client_ip}"
     try:
         container.login_throttle.check(throttle_key)
@@ -426,7 +432,18 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
         ) from exc
 
     user_record = await container.store.get_user(req.username)
-    if not user_record or not verify_password(req.password, user_record["password_hash"]):
+    if not user_record:
+        # BUG-1: always call verify_password even when user doesn't exist to
+        # prevent timing side-channel that distinguishes "user not found" from
+        # "wrong password" (bcrypt takes ~100-200ms; Python short-circuit skips it).
+        verify_password(req.password, "$2b$12$" + "0" * 53)
+        container.login_throttle.record_failure(throttle_key)
+        logger.warning("Failed login username=%r ip=%s", req.username, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    if not verify_password(req.password, user_record["password_hash"]):
         container.login_throttle.record_failure(throttle_key)
         logger.warning("Failed login username=%r ip=%s", req.username, client_ip)
         raise HTTPException(
@@ -435,7 +452,12 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
         )
 
     container.login_throttle.record_success(throttle_key)
-    token = create_access_token(user_record["username"], user_record["role"], container.settings)
+    token = create_access_token(
+        user_record["username"],
+        user_record["role"],
+        container.settings,
+        token_version=user_record.get("token_version", 0),
+    )
     response.set_cookie(
         "token",
         token,
@@ -450,14 +472,33 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request) -> Response:
-    """Clear the auth cookie (SEC-6).
+    """Clear the auth cookie and revoke the token (BUG-5+13).
 
-    Deliberately unauthenticated: an expired or otherwise-invalid session must
-    still be tearable down, and clearing a cookie leaks nothing. The delete must
-    echo the same path/SameSite/Secure attributes used at login or the browser
-    keeps the original cookie.
+    Deliberately accepts unauthenticated requests: an expired or otherwise-
+    invalid session must still be tearable down, and clearing a cookie leaks
+    nothing. When a valid token is present, the user's token_version is bumped
+    so every other JWT for that user is immediately invalidated.
+    The delete must echo the same path/SameSite/Secure attributes used at
+    login or the browser keeps the original cookie.
     """
-    settings = request.app.state.container.settings
+    container = request.app.state.container
+    settings = container.settings
+
+    # Best-effort token revocation: extract the JWT from the cookie or
+    # Authorization header and bump the user's token_version so all other
+    # sessions are invalidated. Failures are silent — logout always succeeds.
+    token = request.cookies.get("token")
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:]
+    if token:
+        from qarunner.core.auth import decode_access_token
+
+        payload = decode_access_token(token, settings)
+        if payload and "sub" in payload:
+            await container.store.increment_token_version(payload["sub"])
+
     resp = Response(status_code=status.HTTP_204_NO_CONTENT)
     resp.delete_cookie(
         "token",
@@ -547,6 +588,28 @@ async def delete_user(
     existing = await container.store.get_user(username)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+    # BUG-22: cascade-delete orphaned runs/profiles/schedules/credentials before
+    # deleting the user, so records don't become invisible to all non-admins.
+    runs = await container.store.list()
+    for r in runs:
+        if r.created_by == username:
+            await container.store.delete_run(r.id)
+    profiles = await container.store.list_profiles()
+    for p in profiles:
+        if p.created_by == username:
+            await container.store.delete_profile(p.id)
+    schedules = await container.store.list_schedules()
+    for s in schedules:
+        if s.created_by == username:
+            await container.store.delete_schedule(s.id)
+    creds = await container.store.list_credentials()
+    for c in creds:
+        if c.created_by == username:
+            await container.store.delete_credential(c.id)
+    suites = await container.store.list_suites()
+    for suite in suites:
+        if suite.created_by == username:
+            await container.store.delete_suite(suite.name)
     await container.store.delete_user(username)
     return {"status": "success", "message": f"User {username} deleted"}
 
@@ -576,14 +639,20 @@ async def update_user(
     if req.role is not None and existing["role"] == "admin" and req.role.value != "admin":
         if username == admin_user.username:
             raise HTTPException(status_code=400, detail="You cannot demote your own account.")
-        users = await container.store.list_users()
-        admin_count = sum(1 for u in users if u["role"] == "admin")
-        if admin_count <= 1:
+        # BUG-6: use atomic demote to prevent TOCTOU race that could leave zero admins.
+        demoted = await container.store.demote_if_not_last_admin(username, req.role.value)
+        if not demoted:
             raise HTTPException(status_code=400, detail="Cannot demote the last remaining admin.")
 
     if req.password is not None:
         await container.store.update_password(username, hash_password(req.password))
-    if req.role is not None:
+        # BUG-5+13: invalidate all existing JWTs for this user after a
+        # password change by bumping the stored token_version.
+        await container.store.increment_token_version(username)
+    if req.role is not None and existing["role"] == "admin" and req.role.value != "admin":
+        # Already handled atomically above; skip the redundant update_role.
+        pass
+    elif req.role is not None:
         await container.store.update_role(username, req.role.value)
 
     new_role = req.role.value if req.role is not None else existing["role"]

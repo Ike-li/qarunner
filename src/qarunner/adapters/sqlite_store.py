@@ -32,10 +32,11 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    username      TEXT PRIMARY KEY,
-    password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    username       TEXT PRIMARY KEY,
+    password_hash  TEXT NOT NULL,
+    role           TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    token_version  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -185,6 +186,10 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             ");",
         ),
     ),
+    # v11: token_version on users for JWT invalidation (BUG-5+13).
+    # Existing users default to 0; the column is idempotent (duplicate column
+    # tolerated by _run_migrations).
+    (11, ("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;",)),
 )
 
 
@@ -252,8 +257,9 @@ class SqliteStore:
             if row and row[0] == 0:
                 settings = Settings()
                 await db.execute(
-                    "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO users "
+                    "(username, password_hash, role, created_at, token_version) "
+                    "VALUES (?, ?, ?, ?, 0)",
                     (
                         settings.admin_user,
                         hash_password(settings.admin_password),
@@ -383,7 +389,8 @@ class SqliteStore:
         """Retrieve a user and their password hash from the database."""
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT username, password_hash, role, created_at FROM users WHERE username = ?",
+                "SELECT username, password_hash, role, created_at, token_version "
+                "FROM users WHERE username = ?",
                 (username,),
             )
             row = await cursor.fetchone()
@@ -394,6 +401,7 @@ class SqliteStore:
             "password_hash": row[1],
             "role": row[2],
             "created_at": row[3],
+            "token_version": row[4],
         }
 
     async def create_user(self, username: str, password_hash: str, role: str) -> None:
@@ -401,8 +409,8 @@ class SqliteStore:
         now_str = datetime.now(UTC).isoformat()
         async with self._connect() as db:
             await db.execute(
-                "INSERT INTO users (username, password_hash, role, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO users (username, password_hash, role, created_at, token_version) "
+                "VALUES (?, ?, ?, ?, 0)",
                 (username, password_hash, role, now_str),
             )
             await db.commit()
@@ -443,6 +451,32 @@ class SqliteStore:
             cursor = await db.execute(
                 "UPDATE users SET role = ? WHERE username = ?",
                 (role, username),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def increment_token_version(self, username: str) -> bool:
+        """BUG-5+13: bump token_version to invalidate all existing JWTs."""
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE users SET token_version = token_version + 1 WHERE username = ?",
+                (username,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        """BUG-6: atomically change role only if more than one admin remains.
+
+        Returns True if the update was applied, False if the user is the last
+        admin (no-op). Prevents two concurrent demotion requests from both
+        succeeding and leaving zero admins.
+        """
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE users SET role = ? WHERE username = ? "
+                "AND (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1",
+                (new_role, username),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -904,6 +938,28 @@ class SqliteStore:
                 (1 if locked else 0, run_id),
             )
             await db.commit()
+
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        """BUG-3: atomically set CANCELLED only if still QUEUED or RUNNING.
+
+        Returns True if the update was applied (run was in-flight), False if the
+        run was already in a terminal state (no-op).  Prevents ``cancel()`` from
+        overwriting a legitimate COMPLETED/FAILED/TIMEOUT with CANCELLED.
+        """
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE runs SET status = ?, finished_at = ? "
+                "WHERE id = ? AND status IN (?, ?)",
+                (
+                    RunStatus.CANCELLED.value,
+                    finished_at,
+                    run_id,
+                    RunStatus.QUEUED.value,
+                    RunStatus.RUNNING.value,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
 
     async def delete_run(self, run_id: str) -> bool:
         async with self._connect() as db:

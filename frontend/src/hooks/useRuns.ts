@@ -65,7 +65,9 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const handleToggleLock = useCallback(
     async (runId: string, e: React.MouseEvent) => {
       e.stopPropagation()
-      const run = runs.find((r) => r.id === runId)
+      // BUG-9: read from ref to avoid closing over the entire runs array,
+      // which changes every 1.5s poll cycle and causes unnecessary re-renders.
+      const run = runsRef.current.find((r) => r.id === runId)
       if (!run) return
       const newLocked = !run.locked
 
@@ -79,7 +81,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
           setRuns((prev) =>
             prev.map((r) => (r.id === runId ? { ...r, locked: newLocked } : r)),
           )
-          if (selectedRunDetails?.id === runId) {
+          if (selectedRunDetailsRef.current?.id === runId) {
             setSelectedRunDetails((prev) =>
               prev ? { ...prev, locked: newLocked } : null,
             )
@@ -92,7 +94,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
         console.error('Error toggling lock:', err)
       }
     },
-    [runs, selectedRunDetails, apiFetch],
+    [apiFetch],
   )
 
   // ── cancel a queued / running run ──────────────────────────────────────
@@ -233,6 +235,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
     const connect = () => {
       if (disposed) return
+      setStreamedStdout('')  // BUG-24: clear old content on reconnect to avoid duplicate lines
       eventSource = new EventSource(`/runs/${selectedRunId}/stream`)
 
       eventSource.onopen = () => {

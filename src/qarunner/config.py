@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     ai_base_url: str = ""
     ai_analysis_max_log_bytes: int = 16384
     ai_request_timeout_seconds: float = 60.0
+    # Trusted reverse-proxy IPs (BUG-8). Comma-separated list of client
+    # addresses whose ``X-Forwarded-For`` header the login throttle should
+    # trust for real-client identification. Empty (default) disables
+    # ``X-Forwarded-For`` parsing entirely — the transport peer address is
+    # always used.
+    trusted_proxies: str = ""
 
     @field_validator("secret_key")
     @classmethod
@@ -118,6 +124,10 @@ class Settings(BaseSettings):
                 "QARUNNER_SECRET_KEY is unset, blank, or a known placeholder — set a "
                 "strong random value, e.g. "
                 '`python -c "import secrets; print(secrets.token_urlsafe(64))"`'
+            )
+        if len(value) < 32:
+            raise ValueError(
+                "QARUNNER_SECRET_KEY must be at least 32 characters for HS256 security"
             )
         return value
 

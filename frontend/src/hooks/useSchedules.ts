@@ -16,6 +16,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
   const [scheduleProfile, setScheduleProfile] = useState<Profile | null>(null)
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false)
   const [schedName, setSchedName] = useState('')
   const [schedExpression, setSchedExpression] = useState('')
   const [schedTimezone, setSchedTimezone] = useState('UTC')
@@ -113,7 +114,8 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
   // ── save ───────────────────────────────────────────────────────────────
 
   const handleSaveSchedule = useCallback(async () => {
-    if (!scheduleProfile) return
+    if (!scheduleProfile || isSavingSchedule) return
+    setIsSavingSchedule(true)
     const existing = schedules.find((s) => s.profile_id === scheduleProfile.id)
     const payload = {
       name: schedName,
@@ -141,6 +143,8 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
       }
     } catch {
       setPreviewError('Network error. Failed to save schedule.')
+    } finally {
+      setIsSavingSchedule(false)
     }
   }, [
     scheduleProfile,
@@ -151,6 +155,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     schedTimezone,
     apiFetch,
     fetchSchedules,
+    isSavingSchedule,
   ])
 
   // ── delete ─────────────────────────────────────────────────────────────
@@ -217,6 +222,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     previewNextRuns,
     previewError,
     scheduleLoadError,
+    isSavingSchedule,
     fetchSchedules,
     handleOpenScheduleModal,
     handleSaveSchedule,
@@ -233,6 +239,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
       setPreviewNextRuns([])
       setPreviewError(null)
       setScheduleLoadError(false)
+      setIsSavingSchedule(false)
     },
   } as const
 }

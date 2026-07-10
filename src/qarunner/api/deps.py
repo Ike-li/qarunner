@@ -184,6 +184,16 @@ async def get_current_user(request: Request, token: str | None = Depends(oauth2_
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # BUG-5+13: reject tokens whose version no longer matches the stored
+    # version (password change or logout bumped it).
+    payload_tv = payload.get("token_version", 0)
+    if payload_tv != user_record.get("token_version", 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     from datetime import datetime
 
     created_at_dt = (

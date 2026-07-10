@@ -59,25 +59,5 @@ export function useApi(onSessionClear: () => void) {
     onSessionClear()
   }, [apiFetch, onSessionClear])
 
-  /**
-   * Probe the HttpOnly auth cookie.  Returns `{ ok: true, user }` when the
-   * session is valid, or `{ ok: false }` otherwise — never throws.
-   */
-  const checkAuth = useCallback(async (): Promise<
-    { ok: true; user: { username: string; role: string; created_at: string } }
-    | { ok: false }
-  > => {
-    try {
-      const resp = await apiFetch('/auth/me')
-      if (resp.ok) {
-        const user = await resp.json()
-        return { ok: true, user }
-      }
-      return { ok: false }
-    } catch {
-      return { ok: false }
-    }
-  }, [apiFetch])
-
-  return { apiFetch, handleLogout, checkAuth } as const
+  return { apiFetch, handleLogout } as const
 }

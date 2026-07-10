@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import { ReactNode, useMemo } from 'react'
 import { Button, Tooltip, Tag, Badge } from '@douyinfe/semi-ui'
 import {
   IconFolder,
@@ -21,6 +21,27 @@ import { useDashboard } from '../hooks/DashboardContext'
  *  Run stats are computed inline via d.runs.runs; this component displays. */
 export function ProjectSidebar() {
   const d = useDashboard()
+  // Pre-compute grouped run maps to avoid O(n×m) filtering on every render.
+  const suiteRunsMap = useMemo(() => {
+    const map = new Map<string, typeof d.runs.runs>()
+    for (const r of d.runs.runs) {
+      const arr = map.get(r.tests_path)
+      if (arr) arr.push(r)
+      else map.set(r.tests_path, [r])
+    }
+    return map
+  }, [d.runs.runs])
+  const profileRunsMap = useMemo(() => {
+    const map = new Map<string, typeof d.runs.runs>()
+    for (const r of d.runs.runs) {
+      if (r.profile_id == null) continue
+      const key = String(r.profile_id)
+      const arr = map.get(key)
+      if (arr) arr.push(r)
+      else map.set(key, [r])
+    }
+    return map
+  }, [d.runs.runs])
   // name → source/repo/ref, so each suite row can render source-aware actions.
   const suiteInfoByName = new Map(d.suites.suites.map((s) => [s.name, s]))
   return (
@@ -113,7 +134,7 @@ export function ProjectSidebar() {
           )}
           {d.suites.tests.map((suite) => {
             const isFiltered = d.selectedSuiteFilter === suite
-            const suiteRunsCount = d.runs.runs.filter(r => r.tests_path === suite).length
+            const suiteRunsCount = suiteRunsMap.get(suite)?.length ?? 0
             const suiteProfiles = d.profiles.profiles.filter(p => p.tests_path === suite)
             const isGit = suiteInfoByName.get(suite)?.source === 'git'
             return (
@@ -236,7 +257,7 @@ export function ProjectSidebar() {
                       const isProfileFiltered = d.selectedProfileFilter === profile.id;
 
                       // Compute dynamic run statistics
-                      const profileRuns = d.runs.runs.filter((r) => r.profile_id === profile.id)
+                      const profileRuns = profileRunsMap.get(profile.id) ?? []
                       const finishedRuns = profileRuns.filter(
                         (r) => r.status === 'completed' || r.status === 'failed' || r.status === 'timeout',
                       )

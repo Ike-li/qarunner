@@ -133,7 +133,7 @@ export function ScheduleModal() {
               {d.lang === 'zh' ? '立即触发' : 'Run Now'}
             </Button>
           )}
-          <Button type="primary" theme="solid" onClick={s.handleSaveSchedule} data-testid="schedule-save-button">
+          <Button type="primary" theme="solid" onClick={s.handleSaveSchedule} loading={s.isSavingSchedule} data-testid="schedule-save-button">
             {d.lang === 'zh' ? '保存调度' : 'Save'}
           </Button>
         </div>

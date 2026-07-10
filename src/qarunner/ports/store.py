@@ -77,6 +77,13 @@ class UserStore(Protocol):
         """Set a user's role. Returns True if the user existed (P1-3)."""
         ...
 
+    async def increment_token_version(self, username: str) -> bool:
+        """Bump a user's token_version, invalidating all existing JWTs.
+
+        Returns True if the user existed (BUG-5+13).
+        """
+        ...
+
 
 @runtime_checkable
 class ProfileStore(Protocol):

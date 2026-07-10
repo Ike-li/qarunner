@@ -87,6 +87,7 @@ class FakeStore:
             "password_hash": hash_password("test_pass"),
             "role": "admin",
             "created_at": "2026-06-20T16:00:00Z",
+            "token_version": 0,
         }
 
     async def get_user(self, username: str) -> dict | None:
@@ -100,6 +101,7 @@ class FakeStore:
             "password_hash": password_hash,
             "role": role,
             "created_at": datetime.now(UTC).isoformat(),
+            "token_version": 0,
         }
 
     async def list_users(self) -> list[dict]:
@@ -121,6 +123,23 @@ class FakeStore:
         if username not in self._users:
             return False
         self._users[username]["role"] = role
+        return True
+
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        """BUG-6: atomic demote — only if more than one admin remains."""
+        if username not in self._users:
+            return False
+        admin_count = sum(1 for u in self._users.values() if u["role"] == "admin")
+        if admin_count <= 1:
+            return False
+        self._users[username]["role"] = new_role
+        return True
+
+    async def increment_token_version(self, username: str) -> bool:
+        """BUG-5+13: bump token_version to invalidate all existing JWTs."""
+        if username not in self._users:
+            return False
+        self._users[username]["token_version"] = self._users[username].get("token_version", 0) + 1
         return True
 
     async def save_credential(self, credential: object, encrypted_secret: str) -> None:
@@ -2995,6 +3014,7 @@ def _seed_user(
         "password_hash": hash_password(password),
         "role": role,
         "created_at": "2026-06-20T16:00:00Z",
+        "token_version": 0,
     }
 
 
@@ -3082,10 +3102,10 @@ def test_update_user_password_takes_effect() -> None:
     app = create_app(container)
     _override_user(app, "test_user", UserRole.ADMIN)
     with TestClient(app) as client:
-        resp = client.put("/users/bob", json={"password": "newpw"})
+        resp = client.put("/users/bob", json={"password": "newpassword"})
     assert resp.status_code == 200
     new_hash = container.store._users["bob"]["password_hash"]  # type: ignore[attr-defined]
-    assert verify_password("newpw", new_hash)
+    assert verify_password("newpassword", new_hash)
     assert not verify_password("oldpw", new_hash)
 
 
@@ -3365,6 +3385,29 @@ def test_successful_login_resets_failure_counter() -> None:
         # ...so a subsequent single miss does not immediately lock.
         again = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
         assert again.status_code == 401
+
+
+def test_login_nonexistent_user_calls_verify_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG-1: verify_password must be called even when user doesn't exist.
+
+    Without this, Python short-circuits the ``or`` and skips bcrypt, leaking a
+    timing signal that distinguishes "user not found" from "wrong password".
+    """
+    from qarunner.core.auth import verify_password as real_verify
+
+    app = create_app(_make_container())
+    call_count = 0
+
+    def _counting_verify(password: str, hashed: str) -> bool:
+        nonlocal call_count
+        call_count += 1
+        return real_verify(password, hashed)
+
+    monkeypatch.setattr("qarunner.api.routes.verify_password", _counting_verify)
+    with TestClient(app) as client:
+        call_count = 0
+        client.post("/auth/login", json={"username": "ghost", "password": "x"})
+        assert call_count == 1, "verify_password must be called for nonexistent users"
 
 
 def test_client_ip_helper_handles_missing_client() -> None:
