@@ -147,6 +147,12 @@ docker compose -f docker-compose.dev.yml exec frontend npm run test:unit -- --ru
 依赖和 Chrome channel 差异影响结果。开发环境的 compose project network 默认是
 `qarunner_default`，容器内前端服务地址是 `http://frontend:5173`。
 
+> 与仓库根目录的 `Dockerfile.playwright` 是两回事：那个文件构建的是
+> `qarunner-playwright-executor:latest`——qarunner **运行时**用来在 docker
+> executor 中执行用户自己的 `runner=playwright` 测试套件的镜像（见
+> `QARUNNER_PLAYWRIGHT_EXECUTOR_IMAGE`），不是本节用来跑 qarunner 自身前端
+> E2E 测试的镜像。本节场景直接用下面的官方镜像即可。
+
 ```bash
 # 1. 确保前后端服务都在运行
 docker compose -f docker-compose.dev.yml up -d

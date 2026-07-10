@@ -186,7 +186,7 @@
 | env | dict[str,str] | 否 | `{}` | |
 
 ### `POST /profiles` — 认证
-- **成功**：`201` `TestProfileResponse`。 · **错误**：`422` · `401`。
+- **成功**：`201` `TestProfileResponse`。 · **错误**：`403`（`tests_path` 指向他人独占的已登记套件，非共享）· `422` · `401`。
 
 ### `GET /profiles` — 认证（非 admin 静默过滤）
 - 查询参数：`tests_path`（可选，按路径过滤）。
@@ -198,7 +198,7 @@
 - **错误**：`403`（他人）· `404`（不存在）· `429`（同一用户 in-flight run 达上限）· `400`。
 
 ### `PUT /profiles/{profile_id}` — owner
-- **成功**：`200` `TestProfileResponse`。 · **错误**：`403`（他人）· `404`（不存在）· `422`。
+- **成功**：`200` `TestProfileResponse`。 · **错误**：`403`（他人；或 `tests_path` 指向他人独占的已登记套件，非共享）· `404`（不存在）· `422`。
 
 ### `DELETE /profiles/{profile_id}` — owner
 - **成功**：`200` `{"status": "success", "message": "..."}`。 · **错误**：`403` · `404`。
@@ -232,6 +232,7 @@
 - **成功**：`202` `RunResponse`（`status="queued"`）。
 - **错误**：
   - `400`：`executor_mode=subprocess` 但非 admin 且未开放 / 未知 runner / 不安全路径或参数。
+  - `403`：`tests_path` 指向他人独占的已登记套件（非共享；`created_by` 非 admin/`"system"` 时视为独占）。`POST /runs/{id}/rerun` 与 `POST /schedules/{id}/trigger` 共用同一创建入口（`_create_run_guarded`），同样适用此校验。
   - `429`：同一用户 `queued+running` 的 run 数 ≥ 上限（默认 20，admin 豁免）。
   - `422`：schema 校验失败。
   - **`runner=playwright` + `executor_mode=docker`**：受支持的正常组合，返回 `202`。docker executor 按命令自动选用 Playwright 专用镜像（`qarunner-playwright-executor:latest`，可配 `QARUNNER_PLAYWRIGHT_EXECUTOR_IMAGE`，内含 Node.js + 浏览器），**不在接口层拒绝**。仅当该镜像不可用且关闭了运行时自动构建（`QARUNNER_EXECUTOR_AUTOBUILD=false`）时，该 run 在**异步执行阶段**失败、终态 `failed`（而非同步 4xx/5xx）。
@@ -336,6 +337,23 @@
 - **成功**：`200` `MetricsSummary`（见 §八）。
 - 非 admin 经 `created_by` 过滤,只看自己的 runs。
 
+### AI 失败诊断（AI Failure Diagnosis）
+
+两个只读端点,对失败的 run 生成结构化根因诊断（跨次对比 stage 4）,**只读,从不修改代码 / 测试**。owner-scope 与其余 run 视图一致：`_require_run_access`——非 admin 只能查自己的 run。是否可用取决于是否配置了 LLM provider（`QARUNNER_AI_API_KEY`，见下方 `enabled` 语义）。
+
+#### `GET /runs/{run_id}/ai-analysis` — owner
+返回该 run **已缓存**的诊断结果，不触发新的 LLM 调用。
+- **成功**：`200` `AiAnalysisResponse`（见 §八）；未生成过诊断时 `diagnosis: null`。
+- **错误**：`404`（run 不存在）· `403`（他人）。
+
+#### `POST /runs/{run_id}/ai-analysis` — owner
+聚合该 run 的失败用例、日志尾部、基线 diff、pass-rate 趋势、per-case flaky 历史后，调用已配置的 LLM provider 生成诊断并缓存。
+- **成功**：`200` `AiAnalysisResponse`。
+  - **未配置 provider**（`QARUNNER_AI_API_KEY` 为空）：返回 `enabled: false`（**不报错**），`diagnosis: null`；前端据此隐藏 AI 分析入口。
+  - **该 run 无失败用例**：返回 `enabled: true, detail: "No failing cases to diagnose."`，`diagnosis: null`。
+  - **正常生成**：返回 `enabled: true, diagnosis: FailureDiagnosis`。
+- **错误**：`404`（run 不存在）· `403`（他人）。
+
 ---
 
 ## 七、调度（Schedule）
@@ -431,6 +449,18 @@
 ### CaseHistoryPoint
 `created_at` · `status: str`
 
+### AiAnalysisResponse
+`enabled: bool` · `diagnosis: FailureDiagnosis | null` · `detail: str | null`
+- `enabled=false` 表示未配置 LLM provider；`detail` 仅在无失败用例等场景下携带说明文案。
+
+### FailureDiagnosis（只读，从不修改代码）
+`category: RootCauseCategory` · `confidence: DiagnosisConfidence` · `summary: str` ·
+`evidence: list[str]` · `is_likely_regression: bool` · `next_steps: list[NextStep]`
+
+### NextStep
+`kind: str`（如 `rerun_profile` / `inspect_log` / `check_regression` / `inspect_diff` 等）·
+`action: str` · `reference: str | null`（如 profile_id / 日志锚点 / 基线 run_id）
+
 ### TestScheduleResponse
 `id` · `name` · `profile_id` · `cron_expression` · `enabled` · `timezone` ·
 `last_run_at?` · `next_run_at?` · `created_by` · `created_at`
@@ -450,6 +480,14 @@
 ### 枚举
 - **RunStatus**：`queued` → `running` → 终态 `completed` / `failed` / `timeout` / `cancelled`（用户主动取消）。
 - **UserRole**：`admin` / `user`。
+- **RootCauseCategory**（AI 失败诊断根因分类，6 值）：
+  `new_failure`（新增失败，相对基线是新出现的红，可能是回归）·
+  `historical_flaky`（历史反复翻转，不是真的坏）·
+  `environment`（基础设施 / 网络 / 依赖问题，不是用例本身的错）·
+  `assertion`（真实断言不符）·
+  `timeout`（超出运行 / 步骤时间预算）·
+  `permission_path`（权限拒绝 / 路径缺失）。
+- **DiagnosisConfidence**：`HIGH` / `MED` / `LOW`。
 
 ---
 

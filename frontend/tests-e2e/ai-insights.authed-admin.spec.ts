@@ -45,7 +45,7 @@ const RUN_FAILED = {
 
 const DIAGNOSIS_NEW_FAILURE = {
   category: 'new_failure',
-  confidence: 'high',
+  confidence: 'HIGH',
   summary: 'The login assertion regressed: the endpoint now returns 401 where 200 was expected.',
   evidence: [
     'test_login asserted status 200 but received 401',
@@ -64,7 +64,7 @@ const DIAGNOSIS_NEW_FAILURE = {
 
 const DIAGNOSIS_TIMEOUT = {
   category: 'timeout',
-  confidence: 'medium',
+  confidence: 'MED',
   summary: 'The suite exceeded the step timeout while waiting on a slow fixture.',
   evidence: ['Execution stopped at the 5s timeout boundary'],
   is_likely_regression: false,
@@ -217,7 +217,7 @@ test.describe('AI Insights Drawer Tab', () => {
     // Root-cause category badge (i18n-mapped) + raw confidence value.
     await expect(card).toContainText(/New failure|新增失败/);
     await expect(card).toContainText(/Confidence|置信度/);
-    await expect(card).toContainText('high');
+    await expect(card).toContainText('HIGH');
 
     // Likely-regression badge only shows when is_likely_regression is true.
     await expect(card).toContainText(/Likely regression|疑似回归/);

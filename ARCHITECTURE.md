@@ -40,11 +40,13 @@
 │  src/qarunner/ports/       端口接口 (抽象 Protocol)                │
 │  Store | Clock | IdGenerator | ProcessRunner                     │
 │  ResultCollector | AllureReporter | TaskScheduler | SchedulePort │
+│  FailureAnalyzer                                                 │
 ├──────────────────────────────────────────────────────────────────┤
 │  src/qarunner/adapters/    适配器 (具体实现)                       │
 │  SqliteStore | SystemClock | UuidIds                             │
 │  SubprocessRunner | DockerRunner | AsyncioScheduler              │
 │  JunitCollector | AllureCliReporter | ApschedulerSchedulePort    │
+│  AnthropicFailureAnalyzer | OpenAiFailureAnalyzer                │
 ├──────────────────────────────────────────────────────────────────┤
 │  src/qarunner/models.py    领域模型 (Pydantic frozen)             │
 │  Run, RunRequest, TestProfile, TestSuite, TestSchedule          │
@@ -76,6 +78,7 @@ logic (`core/`) depends only on abstract **ports** (`ports/`), never on concrete
 | `AllureReporter` | `AllureReporter` | Generates Allure HTML reports |
 | `TaskScheduler` | `TaskScheduler` | Controls run concurrency (max N in-flight) |
 | `SchedulePort` | `SchedulePort` | Cron-schedule lifecycle (start/stop/list) |
+| `FailureAnalyzer` | `FailureAnalyzer` | Given assembled failure context, returns a structured root-cause diagnosis |
 
 ### Adapters
 
@@ -90,6 +93,8 @@ logic (`core/`) depends only on abstract **ports** (`ports/`), never on concrete
 | `AllureReporter → AllureCliReporter` | `allure generate` CLI | Shells out to the `allure` binary |
 | `TaskScheduler → AsyncioScheduler` | `asyncio.Semaphore` | Concurrency gate |
 | `SchedulePort → ApschedulerSchedulePort` | `APScheduler` | Cron trigger management |
+| `FailureAnalyzer → AnthropicFailureAnalyzer` | `anthropic` SDK (`AsyncAnthropic`) | Selected when `QARUNNER_AI_PROVIDER=anthropic` |
+| `FailureAnalyzer → OpenAiFailureAnalyzer` | `openai` SDK (`AsyncOpenAI`) | Selected when `QARUNNER_AI_PROVIDER=openai`; `base_url` may target a self-hosted/compatible gateway |
 
 ### Why Hexagonal?
 

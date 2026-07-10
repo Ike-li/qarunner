@@ -1,6 +1,6 @@
 # qarunner
 
-> **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。
+> **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。运行详情支持只读的 AI 失败诊断（自动隐藏于无 API key 时），详见 [docs/FEATURES.md](docs/FEATURES.md)。
 
 ## 本地部署
 
@@ -34,7 +34,6 @@ docker compose -f docker-compose.dev.yml up -d
 | [docs/DIRECTION.md](docs/DIRECTION.md) | 产品方向（唯一权威来源） |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | API 端点参考（所有路由、请求/响应字段） |
 | [docs/FEATURES.md](docs/FEATURES.md) | 功能列表 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构说明（六边形架构） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 代码架构（层次、端口、适配器） |
 | [specs/ui-test-plan.md](specs/ui-test-plan.md) | E2E 测试计划 |
 | [specs/TEST_PLAN_TEMPLATE.md](specs/TEST_PLAN_TEMPLATE.md) | 测试计划模板（含组件交互清单） |
@@ -51,6 +50,9 @@ docker compose -f docker-compose.dev.yml up -d
 | `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | 非管理员能否使用 subprocess 执行器 |
 | `QARUNNER_COOKIE_SECURE` | `false` | 生产环境需设为 `true` |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | 最大并发测试数 |
+| `QARUNNER_AI_API_KEY` | （空） | LLM provider 的 API key；选填，留空则 AI 诊断功能自动隐藏，不影响其余功能 |
+| `QARUNNER_AI_PROVIDER` | `anthropic` | AI 诊断使用的 LLM provider，`anthropic` 或 `openai` |
+| `QARUNNER_AI_MODEL` | `claude-opus-4-8` | AI 诊断使用的模型名称 |
 
 ## Production deployment (Docker Compose)
 

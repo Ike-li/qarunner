@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] — 2026-07-10
+
+### Added — AI failure diagnosis
+- Read-only root-cause analysis for failed runs: aggregates failed cases, log tail, baseline diff, pass-rate trend, and per-case flaky history into an LLM prompt
+- Produces a structured diagnosis — one of 6 root-cause categories, confidence (HIGH/MED/LOW), evidence list, regression flag, suggested next steps
+- Provider-neutral (`anthropic`/`openai`, official SDKs); feature auto-disables (no startup failure) when no API key is configured
+- Diagnosis cached per run (`GET`/`POST /runs/{id}/ai-analysis`); owner-scoped like diff/trend/case-history
+- New "AI Analysis" tab in the run-details drawer (4th tab alongside logs/report/diff)
+
+### Added — Cross-run comparison (epic complete)
+- Baseline diff (`GET /runs/{id}/diff`): compares a run against the latest `COMPLETED` run in the same scope (suite + runner + params), bucketed into newly-failed / fixed / still-failing / new / disappeared cases
+- Pass-rate trend (`GET /runs/trend`): per-suite trend line rendered as a dependency-free SVG sparkline
+- Flaky detection: per-case pass↔fail flip tracking over recent runs, surfaced as a badge
+- Per-case history (`GET /cases/history`): lazy-loaded cross-run result strip for any case in a diff
+- All three endpoints owner-scoped (non-admin sees only their own runs); diff/trend/flaky logic implemented as dependency-free pure functions in `core/`
+
+### Security
+- Closed a broad set of IDOR gaps: suite access is now required and owner/shared-scope checked for profile creation/update, run creation, suite listing/scanning, and related artifact/log/report path handling
+- Fixed 23 bugs from a follow-up code review, spanning: username-enumeration timing side-channel, JWT invalidation on password change/logout, atomic admin-demotion race, minimum password/secret-key length, X-Forwarded-For support, webhook SSRF protection, cascade-delete on user removal, several run-state race conditions, and multiple frontend double-submit guards
+
 ## [0.2.0] — 2026-06-26
 
 ### Security
