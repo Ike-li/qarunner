@@ -339,20 +339,20 @@
 
 ### AI 失败诊断（AI Failure Diagnosis）
 
-两个只读端点,对失败的 run 生成结构化根因诊断（跨次对比 stage 4）,**只读,从不修改代码 / 测试**。owner-scope 与其余 run 视图一致：`_require_run_access`——非 admin 只能查自己的 run。是否可用取决于是否配置了 LLM provider（`QARUNNER_AI_API_KEY`，见下方 `enabled` 语义）。
+两个只读端点,对失败的 run 生成结构化根因诊断（跨次对比 stage 4）,**只读,从不修改代码 / 测试**。owner-scope 与其余 run 视图一致：`_require_run_access`——非 admin 只能查自己的 run。是否可用取决于是否配置了 LLM provider（`QARUNNER_AI_API_KEY`，见下方 `enabled` 语义）。前端 **始终展示** AI 分析 Tab；`enabled:false` 时在 Tab 内展示未配置说明（不隐藏入口）。
 
 #### `GET /runs/{run_id}/ai-analysis` — owner
 返回该 run **已缓存**的诊断结果，不触发新的 LLM 调用。
-- **成功**：`200` `AiAnalysisResponse`（见 §八）；未生成过诊断时 `diagnosis: null`。
+- **成功**：`200` `AiAnalysisResponse`（见 §八）；未生成过诊断时 `diagnosis: null`。缓存 JSON 损坏时同样返回 `diagnosis: null`（不 500）。
 - **错误**：`404`（run 不存在）· `403`（他人）。
 
 #### `POST /runs/{run_id}/ai-analysis` — owner
-聚合该 run 的失败用例、日志尾部、基线 diff、pass-rate 趋势、per-case flaky 历史后，调用已配置的 LLM provider 生成诊断并缓存。
+聚合该 run 的失败用例、**stdout+stderr 日志尾部**、基线 diff、pass-rate 趋势、per-case flaky 历史后，调用已配置的 LLM provider 生成诊断并缓存。
 - **成功**：`200` `AiAnalysisResponse`。
-  - **未配置 provider**（`QARUNNER_AI_API_KEY` 为空）：返回 `enabled: false`（**不报错**），`diagnosis: null`；前端据此隐藏 AI 分析入口。
+  - **未配置 provider**（`QARUNNER_AI_API_KEY` 为空）：返回 `enabled: false`（**不报错**），`diagnosis: null`；前端 Tab 内展示未配置说明。
   - **该 run 无失败用例**：返回 `enabled: true, detail: "No failing cases to diagnose."`，`diagnosis: null`。
   - **正常生成**：返回 `enabled: true, diagnosis: FailureDiagnosis`。
-- **错误**：`404`（run 不存在）· `403`（他人）。
+- **错误**：`404`（run 不存在）· `403`（他人）· `429`（同一用户在滑动窗口内 POST 次数超限，默认 10 次 / 60 秒；响应带 `Retry-After`；`QARUNNER_AI_POST_MAX_CALLS=0` 关闭限流）。
 
 ---
 
@@ -496,7 +496,7 @@
 1. **owner-scope 越权**：单资源接口——他人**存在**资源返回 `403`，**不存在** id 返回 `404`；列表接口——`200` 静默过滤（看不到他人）。
 2. **异步 run**：`POST /runs` 返回 `202`，需轮询 `GET /runs/{id}` 直到 `status ∈ {completed, failed, timeout}` 再断言结果。
 3. **SSE**：`/runs/{id}/stream` 是长连接流，须用流式客户端。
-4. **两种 429**：登录连错 5 次锁定（`Retry-After`）；单用户在跑 run 超上限（默认 20）。
+4. **三种 429**：登录连错 5 次锁定（`Retry-After`）；单用户在跑 run 超上限（默认 20）；`POST /runs/{id}/ai-analysis` 同用户滑动窗口超限（默认 10 次 / 60 秒，`Retry-After`）。
 5. **登录限流会污染测试**：同一 `用户名|IP` 连续 5 次失败即锁定，测「密码错=401」时需换用户名或控制失败次数。
 6. **资源依赖顺序**：建 schedule 前需先有 profile；触发 run 前需 `tests_path` 指向 `tests_root` 下存在的套件。
 7. **管理员账号**：用户名 = `QARUNNER_ADMIN_USER`（默认 `admin`），密码 = `QARUNNER_ADMIN_PASSWORD`（启动时种入；建议测试首步实测此登录）。

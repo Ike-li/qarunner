@@ -39,6 +39,15 @@ def test_create_container_ai_disabled_by_default(monkeypatch) -> None:
     assert c.ai_analyzer is None
 
 
+def test_create_container_wires_ai_rate_limiter() -> None:
+    from qarunner.core.rate_limit import SlidingWindowRateLimiter
+
+    c = create_container()
+    assert isinstance(c.ai_rate_limiter, SlidingWindowRateLimiter)
+    assert c.ai_rate_limiter.max_calls == c.settings.ai_post_max_calls
+    assert c.ai_rate_limiter.window_seconds == c.settings.ai_post_window_seconds
+
+
 def test_build_ai_analyzer_none_without_key(monkeypatch) -> None:
     monkeypatch.delenv("QARUNNER_AI_API_KEY", raising=False)
     monkeypatch.setenv("QARUNNER_AI_PROVIDER", "anthropic")

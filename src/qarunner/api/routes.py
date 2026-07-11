@@ -65,6 +65,7 @@ from qarunner.errors import (
     InvalidScheduleRequest,
     LoginLockedOut,
     ProfileNotFound,
+    RateLimited,
     RunNotFound,
     ScheduleNotFound,
     UnknownRunner,
@@ -1776,15 +1777,31 @@ async def get_case_history(
     return CaseHistoryResponse(points=points, flaky=is_flaky, flip_count=flips)
 
 
-def _run_stdout_tail(artifacts_root: str, run_id: str, max_bytes: int) -> str:
-    """Return a run's stdout tail, trimmed to ``max_bytes`` for the LLM context."""
+def _run_log_tail(artifacts_root: str, run_id: str, max_bytes: int) -> str:
+    """Return a run's combined stdout+stderr tail, trimmed to ``max_bytes``.
+
+    Both streams are included so environment / container / timeout failures that
+    only land on stderr still reach the LLM. The two tails are concatenated with
+    clear markers, then the combined text is right-trimmed to ``max_bytes``.
+    """
     run_dir = _safe_run_artifact_dir(artifacts_root, run_id)
     if run_dir is None:
         return ""
-    stdout_file = _safe_run_log_file(run_dir, "stdout.log")
-    if stdout_file is None:
+    parts: list[str] = []
+    for name, label in (("stdout.log", "stdout"), ("stderr.log", "stderr")):
+        log_file = _safe_run_log_file(run_dir, name)
+        if log_file is None:
+            continue
+        text = _read_log_tail(log_file)
+        if text:
+            parts.append(f"--- {label} ---\n{text}")
+    if not parts:
         return ""
-    return (_read_log_tail(stdout_file) or "")[-max_bytes:]
+    return "\n".join(parts)[-max_bytes:]
+
+
+# Backward-compatible alias used by unit tests that still patch the old name.
+_run_stdout_tail = _run_log_tail
 
 
 @router.get("/runs/{run_id}/ai-analysis", response_model=AiAnalysisResponse)
@@ -1812,12 +1829,12 @@ async def create_ai_analysis(
 ) -> AiAnalysisResponse:
     """Generate and cache an AI diagnosis of why a run failed (read-only).
 
-    Aggregates the run's failed cases, log tail, baseline diff, pass-rate trend,
-    and per-case flaky history — all owner-scoped exactly like /diff and
-    /cases/history — then asks the configured provider for a structured
+    Aggregates the run's failed cases, log tail (stdout+stderr), baseline diff,
+    pass-rate trend, and per-case flaky history — all owner-scoped exactly like
+    /diff and /cases/history — then asks the configured provider for a structured
     diagnosis. Never modifies tests or code. Returns ``enabled: false`` when no
     provider is configured, and an empty diagnosis with ``detail`` when the run
-    has no failing cases.
+    has no failing cases. Rate-limited per user (HTTP 429) to bound LLM spend.
     """
     container = request.app.state.container
     run = await _get_owned_run(container, run_id, current_user)
@@ -1825,6 +1842,20 @@ async def create_ai_analysis(
     analyzer = container.ai_analyzer
     if analyzer is None:
         return AiAnalysisResponse(enabled=False)
+
+    # Per-user sliding window around the paid LLM call. Checked after authz and
+    # the enabled gate so a disabled feature never burns a token, and a 403 never
+    # counts against the budget. max_calls=0 disables the limiter entirely.
+    limiter = container.ai_rate_limiter
+    if limiter is not None:
+        try:
+            limiter.check_and_record(current_user.username)
+        except RateLimited as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many AI analysis requests. Try again later.",
+                headers={"Retry-After": str(exc.retry_after)},
+            ) from exc
 
     cfg = container.settings
     cases = await container.store.get_cases_for_run(run_id)
@@ -1858,7 +1889,7 @@ async def create_ai_analysis(
         if flaky.flakiness([p.status for p in history], policy=policy)[0]
     }
 
-    log_tail = _run_stdout_tail(cfg.artifacts_root, run_id, cfg.ai_analysis_max_log_bytes)
+    log_tail = _run_log_tail(cfg.artifacts_root, run_id, cfg.ai_analysis_max_log_bytes)
     allure_url = (
         f"/runs/{run_id}/report" if run.report is not None and run.report.html_generated else None
     )

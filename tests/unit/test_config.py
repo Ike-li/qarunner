@@ -25,6 +25,8 @@ _SETTINGS_ENV_KEYS = [
     "QARUNNER_AI_BASE_URL",
     "QARUNNER_AI_ANALYSIS_MAX_LOG_BYTES",
     "QARUNNER_AI_REQUEST_TIMEOUT_SECONDS",
+    "QARUNNER_AI_POST_MAX_CALLS",
+    "QARUNNER_AI_POST_WINDOW_SECONDS",
 ]
 
 
@@ -50,6 +52,8 @@ class TestSettings:
         assert s.ai_base_url == ""
         assert s.ai_analysis_max_log_bytes == 16384
         assert s.ai_request_timeout_seconds == 60.0
+        assert s.ai_post_max_calls == 10
+        assert s.ai_post_window_seconds == 60.0
 
     def test_override(self, monkeypatch):
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", "/custom/tests")
@@ -62,6 +66,8 @@ class TestSettings:
         monkeypatch.setenv("QARUNNER_AI_BASE_URL", "https://gw.example.com/v1")
         monkeypatch.setenv("QARUNNER_AI_ANALYSIS_MAX_LOG_BYTES", "8192")
         monkeypatch.setenv("QARUNNER_AI_REQUEST_TIMEOUT_SECONDS", "30")
+        monkeypatch.setenv("QARUNNER_AI_POST_MAX_CALLS", "3")
+        monkeypatch.setenv("QARUNNER_AI_POST_WINDOW_SECONDS", "120")
         s = Settings()
         assert s.tests_root == "/custom/tests"
         assert s.max_concurrency == 8
@@ -73,6 +79,8 @@ class TestSettings:
         assert s.ai_base_url == "https://gw.example.com/v1"
         assert s.ai_analysis_max_log_bytes == 8192
         assert s.ai_request_timeout_seconds == 30.0
+        assert s.ai_post_max_calls == 3
+        assert s.ai_post_window_seconds == 120.0
 
 
 @pytest.mark.parametrize(

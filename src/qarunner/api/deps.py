@@ -26,6 +26,7 @@ from qarunner.core.auth import decode_access_token
 from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.profile_service import ProfileService
+from qarunner.core.rate_limit import SlidingWindowRateLimiter
 from qarunner.core.runners.playwright_runner import PlaywrightRunner
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
@@ -53,6 +54,7 @@ class Container:
     login_throttle: LoginThrottle
     settings: Settings
     ai_analyzer: FailureAnalyzer | None = None
+    ai_rate_limiter: SlidingWindowRateLimiter | None = None
 
 
 def _build_ai_analyzer(cfg: Settings) -> FailureAnalyzer | None:
@@ -129,6 +131,11 @@ def create_container(settings: Settings | None = None) -> Container:
         base_seconds=cfg.login_throttle_base_seconds,
         max_seconds=cfg.login_throttle_max_seconds,
     )
+    ai_rate_limiter = SlidingWindowRateLimiter(
+        clock=clock,
+        max_calls=cfg.ai_post_max_calls,
+        window_seconds=cfg.ai_post_window_seconds,
+    )
 
     return Container(
         orchestrator=orchestrator,
@@ -140,6 +147,7 @@ def create_container(settings: Settings | None = None) -> Container:
         login_throttle=login_throttle,
         settings=cfg,
         ai_analyzer=_build_ai_analyzer(cfg),
+        ai_rate_limiter=ai_rate_limiter,
     )
 
 

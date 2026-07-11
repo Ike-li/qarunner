@@ -62,7 +62,7 @@ def _as_user(app, username: str, role: UserRole = UserRole.USER) -> None:
     app.dependency_overrides[get_current_user] = _u
 
 
-# ── _run_stdout_tail helper (4 branches) ─────────────────────────────────────
+# ── _run_stdout_tail / _run_log_tail helper ──────────────────────────────────
 
 
 def test_run_stdout_tail_no_run_dir(monkeypatch):
@@ -86,6 +86,23 @@ def test_run_stdout_tail_read_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "_safe_run_artifact_dir", lambda *a: tmp_path)
     monkeypatch.setattr(routes, "_read_log_tail", lambda p: None)
     assert routes._run_stdout_tail(str(tmp_path), "id", 100) == ""
+
+
+def test_run_log_tail_includes_stderr(tmp_path, monkeypatch):
+    """AI context must combine stdout + stderr so env/container failures are visible."""
+    (tmp_path / "stdout.log").write_text("OUT_LINE\n")
+    (tmp_path / "stderr.log").write_text("ERR_LINE\n")
+    monkeypatch.setattr(routes, "_safe_run_artifact_dir", lambda *a: tmp_path)
+    tail = routes._run_log_tail(str(tmp_path), "id", 10_000)
+    assert "OUT_LINE" in tail
+    assert "ERR_LINE" in tail
+    assert "--- stderr ---" in tail
+
+
+def test_run_log_tail_stderr_only(tmp_path, monkeypatch):
+    (tmp_path / "stderr.log").write_text("only-err\n")
+    monkeypatch.setattr(routes, "_safe_run_artifact_dir", lambda *a: tmp_path)
+    assert "only-err" in routes._run_log_tail(str(tmp_path), "id", 10_000)
 
 
 # ── GET /runs/{id}/ai-analysis ───────────────────────────────────────────────
@@ -281,3 +298,41 @@ def test_post_ai_analysis_includes_allure_url():
     with TestClient(app) as client:
         client.post("/runs/run-ar/ai-analysis")
     assert analyzer.calls[0].allure_report_url == "/runs/run-ar/report"
+
+
+def test_post_ai_analysis_rate_limited():
+    """POST is rate-limited per user so repeated regenerate can't burn LLM quota."""
+    from qarunner.core.rate_limit import SlidingWindowRateLimiter
+    from tests.fakes.fake_clock import FakeClock
+
+    analyzer = FakeFailureAnalyzer(preset=_DIAG)
+    container = _with_ai(analyzer)
+    container.ai_rate_limiter = SlidingWindowRateLimiter(
+        clock=FakeClock(), max_calls=2, window_seconds=60.0
+    )
+    _seed(container.store, "run-rl", cases=[_failed_case()])
+    app = create_app(container)
+    with TestClient(app) as client:
+        assert client.post("/runs/run-rl/ai-analysis").status_code == 200
+        assert client.post("/runs/run-rl/ai-analysis").status_code == 200
+        resp = client.post("/runs/run-rl/ai-analysis")
+        assert resp.status_code == 429
+        assert "Retry-After" in resp.headers
+    assert len(analyzer.calls) == 2  # third call never reached the provider
+
+
+def test_post_ai_analysis_rate_limit_disabled_when_max_zero():
+    from qarunner.core.rate_limit import SlidingWindowRateLimiter
+    from tests.fakes.fake_clock import FakeClock
+
+    analyzer = FakeFailureAnalyzer(preset=_DIAG)
+    container = _with_ai(analyzer)
+    container.ai_rate_limiter = SlidingWindowRateLimiter(
+        clock=FakeClock(), max_calls=0, window_seconds=60.0
+    )
+    _seed(container.store, "run-rl0", cases=[_failed_case()])
+    app = create_app(container)
+    with TestClient(app) as client:
+        for _ in range(5):
+            assert client.post("/runs/run-rl0/ai-analysis").status_code == 200
+    assert len(analyzer.calls) == 5

@@ -1,6 +1,6 @@
 # qarunner
 
-> **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。运行详情支持只读的 AI 失败诊断（自动隐藏于无 API key 时），详见 [docs/FEATURES.md](docs/FEATURES.md)。
+> **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。运行详情支持只读的 AI 失败诊断（无 API key 时 Tab 内展示未配置说明，不隐藏入口），详见 [docs/FEATURES.md](docs/FEATURES.md)。
 
 ## 本地部署
 
@@ -50,9 +50,11 @@ docker compose -f docker-compose.dev.yml up -d
 | `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | 非管理员能否使用 subprocess 执行器 |
 | `QARUNNER_COOKIE_SECURE` | `false` | 生产环境需设为 `true` |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | 最大并发测试数 |
-| `QARUNNER_AI_API_KEY` | （空） | LLM provider 的 API key；选填，留空则 AI 诊断功能自动隐藏，不影响其余功能 |
+| `QARUNNER_AI_API_KEY` | （空） | LLM provider 的 API key；选填，留空则诊断生成禁用（端点 `enabled:false`，Tab 仍显示未配置说明），不影响其余功能 |
 | `QARUNNER_AI_PROVIDER` | `anthropic` | AI 诊断使用的 LLM provider，`anthropic` 或 `openai` |
 | `QARUNNER_AI_MODEL` | `claude-opus-4-8` | AI 诊断使用的模型名称 |
+| `QARUNNER_AI_POST_MAX_CALLS` | `10` | 每用户滑动窗口内允许的 AI POST 次数；`0` 关闭限流 |
+| `QARUNNER_AI_POST_WINDOW_SECONDS` | `60` | AI POST 限流窗口秒数 |
 
 ## Production deployment (Docker Compose)
 

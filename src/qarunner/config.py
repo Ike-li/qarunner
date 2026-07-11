@@ -99,16 +99,23 @@ class Settings(BaseSettings):
     flaky_min_observations: int = Field(default=4, ge=1)
     flaky_flip_threshold: int = Field(default=3, ge=1)
     # AI failure-diagnosis (optional). Empty ``ai_api_key`` disables the feature
-    # and the UI hides it — the platform never fails to start on a missing key
-    # (unlike secret_key/admin_password). ``ai_provider`` selects the SDK
-    # (anthropic | openai); ``ai_base_url`` allows a self-hosted gateway/proxy;
-    # ``ai_analysis_max_log_bytes`` bounds the stdout/stderr tail sent to the LLM.
+    # (endpoints return ``enabled:false``; the UI still shows the AI tab but
+    # explains the feature is unconfigured inside it). The platform never fails
+    # to start on a missing key (unlike secret_key/admin_password).
+    # ``ai_provider`` selects the SDK (anthropic | openai); ``ai_base_url``
+    # allows a self-hosted gateway/proxy; ``ai_analysis_max_log_bytes`` bounds
+    # the combined stdout+stderr tail sent to the LLM.
+    # ``ai_post_max_calls`` / ``ai_post_window_seconds`` bound POST frequency
+    # per authenticated user (0 max_calls disables the limiter).
     ai_provider: str = "anthropic"
     ai_api_key: str = ""
     ai_model: str = "claude-opus-4-8"
     ai_base_url: str = ""
     ai_analysis_max_log_bytes: int = 16384
     ai_request_timeout_seconds: float = 60.0
+    ai_post_max_calls: int = Field(default=10, ge=0)
+    ai_post_window_seconds: float = Field(default=60.0, gt=0)
+
     # Trusted reverse-proxy IPs (BUG-8). Comma-separated list of client
     # addresses whose ``X-Forwarded-For`` header the login throttle should
     # trust for real-client identification. Empty (default) disables

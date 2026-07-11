@@ -83,11 +83,12 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 
 在跨次对比的基础上,把失败用例交给 LLM 做结构化根因诊断——只读,从不修改测试或代码:
 
-- **结构化诊断** — `POST /runs/{id}/ai-analysis` 聚合本次 run 的失败用例 + 日志尾部 + 基线 diff + 通过率趋势 + 逐用例 flaky 历史,一并交给 LLM,产出**六类根因**之一(新增失败 / 历史 flaky / 环境问题 / 断言不符 / 超时 / 权限路径问题)+ **置信度**(HIGH/MED/LOW)+ 证据列表 + 是否疑似回归 + 建议下一步;`GET /runs/{id}/ai-analysis` 取回缓存的诊断结果。
+- **结构化诊断** — `POST /runs/{id}/ai-analysis` 聚合本次 run 的失败用例 + **stdout/stderr 日志尾部** + 基线 diff + 通过率趋势 + 逐用例 flaky 历史,一并交给 LLM,产出**六类根因**之一(新增失败 / 历史 flaky / 环境问题 / 断言不符 / 超时 / 权限路径问题)+ **置信度**(HIGH/MED/LOW)+ 证据列表 + 是否疑似回归 + 建议下一步;`GET /runs/{id}/ai-analysis` 取回缓存的诊断结果。
 - **Provider 中立、可切换** — `FailureAnalyzer` 端口(`ports/ai.py`)抽象 LLM 调用,`anthropic` / `openai` 两个 provider 实现共享同一套 prompt 构建与回复解析(`core/failure_analysis.py`),诊断内容不因换 provider 而变;经 `QARUNNER_AI_PROVIDER` 选择,`QARUNNER_AI_BASE_URL` 可指向自建网关。
-- **无 key 自动降级隐藏** — `QARUNNER_AI_API_KEY` 为空时端点返回 `enabled:false`,前端不报错、直接隐藏入口,不影响平台正常启动与使用;LLM 调用失败或回复解析失败同样降级为 LOW 置信度的兜底诊断,不让端点 500。
+- **无 key 自动降级** — `QARUNNER_AI_API_KEY` 为空时端点返回 `enabled:false`,前端 **Tab 入口仍可见**,点入后展示未配置说明(不报错、不调 LLM),不影响平台正常启动与使用;LLM 调用失败或回复解析失败同样降级为 LOW 置信度的兜底诊断,不让端点 500。
+- **POST 限流** — 按认证用户滑动窗口限制 `POST` 频率(默认 10 次 / 60 秒,可用 `QARUNNER_AI_POST_MAX_CALLS` / `QARUNNER_AI_POST_WINDOW_SECONDS` 调整;`max_calls=0` 关闭),超额返回 `429` + `Retry-After`。
 - **owner-scope + read-only** — 鉴权与 `/diff`、`/cases/history` 完全一致(非 admin 只能诊断自己的 run);诊断过程只读聚合数据,不落回写测试代码或用例文件。
-- **前端入口** — `RunDetailsDrawer` 详情抽屉第 4 个 Tab「AI 分析」。
+- **前端入口** — `RunDetailsDrawer` 详情抽屉第 4 个 Tab「AI 分析」(始终显示;未配置时内页说明)。
 → `core/failure_analysis.py`(prompt 构建 + 回复解析)、`ports/ai.py`(`FailureAnalyzer` 协议)、`adapters/anthropic_analyzer.py`、`adapters/openai_analyzer.py`、`api/routes.py`(`/runs/{id}/ai-analysis`)、`frontend/src/components/AiInsightsTab.tsx`
 
 ## 7. 定时调度

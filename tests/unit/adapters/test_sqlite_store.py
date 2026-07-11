@@ -453,6 +453,21 @@ async def test_ai_diagnosis_roundtrip_upsert_and_cascade(store: SqliteStore) -> 
     assert await store.get_ai_diagnosis("run-ai") is None
 
 
+async def test_get_ai_diagnosis_corrupt_json_returns_none(store: SqliteStore) -> None:
+    """A corrupt cache row must degrade to None (never 500 the GET endpoint)."""
+    run = _make_run(id="run-corrupt")
+    await store.save(run)
+    async with store._connect() as db:
+        await db.execute(
+            "INSERT INTO run_ai_diagnosis "
+            "(run_id, diagnosis_json, provider, model, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("run-corrupt", "{not-valid-json", "anthropic", "m", "2026-01-01T00:00:00+00:00"),
+        )
+        await db.commit()
+    assert await store.get_ai_diagnosis("run-corrupt") is None
+
+
 async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
     # 1. Create a profile
     profile = TestProfile(

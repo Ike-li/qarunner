@@ -662,7 +662,18 @@ class SqliteStore:
             row = await cursor.fetchone()
         if row is None:
             return None
-        return FailureDiagnosis.model_validate_json(row[0])
+        # Corrupt / schema-drifted cache must not 500 the GET endpoint — treat as
+        # "no diagnosis" so the UI can offer to regenerate (mirrors the LLM-side
+        # "never 500 on bad reply" contract in failure_analysis.parse_diagnosis).
+        try:
+            return FailureDiagnosis.model_validate_json(row[0])
+        except Exception:  # noqa: BLE001 — any parse/validation failure degrades
+            logger.warning(
+                "Corrupt AI diagnosis cache for run %s; treating as missing",
+                run_id,
+                exc_info=True,
+            )
+            return None
 
     async def get_case_history(
         self,
