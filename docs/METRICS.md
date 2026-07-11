@@ -12,6 +12,8 @@
 | 3 | Code Coverage | lines executed / total lines × 100 | ≥99% backend | <100% → block PR merge |
 | 4 | Avg Duration (7-day) | mean(finished_at − started_at) | <5 min | >10 min → profile slow tests |
 | 5 | Run Volume (7-day) | count of completed runs | baseline | >50% drop → check scheduler health |
+| 6 | Weekly Active Triggerers | distinct `runs.created_by` (7-day) | observe — no target yet | establish baseline before setting one |
+| 7 | Fix-Attempt Rate (24h) | failed runs re-run in same scope within 24h / failed runs | observe — no target yet | establish baseline before setting one |
 
 ## 1. Pass Rate (7-Day Rolling)
 
@@ -96,6 +98,30 @@
 3. Verify no API errors preventing run creation.
 
 **Data source:** `runs` table, `status='completed'`, `created_at`.
+
+---
+
+## 6. Weekly Active Triggerers (adoption — observation phase)
+
+**Formula:** Count of distinct `runs.created_by` among runs created in the last 7 days.
+
+**Target:** None yet — observation phase. Set a target only after the team has actually adopted the tool and a baseline exists (REQUIREMENTS GO-8).
+
+**Why:** An internal tool's first-principles success is that people keep consuming its signal. Zero triggerers means the regression signal — however accurate — produces no value.
+
+**Data source:** `runs` table, `created_by`, `created_at`. Zero instrumentation required.
+
+---
+
+## 7. Fix-Attempt Rate (trust — observation phase)
+
+**Formula:** Among failed runs in the window, the share that were followed by another run in the **same scope** (per REQUIREMENTS §3.3) within 24 hours.
+
+**Target:** None yet — observation phase (REQUIREMENTS GO-8).
+
+**Why:** A proxy for "failures get acted on". If failures are never re-run, either the signal is not trusted (flaky noise) or nobody is watching — both are death spirals for a regression suite.
+
+**Data source:** `runs` table (`status`, `profile_id`, `tests_path`, `runner`, `args`, `created_at`). Pure query, zero instrumentation.
 
 ---
 

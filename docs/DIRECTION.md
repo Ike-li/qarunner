@@ -33,6 +33,7 @@
 | `README.md` / `ARCHITECTURE.md` tagline | 产品名 + 指向本文件的一句引用 | 自写四支柱 / 边界 |
 | `docs/FEATURES.md` 一句话定位 | 引用本文件 + 能力展开正文 | 与本文件不一致的方向陈述 |
 | `docs/POSITIONING.md` §8 | 「当前权威口径见本文件」一句 | 改动其历史决策原文 |
+| `docs/REQUIREMENTS.md` §1.3 / §9 前 3 条 | 一句话引用 + 复述边界前三条（变更属方向级，先改本文件） | 与本文件不一致的方向陈述 |
 | `docs/CROSS_RUN_PLAN.md` 等规划文档 | 引用本文件 | 重写方向 |
 | `pyproject.toml` / `frontend/index.html` / `frontend/src/i18n.ts` / `api/app.py` | **仅产品名 `qarunner`** | 任何方向句（代码不展现方向） |
 

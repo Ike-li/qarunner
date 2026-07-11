@@ -34,16 +34,17 @@
 
 ## 2. 测试执行引擎（执行核心）
 
-**两种 Runner × 两种 Executor**:
+**两种 Runner × 唯一执行形态（docker）**:
 
-|  | docker（默认，强隔离） | subprocess（管理员 / 显式开放） |
-|---|---|---|
-| **pytest** | python executor 镜像 | 宿主进程内 |
-| **playwright** | 专用 playwright 镜像(含 Node + 浏览器) | 宿主进程内 |
+|  | docker（唯一执行形态） |
+|---|---|
+| **pytest** | python executor 镜像 |
+| **playwright** | 专用 playwright 镜像(含 Node + 浏览器) |
+
+历史上的 subprocess 宿主进程退路已从实现移除(`orchestrator.py` 硬编码 docker;REQUIREMENTS RN-4 已废弃,追认 Docker-only);API / Profile 的 executor 字段为兼容保留,不改变实际形态。
 
 **docker 隔离矩阵**(跑不受信任代码的主防线):非 root · `network_mode=none` 无网络 · `cap_drop=ALL` · 只读根文件系统 · 内存 2g / CPU 2 核 / PID 512 上限 · `no-new-privileges` · `/tmp` 为 tmpfs · playwright 另配 `shm_size=1g`。
-**subprocess 隔离**(无容器时的退路):POSIX rlimits(CPU 1h / 地址空间 2GiB / 子进程 128 / 单文件 512MiB)+ **环境变量白名单**(挡 `LD_*` / `DYLD_*` / `NODE_OPTIONS` / `PYTHON*` 等注入面)。
-**通用**:每次运行在独立 **workspace jail**(套件副本,忽略 `.git` / `.venv` / `__pycache__` 等)中执行,互不污染;arg 注入防护(拒危险 pytest / playwright flag);stdout/stderr 仅留末尾 256KB 防 OOM。
+**通用**:每次运行在独立 **workspace jail**(套件副本,忽略 `.git` / `.venv` / `__pycache__` 等)中执行,互不污染;arg 注入防护(拒危险 pytest / playwright flag);stdout/stderr 有界截断(终局保留末尾 5 万行)防 OOM。
 
 资源治理:超时(默认 30min,上限 24h)· 全局并发上限(默认 4)· **单用户在途 run 上限**(默认 20,超额 `429`,admin 豁免)。
 → `src/qarunner/adapters/docker_runner.py`、`subprocess_runner.py`、`core/orchestrator.py`
