@@ -23,21 +23,21 @@ export function FullscreenReportOverlay() {
           <div className={styles.terminalTitleGroup}>
             <BarChart3 size={16} className={styles.terminalHeaderIcon} style={{ color: '#a855f7' }} />
             <h3 className={styles.fullscreenTerminalTitle} id="fullscreen-report-title">
-              {d.lang === 'zh' ? 'Allure 交互式测试报告' : 'Allure Interactive Test Report'}
+              {d.t('fsReportTitle')}
               <span className={styles.fullscreenTerminalSub}>#{selectedRun.id}</span>
             </h3>
           </div>
           <div className={styles.fullscreenTerminalControls}>
             <a href={`/runs/${selectedRun.id}/report`} target="_blank" rel="noreferrer"
               className={styles.terminalToolbarBtn}
-              title={d.lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}>
+              title={d.t('fsReportOpenNewWindowTitle')}>
               <ExternalLink size={12} />
-              <span>{d.lang === 'zh' ? '新窗口打开' : 'New Window'}</span>
+              <span>{d.t('fsReportNewWindow')}</span>
             </a>
             <button className={styles.fullscreenTerminalCloseBtn}
               onClick={() => d.terminal.setIsReportFullscreen(false)}
-              title={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
-              aria-label={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
+              title={d.t('fsReportCloseFullscreen')}
+              aria-label={d.t('fsReportCloseFullscreen')}
               data-testid="fullscreen-report-close">
               <X size={16} />
             </button>
@@ -48,7 +48,7 @@ export function FullscreenReportOverlay() {
             <div className={styles.reportIframeLoading} style={{ top: 0 }}>
               <RotateCw size={24} className={styles.spinIcon} style={{ color: '#06b6d4' }} />
               <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
-                {d.lang === 'zh' ? '正在载入测试报告资源...' : 'Loading Allure report resources...'}
+                {d.t('fsReportLoadingResources')}
               </span>
             </div>
           )}

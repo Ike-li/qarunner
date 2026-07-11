@@ -76,8 +76,8 @@ export function RunsTable() {
       render: (locked: boolean, record: Run) => (
         <Tooltip
           content={locked
-            ? (d.lang === 'zh' ? '已锁定 (保护文件不被清理)' : 'Locked (Protected from physical cleanup)')
-            : (d.lang === 'zh' ? '未锁定 (可进行物理清理)' : 'Unlocked (Eligible for physical cleanup)')
+            ? d.t('runsTableLockedTooltip')
+            : d.t('runsTableUnlockedTooltip')
           }
         >
           <Button
@@ -249,19 +249,19 @@ export function RunsTable() {
           <Radio value="All" data-testid="log-filter-all">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconActivity />
-              <span>{d.lang === 'zh' ? '全部记录' : 'All Runs'}</span>
+              <span>{d.t('runsTableAllRuns')}</span>
             </span>
           </Radio>
           <Radio value="Manual" data-testid="log-filter-manual">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconUser />
-              <span>{d.lang === 'zh' ? '手动触发' : 'Manually Triggered'}</span>
+              <span>{d.t('runsTableManuallyTriggered')}</span>
             </span>
           </Radio>
           <Radio value="Scheduled" data-testid="log-filter-scheduled">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <IconClock />
-              <span>{d.lang === 'zh' ? '定时触发' : 'Scheduled Runs'}</span>
+              <span>{d.t('runsTableScheduledRuns')}</span>
             </span>
           </Radio>
         </RadioGroup>

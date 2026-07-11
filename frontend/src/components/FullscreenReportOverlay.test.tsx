@@ -12,6 +12,7 @@ vi.mock('../hooks/DashboardContext', () => ({
 function makeDashboard() {
   return {
     lang: 'en',
+    t: (key: string) => key,
     runs: {
       selectedRun: { id: 'run-001' },
     },

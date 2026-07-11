@@ -236,9 +236,7 @@ export function RunDetailsDrawer() {
               type="button"
               onClick={() => {
                 if (
-                  window.confirm(
-                    d.lang === 'zh' ? '确定要取消这个运行吗？' : 'Cancel this run?',
-                  )
+                  window.confirm(d.t('drawerCancelRunConfirm'))
                 ) {
                   d.runs.handleCancelRun(d.runs.selectedRun!.id)
                 }
@@ -246,7 +244,7 @@ export function RunDetailsDrawer() {
               style={{ ...actionBtnStyle('var(--semi-color-danger)'), marginRight: '2.5rem' }}
             >
               <Ban size={15} />
-              {d.lang === 'zh' ? '终止运行' : 'Cancel Run'}
+              {d.t('drawerCancelRunBtn')}
             </button>
           )}
           {d.runs.selectedRun &&
@@ -259,18 +257,14 @@ export function RunDetailsDrawer() {
                 style={actionBtnStyle('var(--semi-color-primary)')}
               >
                 <RotateCw size={15} />
-                {d.lang === 'zh' ? '重新运行' : 'Re-run'}
+                {d.t('drawerRerunBtn')}
               </button>
               {!d.runs.selectedRun.locked && (
                 <button
                   type="button"
                   onClick={() => {
                     if (
-                      window.confirm(
-                        d.lang === 'zh'
-                          ? '确定删除此运行及其产物吗？此操作不可撤销。'
-                          : 'Delete this run and its artifacts? This cannot be undone.',
-                      )
+                      window.confirm(d.t('drawerDeleteRunConfirm'))
                     ) {
                       d.runs.handleDeleteRun(d.runs.selectedRun!.id)
                     }
@@ -278,7 +272,7 @@ export function RunDetailsDrawer() {
                   style={actionBtnStyle('var(--semi-color-danger)')}
                 >
                   <Trash2 size={15} />
-                  {d.lang === 'zh' ? '删除运行' : 'Delete Run'}
+                  {d.t('drawerDeleteRunBtn')}
                 </button>
               )}
             </div>
@@ -420,7 +414,7 @@ export function RunDetailsDrawer() {
                       {(d.runs.selectedRun.status === 'running' || d.runs.selectedRun.status === 'queued') && (
                         <span className={d.runs.isStreaming ? styles.livePulse : styles.streamingIndicator}>
                           {!d.runs.isStreaming && <span className={styles.streamingDot}></span>}
-                          {d.runs.isStreaming ? (d.lang === 'zh' ? '实时' : 'LIVE') : d.t('streaming')}
+                          {d.runs.isStreaming ? d.t('drawerLive') : d.t('streaming')}
                         </span>
                       )}
 
@@ -443,7 +437,7 @@ export function RunDetailsDrawer() {
                       <button 
                         className={styles.terminalIconOnlyButton}
                         onClick={() => downloadLogs(d.runs.selectedRun!.id)}
-                        title={d.lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
+                        title={d.t('drawerDownloadRawLogTitle')}
                         aria-label={d.t('download')}
                       >
                         <Download size={14} />
@@ -456,11 +450,11 @@ export function RunDetailsDrawer() {
                           event.currentTarget.focus()
                           d.terminal.setIsTerminalFullscreen(true)
                         }}
-                        title={d.lang === 'zh' ? "全屏终端" : "Fullscreen Terminal"}
+                        title={d.t('drawerFullscreenTerminalTitle')}
                         data-testid="terminal-fullscreen-button"
                       >
                         <Maximize2 size={13} />
-                        <span>{d.lang === 'zh' ? "全屏终端" : "Fullscreen"}</span>
+                        <span>{d.t('drawerFullscreenTerminalLabel')}</span>
                       </button>
                     </div>
                   </div>
@@ -830,11 +824,11 @@ export function RunDetailsDrawer() {
                         type="button"
                         className={styles.portalBtnPrimary}
                         onClick={() => d.terminal.setIsReportFullscreen(true)}
-                        title={d.lang === 'zh' ? '全屏查看测试报告' : 'View Test Report in Fullscreen'}
+                        title={d.t('drawerFullscreenReportTitle')}
                         data-testid="report-fullscreen-button"
                       >
                         <Maximize2 size={14} />
-                        <span>{d.lang === 'zh' ? '全屏查看报告' : 'Fullscreen Report'}</span>
+                        <span>{d.t('drawerFullscreenReportLabel')}</span>
                       </button>
 
                       <a
@@ -842,11 +836,11 @@ export function RunDetailsDrawer() {
                         target="_blank"
                         rel="noreferrer"
                         className={styles.portalBtnSecondary}
-                        title={d.lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
+                        title={d.t('drawerOpenNewWindowTitle')}
                         data-testid="report-new-window-link"
                       >
                         <ExternalLink size={14} />
-                        <span>{d.lang === 'zh' ? '在新窗口打开' : 'Open in New Window'}</span>
+                        <span>{d.t('drawerOpenNewWindowLabel')}</span>
                       </a>
                     </div>
                   </div>

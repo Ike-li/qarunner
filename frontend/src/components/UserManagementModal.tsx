@@ -17,7 +17,7 @@ export function UserManagementModal() {
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Users size={18} style={{ color: 'var(--semi-color-primary)' }} />
-          {d.lang === 'zh' ? '用户管理' : 'User Management'}
+          {d.t('userMgmtTitle')}
         </div>
       }
       visible={true}
@@ -31,7 +31,7 @@ export function UserManagementModal() {
         {/* User directory */}
         <div>
           <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
-            {d.lang === 'zh' ? '已注册用户' : 'Registered Users'}
+            {d.t('userMgmtRegisteredUsers')}
           </h4>
           <Table
             dataSource={u.usersList}
@@ -62,7 +62,7 @@ export function UserManagementModal() {
                 render: (iso: string) => formatDate(iso),
               },
               {
-                title: d.lang === 'zh' ? '操作' : 'Actions',
+                title: d.t('userMgmtActions'),
                 key: 'actions',
                 render: (_: unknown, record: { username: string; role: string }) => {
                   const isSelf = record.username === u.currentUsername
@@ -79,23 +79,21 @@ export function UserManagementModal() {
                         onClick={async () => {
                           if (isUpdatingPassword) return
                           const pw = window.prompt(
-                            d.lang === 'zh'
-                              ? `为 ${record.username} 设置新密码：`
-                              : `New password for ${record.username}:`,
+                            `${d.t('userMgmtNewPasswordPromptPrefix')}${record.username}${d.t('userMgmtNewPasswordPromptSuffix')}`,
                           )
                           if (pw && pw.trim()) {
                             setIsUpdatingPassword(true)
                             try {
                               const ok = await u.handleUpdateUserPassword(record.username, pw)
                               if (ok)
-                                alert(d.lang === 'zh' ? '密码已更新' : 'Password updated')
+                                alert(d.t('userMgmtPasswordUpdated'))
                             } finally {
                               setIsUpdatingPassword(false)
                             }
                           }
                         }}
                       >
-                        {d.lang === 'zh' ? '改密码' : 'Password'}
+                        {d.t('userMgmtChangePassword')}
                       </Button>
                       {!isSelf && (
                         <Button
@@ -110,12 +108,8 @@ export function UserManagementModal() {
                           }
                         >
                           {record.role === 'admin'
-                            ? d.lang === 'zh'
-                              ? '降为 User'
-                              : 'Make User'
-                            : d.lang === 'zh'
-                              ? '升为 Admin'
-                              : 'Make Admin'}
+                            ? d.t('userMgmtMakeUser')
+                            : d.t('userMgmtMakeAdmin')}
                         </Button>
                       )}
                       {!isSelf && (
@@ -125,13 +119,11 @@ export function UserManagementModal() {
                           type="danger"
                           icon={<Trash2 size={13} />}
                           data-testid="user-delete"
-                          aria-label={d.lang === 'zh' ? `删除用户 ${record.username}` : `Delete user ${record.username}`}
+                          aria-label={`${d.t('userMgmtDeleteUserAriaLabelPrefix')}${record.username}`}
                           onClick={() => {
                             if (
                               window.confirm(
-                                d.lang === 'zh'
-                                  ? `确定删除用户 ${record.username}？`
-                                  : `Delete user ${record.username}?`,
+                                `${d.t('userMgmtDeleteUserConfirmPrefix')}${record.username}${d.t('userMgmtDeleteUserConfirmSuffix')}`,
                               )
                             ) {
                               u.handleDeleteUser(record.username)
@@ -150,27 +142,27 @@ export function UserManagementModal() {
         {/* Register new user */}
         <div>
           <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
-            {d.lang === 'zh' ? '注册新用户' : 'Register New User'}
+            {d.t('registerNewUser')}
           </h4>
           <form onSubmit={u.handleCreateUserSubmit}>
             <Row gutter={12} style={{ marginBottom: '0.75rem' }}>
               <Col span={9}>
                 <Input
-                  placeholder={d.lang === 'zh' ? '用户名' : 'Username'}
+                  placeholder={d.t('username')}
                   value={u.newUsername}
                   onChange={u.setNewUsername}
                   data-testid="user-new-username"
-                  aria-label={d.lang === 'zh' ? '新用户名' : 'New username'}
+                  aria-label={d.t('userMgmtNewUsername')}
                 />
               </Col>
               <Col span={9}>
                 <Input
-                  placeholder={d.lang === 'zh' ? '密码' : 'Password'}
+                  placeholder={d.t('password')}
                   type="password"
                   value={u.newPassword}
                   onChange={u.setNewPassword}
                   data-testid="user-new-password"
-                  aria-label={d.lang === 'zh' ? '新密码' : 'New password'}
+                  aria-label={d.t('userMgmtNewPassword')}
                 />
               </Col>
               <Col span={6}>
@@ -178,7 +170,7 @@ export function UserManagementModal() {
                   value={u.newUserRole}
                   onChange={(v) => u.setNewUserRole(v as 'admin' | 'user')}
                   style={{ width: '100%' }}
-                  aria-label={d.lang === 'zh' ? '用户角色' : 'User role'}
+                  aria-label={d.t('userMgmtUserRole')}
                   data-testid="user-role-select"
                 >
                   <Select.Option value="user" data-testid="user-role-option-user">User</Select.Option>
@@ -190,7 +182,7 @@ export function UserManagementModal() {
               <Banner type="danger" description={u.newUserError} onClose={() => u.setNewUserError(null)} style={{ marginBottom: '0.75rem' }} />
             )}
             <Button type="primary" theme="solid" htmlType="submit" loading={u.newUserLoading} icon={<Plus size={14} />} data-testid="user-add-submit">
-              {d.lang === 'zh' ? '创建用户' : 'Create User'}
+              {d.t('userMgmtCreateUser')}
             </Button>
           </form>
         </div>
@@ -198,7 +190,7 @@ export function UserManagementModal() {
         {/* Storage cleanup */}
         <div>
           <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
-            {d.lang === 'zh' ? '存储清理' : 'Storage Cleanup'}
+            {d.t('userMgmtStorageCleanup')}
           </h4>
           <Row gutter={12} style={{ alignItems: 'center' }}>
             <Col span={9}>
@@ -206,8 +198,8 @@ export function UserManagementModal() {
                 type="number"
                 value={String(u.retentionDays)}
                 onChange={(v) => u.handleRetentionDaysChange(v)}
-                addonAfter={d.lang === 'zh' ? '天' : 'days'}
-                aria-label={d.lang === 'zh' ? '保留天数' : 'Retention days'}
+                addonAfter={d.t('userMgmtDaysUnit')}
+                aria-label={d.t('userMgmtRetentionDays')}
                 data-testid="retention-days-input"
               />
             </Col>
@@ -226,26 +218,26 @@ export function UserManagementModal() {
                     if (resp.ok) {
                       const data = await resp.json()
                       alert(data.cleaned_runs
-                        ? (d.lang === 'zh' ? `已清理 ${data.cleaned_runs} 条运行记录` : `Cleaned ${data.cleaned_runs} runs`)
-                        : (d.lang === 'zh' ? '无可清理的记录' : 'Nothing to clean'))
+                        ? `${d.t('userMgmtCleanedRunsPrefix')}${data.cleaned_runs}${d.t('userMgmtCleanedRunsSuffix')}`
+                        : d.t('userMgmtNothingToClean'))
                       d.runs.fetchRuns()
                     } else {
                       // B5: a non-ok response (e.g. bad retention_days, server
                       // error) fell through silently, same as the network-error case.
                       const err = await resp.json()
-                      alert(err.detail || (d.lang === 'zh' ? '清理失败，请重试' : 'Cleanup failed. Please try again.'))
+                      alert(err.detail || d.t('userMgmtCleanupFailed'))
                     }
                   } catch (err) {
                     // B5: this catch had no user-visible failure path — a network
                     // error looked like the button silently did nothing.
                     console.error('Cleanup failed', err)
-                    alert(d.lang === 'zh' ? '清理失败，请重试' : 'Cleanup failed. Please try again.')
+                    alert(d.t('userMgmtCleanupFailed'))
                   } finally {
                     u.setIsCleaningStorage(false)
                   }
                 }}
               >
-                {d.lang === 'zh' ? '清理旧数据' : 'Clean Old Runs'}
+                {d.t('userMgmtCleanOldRuns')}
               </Button>
             </Col>
           </Row>

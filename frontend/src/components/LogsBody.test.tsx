@@ -60,7 +60,7 @@ describe('LogsBody', () => {
   it('streaming with output that the search filter excludes shows "no matching logs"', () => {
     makeDashboard({ runs: { isStreaming: true, streamedStdout: 'hello world' } })
     renderLogsBody({ filteredStreamed: '' })
-    expect(screen.getByText('No matching logs found')).toBeInTheDocument()
+    expect(screen.getByText('logsBodyNoMatch')).toBeInTheDocument()
   })
 
   it('streaming with no output yet shows the waiting placeholder', () => {
@@ -78,7 +78,7 @@ describe('LogsBody', () => {
   it('static run with stdout/stderr present but filtered out shows "no matching logs"', () => {
     makeDashboard({ runs: { selectedRun: { id: 'r', stdout: 'out', stderr: '' } } })
     renderLogsBody({ filteredStdout: '', filteredStderr: '', filteredStreamed: '' })
-    expect(screen.getByText('No matching logs found')).toBeInTheDocument()
+    expect(screen.getByText('logsBodyNoMatch')).toBeInTheDocument()
   })
 
   it('renders stderr alongside stdout when both are present and matched', () => {
@@ -93,7 +93,7 @@ describe('LogsBody', () => {
       runs: { selectedRun: { id: 'r', stdout: '', stderr: '' }, detailsLoading: true },
     })
     renderLogsBody()
-    expect(screen.getByText('Loading console logs...')).toBeInTheDocument()
+    expect(screen.getByText('logsBodyLoadingConsole')).toBeInTheDocument()
   })
 
   it('no run output, not loading, falls back to the empty-state placeholder', () => {

@@ -30,7 +30,7 @@ export function LogsBody({ filteredStdout, filteredStderr, filteredStreamed, sho
     if (d.runs.streamedStdout) {
       return (
         <span className={styles.terminalPlaceholder}>
-          {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+          {d.t('logsBodyNoMatch')}
         </span>
       )
     }
@@ -58,7 +58,7 @@ export function LogsBody({ filteredStdout, filteredStderr, filteredStreamed, sho
     }
     return (
       <span className={styles.terminalPlaceholder}>
-        {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
+        {d.t('logsBodyNoMatch')}
       </span>
     )
   }
@@ -68,7 +68,7 @@ export function LogsBody({ filteredStdout, filteredStderr, filteredStreamed, sho
       <span className={styles.terminalPlaceholder}>
         <span className={styles.waitingLogs}>
           <span className={styles.pulsingText}>
-            {d.lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}
+            {d.t('logsBodyLoadingConsole')}
           </span>
         </span>
       </span>
