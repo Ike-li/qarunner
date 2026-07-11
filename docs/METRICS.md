@@ -8,7 +8,7 @@
 | # | Metric | Formula | Target | Trigger |
 |---|--------|---------|--------|---------|
 | 1 | Pass Rate (7-day) | green runs / total runs × 100 | ≥95% | <90% → investigate failing suites |
-| 2 | Flaky Test Count | tests with ≥2 pass/fail flips | ≤3 | >5 → quarantine top flaky tests |
+| 2 | Flaky Test Count | tests with ≥4 observations and ≥3 pass/fail flips | ≤3 | >5 → quarantine top flaky tests |
 | 3 | Code Coverage | lines executed / total lines × 100 | ≥99% backend | <100% → block PR merge |
 | 4 | Avg Duration (7-day) | mean(finished_at − started_at) | <5 min | >10 min → profile slow tests |
 | 5 | Run Volume (7-day) | count of completed runs | baseline | >50% drop → check scheduler health |
@@ -32,7 +32,7 @@
 
 ## 2. Flaky Test Count
 
-**Formula:** Count of unique test cases (suite + name) across all runs in the last 30 days where `flakiness(statuses).is_flaky == True` (≥2 pass/fail transitions).
+**Formula:** Count of unique test cases (suite + name) across all runs in the last 30 days where `flakiness(statuses).is_flaky == True` (≥4 observations and ≥3 pass/fail transitions, per `FlakyPolicy` defaults).
 
 **Target:** ≤3 flaky tests.
 

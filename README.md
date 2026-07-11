@@ -32,6 +32,7 @@ docker compose -f docker-compose.dev.yml up -d
 |------|------|
 | [docs/deployment.md](docs/deployment.md) | **本地部署与更新指南**（开发/生产模式、代码更新、运维命令） |
 | [docs/DIRECTION.md](docs/DIRECTION.md) | 产品方向（唯一权威来源） |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | 需求文档（目标、功能、规则、验收） |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | API 端点参考（所有路由、请求/响应字段） |
 | [docs/FEATURES.md](docs/FEATURES.md) | 功能列表 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 代码架构（层次、端口、适配器） |

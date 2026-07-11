@@ -127,7 +127,7 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 经源码逐项查证**确实不存在**,便于理解产品范围:
 
 - ❌ 命令行 CLI(只有 HTTP API + 启动脚本,`pyproject.toml` 无 `[project.scripts]`)
-- ❌ Webhook / 通知 / 告警
+- ❌ 飞书以外的通知渠道(email / Slack / 告警系统等;飞书卡片**终态通知已支持**——Profile 配 webhook_url + 部署配 `QARUNNER_PUBLIC_URL` 即启用,任一为空则完全关闭)
 - ❌ 结果导出专用端点(CSV/JSON;API 本身返回 JSON)
 - ❌ 多租户 / 团队 / 组织(仅用户级 owner-scope)
 - ❌ 中央审计日志(仅登录记 IP + 用户名)
