@@ -71,6 +71,7 @@ class FakeStore:
     _users: dict[str, dict] = field(default_factory=dict)
     _credentials: dict[str, tuple] = field(default_factory=dict)
     _cases: dict[str, list] = field(default_factory=dict)
+    _ai_diagnoses: dict[str, object] = field(default_factory=dict)
     count_flaky_calls: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -86,10 +87,16 @@ class FakeStore:
             "password_hash": hash_password("test_pass"),
             "role": "admin",
             "created_at": "2026-06-20T16:00:00Z",
+            "token_version": 0,
         }
 
     async def get_user(self, username: str) -> dict | None:
-        return self._users.get(username)
+        # Snapshot, not a live reference — mirrors SqliteStore.get_user(), which
+        # rebuilds a fresh dict from a DB row on every call. Callers that read
+        # `existing` before a later mutation (e.g. update_user's demote-then-
+        # skip-redundant-update path) must not see in-place changes here.
+        record = self._users.get(username)
+        return dict(record) if record is not None else None
 
     async def create_user(self, username: str, password_hash: str, role: str) -> None:
         from datetime import UTC, datetime
@@ -99,6 +106,7 @@ class FakeStore:
             "password_hash": password_hash,
             "role": role,
             "created_at": datetime.now(UTC).isoformat(),
+            "token_version": 0,
         }
 
     async def list_users(self) -> list[dict]:
@@ -120,6 +128,23 @@ class FakeStore:
         if username not in self._users:
             return False
         self._users[username]["role"] = role
+        return True
+
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        """BUG-6: atomic demote — only if more than one admin remains."""
+        if username not in self._users:
+            return False
+        admin_count = sum(1 for u in self._users.values() if u["role"] == "admin")
+        if admin_count <= 1:
+            return False
+        self._users[username]["role"] = new_role
+        return True
+
+    async def increment_token_version(self, username: str) -> bool:
+        """BUG-5+13: bump token_version to invalidate all existing JWTs."""
+        if username not in self._users:
+            return False
+        self._users[username]["token_version"] = self._users[username].get("token_version", 0) + 1
         return True
 
     async def save_credential(self, credential: object, encrypted_secret: str) -> None:
@@ -148,14 +173,36 @@ class FakeStore:
         except KeyError:
             raise RunNotFound(run_id) from None
 
-    async def list(self) -> list[Run]:
-        return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+    async def list(self, limit: int | None = None) -> list[Run]:
+        runs = sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+        return runs if limit is None else runs[:limit]
+
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        """BUG-3: atomically set CANCELLED only if still QUEUED or RUNNING."""
+        run = self._runs.get(run_id)
+        if run is None:
+            return False
+        if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+            self._runs[run_id] = run.model_copy(
+                update={
+                    "status": RunStatus.CANCELLED,
+                    "finished_at": datetime.fromisoformat(finished_at),
+                }
+            )
+            return True
+        return False
 
     async def save_cases(self, run_id, tests_path, created_at, cases) -> None:
         self._cases[run_id] = list(cases)
 
     async def get_cases_for_run(self, run_id: str) -> list:
         return list(self._cases.get(run_id, []))
+
+    async def save_ai_diagnosis(self, run_id, diagnosis, provider, model, created_at) -> None:
+        self._ai_diagnoses[run_id] = diagnosis
+
+    async def get_ai_diagnosis(self, run_id):
+        return self._ai_diagnoses.get(run_id)
 
     async def get_case_history(
         self,
@@ -180,6 +227,21 @@ class FakeStore:
                     rows.append((run.created_at, c.status))
         rows.sort(key=lambda x: x[0], reverse=True)
         return [CaseHistoryPoint(created_at=ca, status=st) for ca, st in reversed(rows[:limit])]
+
+    async def get_case_histories(
+        self,
+        tests_path,
+        cases,
+        limit=20,
+        created_by=None,
+        profile_id=None,
+    ) -> dict:
+        return {
+            (suite, name): await self.get_case_history(
+                tests_path, suite, name, limit, created_by, profile_id
+            )
+            for suite, name in cases
+        }
 
     async def count_flaky_tests(
         self,
@@ -307,6 +369,13 @@ class FakeStore:
 
     async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool:
         return True
+
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None:
+        existing = self._schedules.get(schedule_id)
+        if existing is not None:
+            self._schedules[schedule_id] = existing.model_copy(update={"next_run_at": next_run_at})
 
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         return 0
@@ -466,10 +535,15 @@ def test_create_run_unknown_runner_400() -> None:
 
 
 def test_create_run_unsafe_path_400() -> None:
+    # Value is irrelevant here: raise_unsafe_path makes the fake orchestrator
+    # unconditionally raise UnsafePath, so this exercises the route's error
+    # mapping, not path validation itself — must stay a value RunRequest's
+    # own tests_path validator (BUG-25) accepts, or it 422s before reaching
+    # the orchestrator at all.
     container = _make_container(raise_unsafe_path=True)
     app = create_app(container)
     with TestClient(app) as client:
-        resp = client.post("/runs", json={"tests_path": "../../etc", "runner": "pytest"})
+        resp = client.post("/runs", json={"tests_path": "tests/", "runner": "pytest"})
     assert resp.status_code == 400
 
 
@@ -495,6 +569,28 @@ def test_create_run_forbidden_for_other_users_registered_suite() -> None:
 
     assert resp.status_code == 403
     assert "bob_suite" not in resp.text
+    assert container.orchestrator.last_req is None
+
+
+def test_create_run_rejects_traversal_past_owned_suite() -> None:
+    """BUG-25: the owner-scope check only inspects the first path segment of
+    tests_path — "alice_suite/../victim_suite" would pass that check (alice
+    owns alice_suite) while orchestrator.create() actually resolves and runs
+    against victim_suite, a suite alice doesn't own. Must be rejected before
+    it ever reaches the owner check or the orchestrator."""
+    container = _make_container()
+    _save_suite_in_store(container.store, name="alice_suite", created_by="alice")
+    _save_suite_in_store(container.store, name="victim_suite", created_by="bob")
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/runs",
+            json={"tests_path": "alice_suite/../victim_suite", "runner": "pytest"},
+        )
+
+    assert resp.status_code == 422
     assert container.orchestrator.last_req is None
 
 
@@ -1033,9 +1129,7 @@ def test_run_artifact_endpoints_do_not_follow_artifact_dir_symlink_escape(
     (outside_artifacts / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
     run_results = artifacts_root / "pw-nested-link" / "results"
     run_results.mkdir(parents=True)
-    (run_results / "playwright-results").symlink_to(
-        outside_artifacts, target_is_directory=True
-    )
+    (run_results / "playwright-results").symlink_to(outside_artifacts, target_is_directory=True)
 
     app = create_app(container)
     with TestClient(app) as client:
@@ -1593,6 +1687,18 @@ def test_runs_trend_empty_for_unknown_suite() -> None:
     assert resp.json()["points"] == []
 
 
+def test_runs_trend_rejects_nonpositive_limit() -> None:
+    # BUG: limit=0 used to silently mean "all points" (Python's `[-0:]` slice
+    # trap) instead of "no points" — reject non-positive limits outright
+    # rather than let that inversion reach the response body.
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/runs/trend?tests_path=suite_a&limit=0")
+    assert resp.status_code == 422
+
+
 # ── GET /metrics ────────────────────────────────────────────────────────
 
 
@@ -2019,6 +2125,15 @@ def test_case_history_empty_for_unknown_case() -> None:
         resp = client.get("/cases/history?tests_path=nope&suite=x&name=y")
     assert resp.status_code == 200
     assert resp.json() == {"points": [], "flaky": False, "flip_count": 0}
+
+
+def test_case_history_rejects_nonpositive_limit() -> None:
+    container = _make_container()
+    app = create_app(container)
+    _override_user(app, "alice", UserRole.USER)
+    with TestClient(app) as client:
+        resp = client.get("/cases/history?tests_path=nope&suite=x&name=y&limit=0")
+    assert resp.status_code == 422
 
 
 def test_run_diff_forbidden_for_non_owner() -> None:
@@ -2990,6 +3105,7 @@ def _seed_user(
         "password_hash": hash_password(password),
         "role": role,
         "created_at": "2026-06-20T16:00:00Z",
+        "token_version": 0,
     }
 
 
@@ -3036,6 +3152,76 @@ def test_delete_user_admin_removes_target() -> None:
     assert "bob" not in container.store._users  # type: ignore[attr-defined]
 
 
+def test_delete_user_cascades_owned_resources() -> None:
+    """BUG-14: deleting a user removes every run/profile/schedule/credential/
+    suite they own, so no orphaned owner references remain — and leaves
+    other users' resources of the same kinds untouched."""
+    container = _make_container()
+    _seed_user(container.store, "bob")
+    store = container.store
+    _make_run_in_store(store, id="run-bob", created_by="bob")
+    _make_run_in_store(store, id="run-carol", created_by="carol")
+    store._profiles["profile-bob"] = TestProfile(  # type: ignore[attr-defined]
+        id="profile-bob", name="p", tests_path="t/", created_by="bob", created_at=NOW
+    )
+    store._profiles["profile-carol"] = TestProfile(  # type: ignore[attr-defined]
+        id="profile-carol", name="p", tests_path="t/", created_by="carol", created_at=NOW
+    )
+    store._schedules["sched-bob"] = TestSchedule(  # type: ignore[attr-defined]
+        id="sched-bob",
+        name="s",
+        # Deliberately not profile-bob: deleting that profile cascades onto
+        # any schedule bound to it (see FakeStore.delete_profile), which
+        # would delete sched-bob as a side effect and mask whether
+        # delete_user's own schedule-cleanup loop actually runs.
+        profile_id="profile-unrelated",
+        cron_expression="* * * * *",
+        created_by="bob",
+        created_at=NOW,
+    )
+    store._schedules["sched-carol"] = TestSchedule(  # type: ignore[attr-defined]
+        id="sched-carol",
+        name="s",
+        profile_id="profile-carol",
+        cron_expression="* * * * *",
+        created_by="carol",
+        created_at=NOW,
+    )
+    store._credentials["cred-bob"] = (  # type: ignore[attr-defined]
+        Credential(id="cred-bob", name="c", type="https_token", created_by="bob", created_at=NOW),
+        "encrypted",
+    )
+    store._credentials["cred-carol"] = (  # type: ignore[attr-defined]
+        Credential(
+            id="cred-carol", name="c", type="https_token", created_by="carol", created_at=NOW
+        ),
+        "encrypted",
+    )
+    store._suites["suite-bob"] = TestSuite(  # type: ignore[attr-defined]
+        name="suite-bob", created_by="bob", created_at=NOW
+    )
+    store._suites["suite-carol"] = TestSuite(  # type: ignore[attr-defined]
+        name="suite-carol", created_by="carol", created_at=NOW
+    )
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+
+    with TestClient(app) as client:
+        resp = client.delete("/users/bob")
+
+    assert resp.status_code == 200
+    assert "run-bob" not in store._runs  # type: ignore[attr-defined]
+    assert "profile-bob" not in store._profiles  # type: ignore[attr-defined]
+    assert "sched-bob" not in store._schedules  # type: ignore[attr-defined]
+    assert "cred-bob" not in store._credentials  # type: ignore[attr-defined]
+    assert "suite-bob" not in store._suites  # type: ignore[attr-defined]
+    assert "run-carol" in store._runs  # type: ignore[attr-defined]
+    assert "profile-carol" in store._profiles  # type: ignore[attr-defined]
+    assert "sched-carol" in store._schedules  # type: ignore[attr-defined]
+    assert "cred-carol" in store._credentials  # type: ignore[attr-defined]
+    assert "suite-carol" in store._suites  # type: ignore[attr-defined]
+
+
 def test_delete_user_cannot_delete_self() -> None:
     container = _make_container()  # default test_user is admin
     app = create_app(container)
@@ -3077,10 +3263,10 @@ def test_update_user_password_takes_effect() -> None:
     app = create_app(container)
     _override_user(app, "test_user", UserRole.ADMIN)
     with TestClient(app) as client:
-        resp = client.put("/users/bob", json={"password": "newpw"})
+        resp = client.put("/users/bob", json={"password": "newpassword"})
     assert resp.status_code == 200
     new_hash = container.store._users["bob"]["password_hash"]  # type: ignore[attr-defined]
-    assert verify_password("newpw", new_hash)
+    assert verify_password("newpassword", new_hash)
     assert not verify_password("oldpw", new_hash)
 
 
@@ -3345,6 +3531,117 @@ def test_login_succeeds_after_lockout_window_expires() -> None:
         assert "access_token" in ok.json()
 
 
+def test_logout_revokes_token_via_cookie() -> None:
+    """BUG-5+13: logout bumps token_version so every other JWT for that
+    user (cookie or bearer) is invalidated immediately."""
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        login = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        assert login.status_code == 200
+        assert client.cookies.get("token") is not None
+
+        resp = client.post("/auth/logout")
+        assert resp.status_code == 204
+
+    assert container.store._users["test_user"]["token_version"] == 1  # type: ignore[attr-defined]
+
+
+def test_logout_revokes_token_via_bearer_header() -> None:
+    """Same revocation, reached via the Authorization header fallback when
+    no cookie is present (e.g. a programmatic API client)."""
+    container = _make_container()
+    app = create_app(container)
+    with TestClient(app) as client:
+        login = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        token = login.json()["access_token"]
+        client.cookies.clear()
+
+        resp = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 204
+
+    assert container.store._users["test_user"]["token_version"] == 1  # type: ignore[attr-defined]
+
+
+def test_revoked_token_is_rejected_after_logout() -> None:
+    """BUG-5+13: a JWT captured before logout no longer authenticates
+    anything afterwards, since its embedded token_version is now stale."""
+    container = _make_container()
+    app = create_app(container)
+    # /auth/me depends on the real get_current_user — create_app() stubs it
+    # out by default for route tests that don't care about auth internals;
+    # drop the stub so this test exercises the actual token_version check.
+    del app.dependency_overrides[get_current_user]
+    with TestClient(app) as client:
+        login = client.post("/auth/login", json={"username": "test_user", "password": "test_pass"})
+        old_token = login.json()["access_token"]
+
+        client.post("/auth/logout")
+        client.cookies.clear()  # logout's delete_cookie already cleared it; be explicit
+
+        resp = client.get("/auth/me", headers={"Authorization": f"Bearer {old_token}"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Token has been revoked"
+
+
+def test_logout_without_any_token_still_succeeds() -> None:
+    """Revocation is best-effort: logout always returns 204 even when there
+    is no token to revoke."""
+    app = create_app(_make_container())
+    with TestClient(app) as client:
+        resp = client.post("/auth/logout")
+    assert resp.status_code == 204
+
+
+def test_logout_with_garbage_bearer_token_still_succeeds() -> None:
+    """A present-but-undecodable token must not crash logout — revocation
+    is best-effort, not a hard requirement (BUG-5+13's docstring)."""
+    app = create_app(_make_container())
+    with TestClient(app) as client:
+        resp = client.post("/auth/logout", headers={"Authorization": "Bearer not-a-real-jwt"})
+    assert resp.status_code == 204
+
+
+def test_client_ip_uses_trusted_proxy_x_forwarded_for() -> None:
+    """BUG-8: behind a trusted reverse proxy, the login-throttle key uses the
+    left-most X-Forwarded-For entry instead of the proxy's own peer address —
+    so two distinct client IPs behind that proxy get independent lockouts."""
+    throttle = LoginThrottle(clock=FakeClock(), threshold=2, base_seconds=60.0)
+    settings = Settings(trusted_proxies="testclient")  # matches TestClient's peer host
+    app = create_app(_make_container(login_throttle=throttle, settings=settings))
+    with TestClient(app) as client:
+        headers_a = {"X-Forwarded-For": "9.9.9.9"}
+        for _ in range(2):
+            bad = client.post(
+                "/auth/login",
+                json={"username": "test_user", "password": "nope"},
+                headers=headers_a,
+            )
+            assert bad.status_code == 401
+        locked = client.post(
+            "/auth/login",
+            json={"username": "test_user", "password": "nope"},
+            headers=headers_a,
+        )
+        assert locked.status_code == 429
+
+        # A different forwarded IP behind the same trusted proxy is a separate
+        # throttle bucket — proves the key was derived from X-Forwarded-For,
+        # not the shared proxy peer address.
+        other_ip = client.post(
+            "/auth/login",
+            json={"username": "test_user", "password": "nope"},
+            headers={"X-Forwarded-For": "8.8.8.8"},
+        )
+        assert other_ip.status_code == 401
+
+        # No X-Forwarded-For header at all falls back to the raw peer
+        # address — yet another independent bucket from either IP above.
+        no_header = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
+        assert no_header.status_code == 401
+
+
 def test_successful_login_resets_failure_counter() -> None:
     throttle = LoginThrottle(clock=FakeClock(), threshold=2, base_seconds=60.0)
     app = create_app(_make_container(login_throttle=throttle))
@@ -3360,6 +3657,29 @@ def test_successful_login_resets_failure_counter() -> None:
         # ...so a subsequent single miss does not immediately lock.
         again = client.post("/auth/login", json={"username": "test_user", "password": "nope"})
         assert again.status_code == 401
+
+
+def test_login_nonexistent_user_calls_verify_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG-1: verify_password must be called even when user doesn't exist.
+
+    Without this, Python short-circuits the ``or`` and skips bcrypt, leaking a
+    timing signal that distinguishes "user not found" from "wrong password".
+    """
+    from qarunner.core.auth import verify_password as real_verify
+
+    app = create_app(_make_container())
+    call_count = 0
+
+    def _counting_verify(password: str, hashed: str) -> bool:
+        nonlocal call_count
+        call_count += 1
+        return real_verify(password, hashed)
+
+    monkeypatch.setattr("qarunner.api.routes.verify_password", _counting_verify)
+    with TestClient(app) as client:
+        call_count = 0
+        client.post("/auth/login", json={"username": "ghost", "password": "x"})
+        assert call_count == 1, "verify_password must be called for nonexistent users"
 
 
 def test_client_ip_helper_handles_missing_client() -> None:
@@ -4533,6 +4853,24 @@ def test_trigger_profile_creates_profile_bound_run_from_profile() -> None:
     assert orch.last_req.extra_args == "--headed"
     assert orch.last_req.timeout == 120
     assert orch.last_req.env == {"BASE_URL": "http://app"}
+
+
+def test_trigger_profile_with_unregistered_tests_path_skips_suite_check() -> None:
+    """A profile whose tests_path doesn't resolve to a registered suite name
+    (e.g. a bare "." — legal input, just not a suite reference) has nothing
+    for the owner-scope suite check to look up, so it's skipped rather than
+    treated as a 403 or 404."""
+    container = _make_container()
+    _seed_trigger_profile(container)
+    profile = container.store._profiles["profile-x"]  # type: ignore[attr-defined]
+    container.store._profiles["profile-x"] = profile.model_copy(  # type: ignore[attr-defined]
+        update={"tests_path": "."}
+    )
+    app = create_app(container)
+    _override_user(app, "test_user", UserRole.ADMIN)
+    with TestClient(app) as client:
+        resp = client.post("/profiles/profile-x/trigger")
+    assert resp.status_code == 202
 
 
 def test_trigger_profile_forbidden_for_non_owner() -> None:

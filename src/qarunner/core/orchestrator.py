@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from qarunner.core.paths import safe_subpath
 from qarunner.core.runners.base import BuildContext
-from qarunner.errors import UnsafeArguments
+from qarunner.errors import RunnerError, UnsafeArguments
 from qarunner.models import (
     CollectResult,
     ProcessResult,
@@ -212,6 +212,7 @@ class RunOrchestrator:
         self._default_timeout = default_timeout
         self._worker_node_id = worker_node_id
         self._public_url = public_url
+        self._notify_tasks: set[asyncio.Task[None]] = set()
 
     # ── create ────────────────────────────────────────────────────────────
 
@@ -274,12 +275,15 @@ class RunOrchestrator:
             return
 
         runner = self._registry.get(run.runner)
+        reached_terminal_outcome = False
 
         try:
-            # 1. Mark RUNNING
+            # 1. Mark RUNNING — the poller's dequeue_next_queued() already
+            # atomically set status=RUNNING + started_at in the DB, so this
+            # in-memory update is for local state only (BUG-4: a redundant save
+            # here could overwrite a CANCELLED set by a concurrent cancel()).
             now = self._clock.now()
             run = _replace(run, status=RunStatus.RUNNING, started_at=now)
-            await self._store.save(run)
 
             # 2. Build command — results_dir must be absolute per plan
             from pathlib import Path
@@ -336,12 +340,10 @@ class RunOrchestrator:
                         "Source tests_dir %s does not exist; running without jail.", tests_dir
                     )
             except Exception as e:
-                logger.warning(
-                    "Failed to create Workspace Jail at %s (%r); running directly in %s.",
-                    jail_dir,
-                    e,
-                    tests_dir,
-                )
+                # BUG-19: jail creation failure should abort the run, not fall
+                # back to running in the original tests_dir (which could modify
+                # source files and cause unpredictable subsequent runs).
+                raise RunnerError(f"Workspace jail creation failed: {e}") from e
 
             ctx = BuildContext(
                 tests_dir=exec_cwd,
@@ -406,10 +408,13 @@ class RunOrchestrator:
                 report=report,
                 finished_at=self._clock.now(),
             )
+            reached_terminal_outcome = True
             await self._store.save(run)
 
-            # Fire-and-forget notification: never blocks or fails the run.
-            asyncio.create_task(self._notify(run))
+            # Track notification task so drain() can wait for it (BUG-11).
+            task = asyncio.create_task(self._notify(run))
+            self._notify_tasks.add(task)
+            task.add_done_callback(self._notify_tasks.discard)
 
         except asyncio.CancelledError:
             # User-initiated cancel (or a shutdown drain past its deadline):
@@ -418,12 +423,20 @@ class RunOrchestrator:
             # RUNNING. Persist a terminal CANCELLED state, then re-raise to keep
             # cancellation semantics intact (the runner's own finally already
             # killed the subprocess / container).
+            #
+            # BUG-9: if the cancel raced past step 7 — the test already ran to
+            # completion, ``run`` already holds the real terminal status plus
+            # summary/report — relabelling it CANCELLED here would produce a
+            # contradictory record (cancelled, yet with full results
+            # attached). The outcome is a fait accompli by then; just make
+            # sure it's actually persisted instead of overwriting it.
             try:
-                run = _replace(
-                    run,
-                    status=RunStatus.CANCELLED,
-                    finished_at=self._clock.now(),
-                )
+                if not reached_terminal_outcome:
+                    run = _replace(
+                        run,
+                        status=RunStatus.CANCELLED,
+                        finished_at=self._clock.now(),
+                    )
                 await self._store.save(run)
             except Exception:  # pragma: no cover — needs real asyncio task cancellation
                 logger.exception("failed to persist cancelled state for run %s", run_id)
@@ -447,7 +460,9 @@ class RunOrchestrator:
             except Exception:
                 logger.exception("failed to persist error state for run %s", run_id)
         finally:
-            if "jail_created" in locals() and jail_created:
+            # BUG-10: always attempt cleanup if jail_dir exists on disk,
+            # regardless of jail_created (copytree may have partially created it).
+            if "jail_dir" in locals() and jail_dir.exists():
                 try:
                     await asyncio.to_thread(shutil.rmtree, jail_dir, ignore_errors=True)
                     logger.info("Workspace Jail cleaned up at %s", jail_dir)
@@ -480,21 +495,15 @@ class RunOrchestrator:
 
         Cancels the background task (propagating ``CancelledError`` into the
         execution, whose runner finally kills the subprocess / container), then
-        re-reads and — if still in flight — persists a terminal CANCELLED state.
-        A run that finished on its own in the meantime is returned unchanged, so
-        a real terminal status is never clobbered. Raises ``RunNotFound`` if the
-        id is unknown.
+        atomically persists CANCELLED only if the run is still in-flight.
+        A run that finished on its own in the meantime is left untouched, so a
+        real terminal status is never clobbered (BUG-3). Raises ``RunNotFound``
+        if the id is unknown.
         """
         self._scheduler.cancel(run_id)
-        run = await self._store.get(run_id)
-        if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
-            run = _replace(
-                run,
-                status=RunStatus.CANCELLED,
-                finished_at=self._clock.now(),
-            )
-            await self._store.save(run)
-        return run
+        now = self._clock.now()
+        await self._store.cancel_if_inflight(run_id, now.isoformat())
+        return await self._store.get(run_id)
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -503,8 +512,11 @@ class RunOrchestrator:
 
         Delegates to the task scheduler so a graceful shutdown lets running
         executions persist their terminal state before the store closes.
+        Also waits for pending notification tasks (BUG-11).
         """
         await self._scheduler.drain(timeout)
+        if self._notify_tasks:
+            await asyncio.wait(self._notify_tasks, timeout=timeout)
 
 
 def _replace(run: Run, **kwargs: object) -> Run:

@@ -21,6 +21,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.container = create_container()
     container = app.state.container
     settings = container.settings
+    # BUG-12: warn when cookie_secure=False in production-like deployments.
+    if not settings.cookie_secure:
+        logger.warning(
+            "QARUNNER_COOKIE_SECURE is False — auth cookies will be sent over "
+            "plaintext HTTP. Set QARUNNER_COOKIE_SECURE=true for production."
+        )
     # Initialize SQLite store
     await container.store.initialize()
     # Crash recovery: fail RUNNING runs left by a previous process.  QUEUED

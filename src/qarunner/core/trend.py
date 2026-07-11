@@ -30,6 +30,11 @@ def trend_points(runs: list[Run], tests_path: str, limit: int = 50) -> list[Tren
         ),
         key=lambda r: r.created_at,
     )
+    # BUG: Python's `matching[-0:]` is `matching[0:]` (everything), not
+    # "nothing" — a bare negative-index slice would silently invert the
+    # limit=0 "no data" contract that GET /cases/history (SQL `LIMIT 0`)
+    # already honours.
+    windowed = matching[-limit:] if limit > 0 else []
     return [
         TrendPoint(
             run_id=r.id,
@@ -39,5 +44,5 @@ def trend_points(runs: list[Run], tests_path: str, limit: int = 50) -> list[Tren
             passed=r.summary.passed,
             failed=r.summary.failed,
         )
-        for r in matching[-limit:]
+        for r in windowed
     ]

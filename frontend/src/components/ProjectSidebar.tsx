@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import { ReactNode, useMemo } from 'react'
 import { Button, Tooltip, Tag, Badge } from '@douyinfe/semi-ui'
 import {
   IconFolder,
@@ -21,6 +21,27 @@ import { useDashboard } from '../hooks/DashboardContext'
  *  Run stats are computed inline via d.runs.runs; this component displays. */
 export function ProjectSidebar() {
   const d = useDashboard()
+  // Pre-compute grouped run maps to avoid O(n×m) filtering on every render.
+  const suiteRunsMap = useMemo(() => {
+    const map = new Map<string, typeof d.runs.runs>()
+    for (const r of d.runs.runs) {
+      const arr = map.get(r.tests_path)
+      if (arr) arr.push(r)
+      else map.set(r.tests_path, [r])
+    }
+    return map
+  }, [d.runs.runs])
+  const profileRunsMap = useMemo(() => {
+    const map = new Map<string, typeof d.runs.runs>()
+    for (const r of d.runs.runs) {
+      if (r.profile_id == null) continue
+      const key = String(r.profile_id)
+      const arr = map.get(key)
+      if (arr) arr.push(r)
+      else map.set(key, [r])
+    }
+    return map
+  }, [d.runs.runs])
   // name → source/repo/ref, so each suite row can render source-aware actions.
   const suiteInfoByName = new Map(d.suites.suites.map((s) => [s.name, s]))
   return (
@@ -30,7 +51,7 @@ export function ProjectSidebar() {
           <IconFolder style={{ color: 'var(--semi-color-primary)', marginRight: '8px', fontSize: '18px' }} />
           <h2>{d.t('workspaceSuites')}</h2>
         </div>
-        <Tooltip content={d.lang === 'zh' ? '添加测试套件 / 绑定项目' : 'Add Test Suite / Link Project'}>
+        <Tooltip content={d.t('sidebarAddSuiteTooltip')}>
           <Button
             size="small"
             theme="light"
@@ -38,7 +59,7 @@ export function ProjectSidebar() {
             shape="circle"
             data-testid="open-add-suite-button"
             icon={<IconPlus style={{ fontSize: '12px' }} />}
-            aria-label={d.lang === 'zh' ? '添加测试套件 / 绑定项目' : 'Add Test Suite / Link Project'}
+            aria-label={d.t('sidebarAddSuiteTooltip')}
             onClick={(e) => {
               e.stopPropagation()
               d.setIsAddSuiteModalOpen(true)
@@ -113,7 +134,7 @@ export function ProjectSidebar() {
           )}
           {d.suites.tests.map((suite) => {
             const isFiltered = d.selectedSuiteFilter === suite
-            const suiteRunsCount = d.runs.runs.filter(r => r.tests_path === suite).length
+            const suiteRunsCount = suiteRunsMap.get(suite)?.length ?? 0
             const suiteProfiles = d.profiles.profiles.filter(p => p.tests_path === suite)
             const isGit = suiteInfoByName.get(suite)?.source === 'git'
             return (
@@ -181,41 +202,41 @@ export function ProjectSidebar() {
                       />
                     </Tooltip>
                     {isGit && (
-                      <Tooltip content={d.lang === 'zh' ? '更新 (git pull)' : 'Update (git pull)'}>
+                      <Tooltip content={d.t('sidebarUpdateGitPull')}>
                         <Button
                           size="small"
                           theme="borderless"
                           type="tertiary"
                           data-testid={`suite-update-${suite}`}
                           icon={<IconRefresh style={{ fontSize: '10px' }} />}
-                          aria-label={d.lang === 'zh' ? '更新 (git pull)' : 'Update (git pull)'}
+                          aria-label={d.t('sidebarUpdateGitPull')}
                           onClick={() => d.suites.handlePullSuite(suite)}
                           style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                         />
                       </Tooltip>
                     )}
                     {isGit && (
-                      <Tooltip content={d.lang === 'zh' ? '准备依赖 (npm ci)' : 'Prepare deps (npm ci)'}>
+                      <Tooltip content={d.t('sidebarPrepareDeps')}>
                         <Button
                           size="small"
                           theme="borderless"
                           type="tertiary"
                           data-testid={`suite-prepare-${suite}`}
                           icon={<IconDownload style={{ fontSize: '10px' }} />}
-                          aria-label={d.lang === 'zh' ? '准备依赖 (npm ci)' : 'Prepare deps (npm ci)'}
+                          aria-label={d.t('sidebarPrepareDeps')}
                           onClick={() => d.suites.handlePrepareSuite(suite)}
                           style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                         />
                       </Tooltip>
                     )}
-                    <Tooltip content={d.lang === 'zh' ? '移除套件' : 'Remove suite'}>
+                    <Tooltip content={d.t('sidebarRemoveSuite')}>
                       <Button
                         size="small"
                         theme="borderless"
                         type="danger"
                         data-testid={`suite-remove-${suite}`}
                         icon={<IconDelete style={{ fontSize: '10px' }} />}
-                        aria-label={d.lang === 'zh' ? '移除套件' : 'Remove suite'}
+                        aria-label={d.t('sidebarRemoveSuite')}
                         onClick={() => d.suites.handleDeleteSuite(suite, () => {
                           if (d.selectedSuiteFilter===suite) {
                             d.setSelectedSuiteFilter(null)
@@ -236,7 +257,7 @@ export function ProjectSidebar() {
                       const isProfileFiltered = d.selectedProfileFilter === profile.id;
 
                       // Compute dynamic run statistics
-                      const profileRuns = d.runs.runs.filter((r) => r.profile_id === profile.id)
+                      const profileRuns = profileRunsMap.get(profile.id) ?? []
                       const finishedRuns = profileRuns.filter(
                         (r) => r.status === 'completed' || r.status === 'failed' || r.status === 'timeout',
                       )
@@ -253,7 +274,7 @@ export function ProjectSidebar() {
                       // Pad with empty dots to keep layout consistent at 5 dots
                       for (let i = 0; i < 5 - stats.last5.length; i++) {
                         dots.push(
-                          <Tooltip key={`empty-${i}`} content={d.lang === 'zh' ? '无执行记录' : 'No execution'}>
+                          <Tooltip key={`empty-${i}`} content={d.t('sidebarNoExecution')}>
                             <span 
                               className={`${styles.historyDot} ${styles.dotEmpty}`} 
                             />
@@ -267,17 +288,13 @@ export function ProjectSidebar() {
                         let tooltip = '';
                         if (run.status === 'running' || run.status === 'queued') {
                           dotClass = styles.dotRunning;
-                          tooltip = d.lang === 'zh' ? '运行中...' : 'Running...';
+                          tooltip = d.t('sidebarRunningEllipsis');
                         } else if (run.status === 'completed' && run.passed) {
                           dotClass = styles.dotPass;
-                          tooltip = d.lang === 'zh' 
-                            ? `已通过 (耗时: ${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}秒)\n${new Date(run.created_at).toLocaleString()}` 
-                            : `Passed (${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}s)\n${new Date(run.created_at).toLocaleString()}`;
+                          tooltip = `${d.t('sidebarPassedPrefix')}${run.summary?.duration_ms ? Math.round(run.summary.duration_ms / 1000) : 0}${d.t('sidebarPassedSuffix')}\n${new Date(run.created_at).toLocaleString()}`;
                         } else {
                           dotClass = styles.dotFail;
-                          tooltip = d.lang === 'zh' 
-                            ? `未通过\n${new Date(run.created_at).toLocaleString()}` 
-                            : `Failed\n${new Date(run.created_at).toLocaleString()}`;
+                          tooltip = `${d.t('sidebarFailedTooltip')}\n${new Date(run.created_at).toLocaleString()}`;
                         }
 
                         dots.push(
@@ -336,58 +353,62 @@ export function ProjectSidebar() {
                                 {profile.runner || 'pytest'}
                               </Tag>
                               {isSchedActive && (
-                                <Tooltip content={d.lang === 'zh' ? `定时已启用: ${existingSched?.cron_expression}` : `Schedule active: ${existingSched?.cron_expression}`}>
+                                <Tooltip content={`${d.t('sidebarScheduleActivePrefix')} ${existingSched?.cron_expression}`}>
                                   <span className={styles.activeScheduleIndicator} />
                                 </Tooltip>
                               )}
                             </div>
                             <div className={styles.nestedProfileActions} onClick={(e) => e.stopPropagation()}>
-	                              <Tooltip content={d.lang === 'zh' ? '立即执行' : 'Instant Run'}>
+	                              <Tooltip content={d.t('sidebarInstantRun')}>
 	                                <Button
                                   size="small"
                                   theme="borderless"
                                   type="tertiary"
 	                                  icon={<IconPlay style={{ fontSize: '10px' }} />}
-	                                  aria-label={d.lang === 'zh' ? '立即执行' : 'Instant Run'}
+	                                  aria-label={d.t('sidebarInstantRun')}
 	                                  data-testid={`profile-run-${profile.id}`}
 	                                  onClick={() => d.profiles.handleTriggerProfile(profile, (runId) => { d.runs.fetchRuns(); d.runs.setSelectedRunId(runId) })}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
                               </Tooltip>
-                              <Tooltip content={d.lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}>
+                              <Tooltip content={d.t('sidebarEditProfile')}>
                                 <Button
                                   size="small"
                                   theme="borderless"
                                   type="tertiary"
 	                                  icon={<IconEdit style={{ fontSize: '10px' }} />}
-	                                  aria-label={d.lang === 'zh' ? '编辑方案内容' : 'Edit Profile'}
+	                                  aria-label={d.t('sidebarEditProfile')}
 	                                  data-testid={`profile-edit-${profile.id}`}
 	                                  onClick={() => { d.form.openEditProfile(profile); d.setSelectedFiles(profile.selected_files||[]); d.setSelectedMarkers(profile.selected_markers||[]); d.setIsTriggerModalOpen(true) }}
                                   style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
                                 />
                               </Tooltip>
-                              <Tooltip content={d.lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}>
+                              <Tooltip content={d.t('sidebarConfigureSchedule')}>
                                 <Button
                                   size="small"
                                   theme="borderless"
                                   type={isSchedActive ? "primary" : "tertiary"}
                                   icon={<IconClock style={{ fontSize: '10px' }} />}
-	                                  aria-label={d.lang === 'zh' ? '配置定时调度' : 'Configure Schedule'}
+	                                  aria-label={d.t('sidebarConfigureSchedule')}
 	                                  onClick={() => d.schedules.handleOpenScheduleModal(profile)}
 	                                  style={{ padding: '2px', height: '18px', width: '18px', minWidth: '18px' }}
 	                                  data-testid="open-schedule-button"
 	                                />
                               </Tooltip>
-                              <Tooltip content={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}>
+                              <Tooltip content={d.t('sidebarDeleteProfile')}>
                                 <Button
                                   size="small"
                                   theme="borderless"
                                   type="danger"
 	                                  icon={<IconDelete style={{ fontSize: '10px' }} />}
-	                                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
+	                                  aria-label={d.t('sidebarDeleteProfile')}
 	                                  data-testid={`profile-delete-${profile.id}`}
-	                                  onClick={(e) => {
-                                    d.profiles.handleDeleteProfile(profile.id, e);
+	                                  onClick={async (e) => {
+                                    // B3: only clear profile-scoped selection state if the
+                                    // delete actually happened — not on a cancelled confirm
+                                    // or a failed request.
+                                    const deleted = await d.profiles.handleDeleteProfile(profile.id, e);
+                                    if (!deleted) return;
                                     if (d.form.selectedProfileId===profile.id) d.form.setSelectedProfileId('')
                                     if (d.selectedProfileFilter===profile.id) d.setSelectedProfileFilter(null)
                                   }}
@@ -406,7 +427,7 @@ export function ProjectSidebar() {
 	                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
 	                                data-testid={`profile-pass-rate-${profile.id}`}
 	                              >
-                                {stats.passRate}% {d.lang === 'zh' ? '通过率' : 'Pass'}
+                                {stats.passRate}% {d.t('sidebarPassRateLabel')}
                               </Tag>
                             ) : (
                               <Tag
@@ -415,7 +436,7 @@ export function ProjectSidebar() {
 	                                style={{ fontSize: '10px', height: '16px', padding: '0 4px', borderRadius: '4px' }}
 	                                data-testid={`profile-pass-rate-${profile.id}`}
 	                              >
-                                {d.lang === 'zh' ? '暂无记录' : 'No runs'}
+                                {d.t('sidebarNoRuns')}
                               </Tag>
                             )}
 	                            <div className={styles.profileHistoryDots}>

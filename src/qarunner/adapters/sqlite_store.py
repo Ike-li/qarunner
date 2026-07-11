@@ -17,6 +17,7 @@ from qarunner.errors import RunNotFound
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
+    FailureDiagnosis,
     ReportRef,
     Run,
     RunStatus,
@@ -31,10 +32,11 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    username      TEXT PRIMARY KEY,
-    password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    username       TEXT PRIMARY KEY,
+    password_hash  TEXT NOT NULL,
+    role           TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    token_version  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -169,6 +171,36 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             "ON runs(locked, status, finished_at);",
         ),
     ),
+    # v10: cached AI failure diagnosis, one row per run (UPSERT on re-generate).
+    # Read-only analysis output; CASCADE-deleted with the parent run.
+    (
+        10,
+        (
+            "CREATE TABLE IF NOT EXISTS run_ai_diagnosis ("
+            "run_id TEXT PRIMARY KEY, "
+            "diagnosis_json TEXT NOT NULL, "
+            "provider TEXT NOT NULL, "
+            "model TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, "
+            "FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE"
+            ");",
+        ),
+    ),
+    # v11: token_version on users for JWT invalidation (BUG-5+13).
+    # Existing users default to 0; the column is idempotent (duplicate column
+    # tolerated by _run_migrations).
+    (11, ("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;",)),
+)
+
+
+# The `runs` row shape shared by every SELECT that reconstructs a full Run
+# (get/list/get_old_unlocked_runs) — kept in one place so the column list and
+# _row_to_run's positional indices can't drift out of sync across call sites.
+_RUN_COLUMNS = (
+    "id, status, runner, created_by, tests_path, args_json, allure_enabled, "
+    "timeout, executor_mode, summary_json, report_json, exit_code, error, "
+    "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+    "profile_id"
 )
 
 
@@ -236,8 +268,9 @@ class SqliteStore:
             if row and row[0] == 0:
                 settings = Settings()
                 await db.execute(
-                    "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO users "
+                    "(username, password_hash, role, created_at, token_version) "
+                    "VALUES (?, ?, ?, ?, 0)",
                     (
                         settings.admin_user,
                         hash_password(settings.admin_password),
@@ -367,7 +400,8 @@ class SqliteStore:
         """Retrieve a user and their password hash from the database."""
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT username, password_hash, role, created_at FROM users WHERE username = ?",
+                "SELECT username, password_hash, role, created_at, token_version "
+                "FROM users WHERE username = ?",
                 (username,),
             )
             row = await cursor.fetchone()
@@ -378,6 +412,7 @@ class SqliteStore:
             "password_hash": row[1],
             "role": row[2],
             "created_at": row[3],
+            "token_version": row[4],
         }
 
     async def create_user(self, username: str, password_hash: str, role: str) -> None:
@@ -385,8 +420,8 @@ class SqliteStore:
         now_str = datetime.now(UTC).isoformat()
         async with self._connect() as db:
             await db.execute(
-                "INSERT INTO users (username, password_hash, role, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO users (username, password_hash, role, created_at, token_version) "
+                "VALUES (?, ?, ?, ?, 0)",
                 (username, password_hash, role, now_str),
             )
             await db.commit()
@@ -427,6 +462,32 @@ class SqliteStore:
             cursor = await db.execute(
                 "UPDATE users SET role = ? WHERE username = ?",
                 (role, username),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def increment_token_version(self, username: str) -> bool:
+        """BUG-5+13: bump token_version to invalidate all existing JWTs."""
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE users SET token_version = token_version + 1 WHERE username = ?",
+                (username,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        """BUG-6: atomically change role only if more than one admin remains.
+
+        Returns True if the update was applied, False if the user is the last
+        admin (no-op). Prevents two concurrent demotion requests from both
+        succeeding and leaving zero admins.
+        """
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE users SET role = ? WHERE username = ? "
+                "AND (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1",
+                (new_role, username),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -485,11 +546,7 @@ class SqliteStore:
     async def get(self, run_id: str) -> Run:
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id "
-                "FROM runs WHERE id = ?",
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE id = ?",
                 (run_id,),
             )
             row = await cursor.fetchone()
@@ -497,15 +554,19 @@ class SqliteStore:
             raise RunNotFound(run_id)
         return _row_to_run(row)
 
-    async def list(self) -> list[Run]:
+    async def list(self, limit: int | None = None) -> list[Run]:
+        # limit=None (the default) stays unbounded — callers that must see
+        # every run regardless of volume (e.g. delete_user's cascade cleanup
+        # of that user's runs) rely on this. Hot dashboard-facing endpoints
+        # pass a bounding limit instead (PERF: SqliteStore.list() had no
+        # ceiling at all, and was the shared data source for 5 of them).
+        query = f"SELECT {_RUN_COLUMNS} FROM runs ORDER BY created_at DESC"
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
         async with self._connect() as db:
-            cursor = await db.execute(
-                "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id "
-                "FROM runs ORDER BY created_at DESC"
-            )
+            cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
 
@@ -569,6 +630,51 @@ class SqliteStore:
             for r in rows
         ]
 
+    async def save_ai_diagnosis(
+        self,
+        run_id: str,
+        diagnosis: FailureDiagnosis,
+        provider: str,
+        model: str,
+        created_at: datetime,
+    ) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO run_ai_diagnosis "
+                "(run_id, diagnosis_json, provider, model, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    diagnosis.model_dump_json(),
+                    provider,
+                    model,
+                    _dt_to_iso(created_at),
+                ),
+            )
+            await db.commit()
+
+    async def get_ai_diagnosis(self, run_id: str) -> FailureDiagnosis | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "SELECT diagnosis_json FROM run_ai_diagnosis WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        # Corrupt / schema-drifted cache must not 500 the GET endpoint — treat as
+        # "no diagnosis" so the UI can offer to regenerate (mirrors the LLM-side
+        # "never 500 on bad reply" contract in failure_analysis.parse_diagnosis).
+        try:
+            return FailureDiagnosis.model_validate_json(row[0])
+        except Exception:  # noqa: BLE001 — any parse/validation failure degrades
+            logger.warning(
+                "Corrupt AI diagnosis cache for run %s; treating as missing",
+                run_id,
+                exc_info=True,
+            )
+            return None
+
     async def get_case_history(
         self,
         tests_path: str,
@@ -578,41 +684,64 @@ class SqliteStore:
         created_by: str | None = None,
         profile_id: str | None = None,
     ) -> list[CaseHistoryPoint]:
-        """One case's recent outcomes, oldest-first.
+        """One case's recent outcomes, oldest-first. See get_case_histories."""
+        result = await self.get_case_histories(
+            tests_path, [(suite, name)], limit, created_by, profile_id
+        )
+        return result[(suite, name)]
 
-        ``created_by`` and ``profile_id`` join ``runs`` to scope the history.
-        With no run-level filters, the query stays on the denormalised
-        ``run_test_cases`` table and its ``idx_cases_case`` index.
+    async def get_case_histories(
+        self,
+        tests_path: str,
+        cases: list[tuple[str, str]],
+        limit: int = 20,
+        created_by: str | None = None,
+        profile_id: str | None = None,
+    ) -> dict[tuple[str, str], list[CaseHistoryPoint]]:
+        """Recent outcomes for several (suite, name) cases, oldest-first each.
+
+        PERF: batches every case onto one connection instead of one per case
+        (create_ai_analysis loops over each failed case's history — that used
+        to mean one fresh SQLite connection per case). ``created_by`` and
+        ``profile_id`` join ``runs`` to scope the history; with no run-level
+        filters, each query stays on the denormalised ``run_test_cases``
+        table and its ``idx_cases_case`` index.
         """
+        result: dict[tuple[str, str], list[CaseHistoryPoint]] = {}
         async with self._connect() as db:
-            if created_by is None and profile_id is None:
-                cursor = await db.execute(
-                    "SELECT created_at, status FROM run_test_cases "
-                    "WHERE tests_path = ? AND suite = ? AND name = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (tests_path, suite, name, limit),
-                )
-            else:
-                clauses = ["c.tests_path = ?", "c.suite = ?", "c.name = ?"]
-                params: list[object] = [tests_path, suite, name]
-                if created_by is not None:
-                    clauses.append("r.created_by = ?")
-                    params.append(created_by)
-                if profile_id is not None:
-                    clauses.append("r.profile_id = ?")
-                    params.append(profile_id)
-                params.append(limit)
-                cursor = await db.execute(
-                    "SELECT c.created_at, c.status FROM run_test_cases c "
-                    "JOIN runs r ON c.run_id = r.id "
-                    f"WHERE {' AND '.join(clauses)} "
-                    "ORDER BY c.created_at DESC LIMIT ?",
-                    params,
-                )
-            rows = await cursor.fetchall()
-        # DESC + LIMIT keeps the most recent window; reverse to oldest-first for
-        # the timeline and the flaky flip-count.
-        return [CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1]) for r in reversed(rows)]
+            for suite, name in cases:
+                if created_by is None and profile_id is None:
+                    cursor = await db.execute(
+                        "SELECT created_at, status FROM run_test_cases "
+                        "WHERE tests_path = ? AND suite = ? AND name = ? "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (tests_path, suite, name, limit),
+                    )
+                else:
+                    clauses = ["c.tests_path = ?", "c.suite = ?", "c.name = ?"]
+                    params: list[object] = [tests_path, suite, name]
+                    if created_by is not None:
+                        clauses.append("r.created_by = ?")
+                        params.append(created_by)
+                    if profile_id is not None:
+                        clauses.append("r.profile_id = ?")
+                        params.append(profile_id)
+                    params.append(limit)
+                    cursor = await db.execute(
+                        "SELECT c.created_at, c.status FROM run_test_cases c "
+                        "JOIN runs r ON c.run_id = r.id "
+                        f"WHERE {' AND '.join(clauses)} "
+                        "ORDER BY c.created_at DESC LIMIT ?",
+                        params,
+                    )
+                rows = await cursor.fetchall()
+                # DESC + LIMIT keeps the most recent window; reverse to
+                # oldest-first for the timeline and the flaky flip-count.
+                result[(suite, name)] = [
+                    CaseHistoryPoint(created_at=_iso_to_dt(r[0]), status=r[1])
+                    for r in reversed(rows)
+                ]
+        return result
 
     async def count_flaky_tests(
         self,
@@ -855,6 +984,27 @@ class SqliteStore:
             )
             await db.commit()
 
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        """BUG-3: atomically set CANCELLED only if still QUEUED or RUNNING.
+
+        Returns True if the update was applied (run was in-flight), False if the
+        run was already in a terminal state (no-op).  Prevents ``cancel()`` from
+        overwriting a legitimate COMPLETED/FAILED/TIMEOUT with CANCELLED.
+        """
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND status IN (?, ?)",
+                (
+                    RunStatus.CANCELLED.value,
+                    finished_at,
+                    run_id,
+                    RunStatus.QUEUED.value,
+                    RunStatus.RUNNING.value,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def delete_run(self, run_id: str) -> bool:
         async with self._connect() as db:
             cursor = await db.execute("DELETE FROM runs WHERE id = ?", (run_id,))
@@ -876,11 +1026,7 @@ class SqliteStore:
         cutoff_iso = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
         async with self._connect() as db:
             cursor = await db.execute(
-                "SELECT id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id "
-                "FROM runs "
+                f"SELECT {_RUN_COLUMNS} FROM runs "
                 "WHERE finished_at <= ? AND locked = 0 "
                 "AND status IN ('completed', 'failed', 'timeout')",
                 (cutoff_iso,),
@@ -1009,6 +1155,23 @@ class SqliteStore:
             )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None:
+        # Narrow column update (mirrors claim_schedule_run's leader-election
+        # write): a full-row save_schedule() here would clobber a concurrent
+        # PUT/DELETE landing while the caller awaited orchestrator.create()
+        # (BUG-6) — PUT's new field values, or DELETE's row removal (a
+        # full-row UPSERT has nothing to conflict with once the row is gone,
+        # so it would silently re-INSERT the just-deleted schedule). A plain
+        # UPDATE on a missing row is a no-op, which is exactly what's wanted.
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE test_schedules SET next_run_at = ? WHERE id = ?",
+                (_dt_to_iso(next_run_at), schedule_id),
+            )
+            await db.commit()
 
     async def get_schedule(self, schedule_id: str) -> TestSchedule | None:
         async with self._connect() as db:

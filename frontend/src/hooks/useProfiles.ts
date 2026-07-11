@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Profile } from '../types'
 
 interface UseProfilesOpts {
@@ -60,14 +60,20 @@ export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UsePr
     [apiFetch],
   )
 
+  /**
+   * Returns whether the profile was actually deleted (confirmed by the user
+   * and accepted by the API) — B3: callers must not clear profile-scoped
+   * selection state (e.g. a selected/filtered profile id) on a cancelled or
+   * failed delete.
+   */
   const handleDeleteProfile = useCallback(
-    async (profileId: string, e?: React.MouseEvent) => {
+    async (profileId: string, e?: React.MouseEvent): Promise<boolean> => {
       if (e) e.stopPropagation()
       const msg =
         lang === 'zh'
           ? '确定要删除此执行方案吗？'
           : 'Are you sure you want to delete this profile?'
-      if (!window.confirm(msg)) return
+      if (!window.confirm(msg)) return false
 
       try {
         const resp = await apiFetch(`/profiles/${profileId}`, {
@@ -76,26 +82,34 @@ export function useProfiles({ apiFetch, enabled, lang, onProfileChanged }: UsePr
         if (resp.ok) {
           await fetchProfiles()
           onProfileChanged?.()
-        } else {
-          const err = await resp.json()
-          alert(err.detail || 'Failed to delete profile.')
+          return true
         }
+        const err = await resp.json()
+        alert(err.detail || 'Failed to delete profile.')
+        return false
       } catch (err) {
         console.error('Error deleting profile:', err)
+        return false
       }
     },
     [apiFetch, lang, fetchProfiles, onProfileChanged],
   )
 
-  return {
-    profiles,
-    profileLoadError,
-    fetchProfiles,
-    handleTriggerProfile,
-    handleDeleteProfile,
-    _reset: () => {
-      setProfiles([])
-      setProfileLoadError(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setProfiles([])
+    setProfileLoadError(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        profiles,
+        profileLoadError,
+        fetchProfiles,
+        handleTriggerProfile,
+        handleDeleteProfile,
+        _reset,
+      }) as const,
+    [profiles, profileLoadError, fetchProfiles, handleTriggerProfile, handleDeleteProfile, _reset],
+  )
 }

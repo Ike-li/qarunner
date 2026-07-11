@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Profile, Schedule } from '../types'
 import { apiMutate } from './useApi'
 
@@ -16,6 +16,8 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
   const [scheduleProfile, setScheduleProfile] = useState<Profile | null>(null)
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false)
+  const [isTriggeringSchedule, setIsTriggeringSchedule] = useState(false)
   const [schedName, setSchedName] = useState('')
   const [schedExpression, setSchedExpression] = useState('')
   const [schedTimezone, setSchedTimezone] = useState('UTC')
@@ -113,7 +115,8 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
   // ── save ───────────────────────────────────────────────────────────────
 
   const handleSaveSchedule = useCallback(async () => {
-    if (!scheduleProfile) return
+    if (!scheduleProfile || isSavingSchedule) return
+    setIsSavingSchedule(true)
     const existing = schedules.find((s) => s.profile_id === scheduleProfile.id)
     const payload = {
       name: schedName,
@@ -141,6 +144,8 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
       }
     } catch {
       setPreviewError('Network error. Failed to save schedule.')
+    } finally {
+      setIsSavingSchedule(false)
     }
   }, [
     scheduleProfile,
@@ -151,6 +156,7 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
     schedTimezone,
     apiFetch,
     fetchSchedules,
+    isSavingSchedule,
   ])
 
   // ── delete ─────────────────────────────────────────────────────────────
@@ -190,49 +196,83 @@ export function useSchedules({ apiFetch, enabled, lang }: UseSchedulesOpts) {
 
   const handleTriggerSchedule = useCallback(
     async (scheduleId: string): Promise<boolean> => {
-      const resp = await apiMutate(
-        apiFetch,
-        `/schedules/${scheduleId}/trigger`,
-        { method: 'POST' },
-        'Failed to trigger schedule.',
-      )
-      return resp !== null
+      setIsTriggeringSchedule(true)
+      try {
+        const resp = await apiMutate(
+          apiFetch,
+          `/schedules/${scheduleId}/trigger`,
+          { method: 'POST' },
+          'Failed to trigger schedule.',
+        )
+        return resp !== null
+      } finally {
+        setIsTriggeringSchedule(false)
+      }
     },
     [apiFetch],
   )
 
-  return {
-    schedules,
-    isScheduleModalOpen,
-    setIsScheduleModalOpen,
-    scheduleProfile,
-    schedName,
-    setSchedName,
-    schedExpression,
-    setSchedExpression,
-    schedTimezone,
-    setSchedTimezone,
-    schedEnabled,
-    setSchedEnabled,
-    previewNextRuns,
-    previewError,
-    scheduleLoadError,
-    fetchSchedules,
-    handleOpenScheduleModal,
-    handleSaveSchedule,
-    handleDeleteSchedule,
-    handleTriggerSchedule,
-    _reset: () => {
-      setSchedules([])
-      setIsScheduleModalOpen(false)
-      setScheduleProfile(null)
-      setSchedName('')
-      setSchedExpression('')
-      setSchedTimezone('UTC')
-      setSchedEnabled(true)
-      setPreviewNextRuns([])
-      setPreviewError(null)
-      setScheduleLoadError(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setSchedules([])
+    setIsScheduleModalOpen(false)
+    setScheduleProfile(null)
+    setSchedName('')
+    setSchedExpression('')
+    setSchedTimezone('UTC')
+    setSchedEnabled(true)
+    setPreviewNextRuns([])
+    setPreviewError(null)
+    setScheduleLoadError(false)
+    setIsSavingSchedule(false)
+    setIsTriggeringSchedule(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        schedules,
+        isScheduleModalOpen,
+        setIsScheduleModalOpen,
+        scheduleProfile,
+        schedName,
+        setSchedName,
+        schedExpression,
+        setSchedExpression,
+        schedTimezone,
+        setSchedTimezone,
+        schedEnabled,
+        setSchedEnabled,
+        previewNextRuns,
+        previewError,
+        scheduleLoadError,
+        isSavingSchedule,
+        isTriggeringSchedule,
+        fetchSchedules,
+        handleOpenScheduleModal,
+        handleSaveSchedule,
+        handleDeleteSchedule,
+        handleTriggerSchedule,
+        _reset,
+      }) as const,
+    [
+      schedules,
+      isScheduleModalOpen,
+      scheduleProfile,
+      schedName,
+      schedExpression,
+      schedTimezone,
+      schedEnabled,
+      previewNextRuns,
+      previewError,
+      scheduleLoadError,
+      isSavingSchedule,
+      isTriggeringSchedule,
+      fetchSchedules,
+      handleOpenScheduleModal,
+      handleSaveSchedule,
+      handleDeleteSchedule,
+      handleTriggerSchedule,
+      _reset,
+    ],
+  )
 }

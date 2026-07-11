@@ -38,6 +38,7 @@ def _make_orchestrator(
     process_handler=None,
     collector_preset=None,
     report_preset=None,
+    store=None,
     tests_root="/work/tests",
     artifacts_root="/artifacts",
     worker_node_id="default-node",
@@ -64,7 +65,7 @@ def _make_orchestrator(
 
     return RunOrchestrator(
         registry=registry,
-        store=InMemoryRunStore(),
+        store=store if store is not None else InMemoryRunStore(),
         scheduler=FakeScheduler(),
         process=process if process is not None else FakeProcessRunner(handler=process_handler),
         collector=FakeResultCollector(preset=collector_preset),
@@ -161,6 +162,27 @@ class TestDrain:
         await orch.drain(timeout=2.0)
         assert orch._scheduler.drained == 1
 
+    @pytest.mark.asyncio
+    async def test_drain_waits_for_pending_notify_tasks(self):
+        """BUG-11: graceful shutdown waits for in-flight notifications
+        (e.g. webhooks) to finish before the store closes, not just for the
+        scheduler to stop accepting new runs."""
+        orch = _make_orchestrator()
+        finished = False
+
+        async def _slow_notify() -> None:
+            nonlocal finished
+            await asyncio.sleep(0.01)
+            finished = True
+
+        task = asyncio.create_task(_slow_notify())
+        orch._notify_tasks.add(task)
+        task.add_done_callback(orch._notify_tasks.discard)
+
+        await orch.drain(timeout=2.0)
+
+        assert finished is True
+
 
 class TestCreate:
     """RunOrchestrator.create() validates, persists, and schedules."""
@@ -221,8 +243,13 @@ class TestCreate:
 
     @pytest.mark.asyncio
     async def test_unsafe_path_raises(self):
+        # An absolute path still escapes tests_root via safe_subpath's
+        # containment check (Path(root) / "/etc/passwd" discards root
+        # entirely per pathlib's absolute-operand semantics) — a distinct
+        # escape vector from "../.." segments, which RunRequest now rejects
+        # at construction (BUG-25) before orchestrator.create() ever runs.
         orch = _make_orchestrator(tests_root="/work/tests")
-        req = RunRequest(tests_path="../../etc")
+        req = RunRequest(tests_path="/etc/passwd")
         with pytest.raises(UnsafePath):
             await orch.create(req)
 
@@ -575,9 +602,7 @@ class TestExecute:
         assert stored.status == RunStatus.COMPLETED
 
     @pytest.mark.asyncio
-    async def test_execute_fails_before_runner_when_run_id_escapes_artifacts_root(
-        self, tmp_path
-    ):
+    async def test_execute_fails_before_runner_when_run_id_escapes_artifacts_root(self, tmp_path):
         tests_root = tmp_path / "tests"
         suite_dir = tests_root / "suite"
         suite_dir.mkdir(parents=True)
@@ -639,6 +664,40 @@ class TestExecute:
         stored = await orch._store.get(run.id)
         assert stored.status == RunStatus.CANCELLED
         assert stored.finished_at is not None
+
+    @pytest.mark.asyncio
+    async def test_execute_cancelled_during_final_save_keeps_real_outcome(self):
+        """BUG-9: if CancelledError interrupts the *final* ``store.save()`` —
+        i.e. the test already ran to completion, summary/report already
+        computed — the except-CancelledError handler must not relabel that
+        real outcome as CANCELLED. Doing so produced a contradictory record
+        (status=CANCELLED with a full summary and report attached)."""
+
+        class _CancelOnSecondSave(InMemoryRunStore):
+            # Call 1 is orch.create()'s initial QUEUED persist; call 2 is
+            # execute()'s completion save — the one this test interrupts.
+            async def save(self, run: Run) -> None:
+                calls = getattr(self, "_save_calls", 0) + 1
+                self._save_calls = calls
+                if calls == 2:
+                    raise asyncio.CancelledError
+                await super().save(run)
+
+        store = _CancelOnSecondSave()
+        summary = TestSummary(total=1, passed=1, failed=0, skipped=0, error=0, duration_ms=10)
+        orch = _make_orchestrator(
+            store=store,
+            collector_preset=CollectResult(summary=summary, cases=[]),
+        )
+        run = await orch.create(RunRequest(tests_path="suite"))
+
+        with pytest.raises(asyncio.CancelledError):
+            await orch.execute(run.id)
+
+        stored = await orch._store.get(run.id)
+        assert stored.status == RunStatus.COMPLETED
+        assert stored.summary == summary
+        assert stored.report is not None
 
     @pytest.mark.asyncio
     async def test_execute_persists_per_case_results(self):

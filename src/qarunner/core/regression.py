@@ -31,6 +31,12 @@ def diff(
     (base ok → head fails), fixed (base fails → head ok), still_failing (both
     fail). Cases only in head are ``new_cases``; cases only in base are
     ``removed_cases``. A non-fail → non-fail transition yields no signal.
+
+    BUG-27: a retry plugin (e.g. pytest-rerunfailures) can emit more than one
+    case for the same identity within a single run — one per attempt, in
+    attempt order. The *last* occurrence wins (dict construction keeps the
+    final assignment for a repeated key), matching "did this test ultimately
+    pass" rather than flagging an early failed attempt as a regression.
     """
     base_by = {_identity(c): c for c in base_cases}
     head_by = {_identity(c): c for c in head_cases}

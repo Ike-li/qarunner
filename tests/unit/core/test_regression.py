@@ -115,6 +115,35 @@ class TestDiff:
     def test_returns_regression_diff_model(self):
         assert isinstance(diff([], []), RegressionDiff)
 
+    def test_duplicate_identity_within_one_run_uses_last_occurrence(self):
+        """BUG-27: retry plugins (e.g. pytest-rerunfailures) can emit more than
+        one <testcase> for the same (suite, name) in a single run's junit.xml —
+        one element per attempt, in attempt order. diff() must not raise or
+        pick arbitrarily: the *last* occurrence (the final retry's outcome,
+        since parse_junit_xml preserves document order) determines the case's
+        status, matching what a human reading "did this test ultimately pass"
+        would expect — an early failed attempt followed by a passing retry is
+        not a new_failure."""
+        head_cases = [
+            _case("flaky", "failed", message="attempt 1"),
+            _case("flaky", "passed", message="attempt 2 (retry)"),
+        ]
+        result = diff([_case("flaky", "passed")], head_cases)
+        assert result.new_failures == []
+        assert result.fixed == []
+        assert result.still_failing == []
+
+        # And the reverse: a passing first attempt followed by a failing
+        # retry is what actually gets reported as failing (the run's own
+        # summary/exit status reflects the last attempt too).
+        head_cases_reversed = [
+            _case("flaky", "passed", message="attempt 1"),
+            _case("flaky", "failed", message="attempt 2 (retry)"),
+        ]
+        result2 = diff([_case("flaky", "passed")], head_cases_reversed)
+        assert [c.name for c in result2.new_failures] == ["flaky"]
+        assert result2.new_failures[0].message == "attempt 2 (retry)"
+
 
 class TestSelectBaseline:
     def test_no_candidates_returns_none(self):

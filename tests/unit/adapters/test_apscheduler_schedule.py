@@ -60,7 +60,7 @@ async def test_trigger_success() -> None:
     port, store, orch = _make_port()
     store.get_schedule = AsyncMock(return_value=_schedule())
     store.get_profile = AsyncMock(return_value=_profile())
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()
 
@@ -76,10 +76,13 @@ async def test_trigger_success() -> None:
     assert run_req.tests_path == "sample"
     assert orch.create.call_args[1]["created_by"] == "system:schedule"
 
-    store.save_schedule.assert_called_once()
-    saved: TestSchedule = store.save_schedule.call_args[0][0]
-    assert saved.last_run_at is not None
-    assert saved.next_run_at is not None
+    # BUG-6: only next_run_at is persisted narrowly (last_run_at is already
+    # owned by claim_schedule_run) — a full-row save_schedule() is no longer
+    # called here, so a concurrent PUT/DELETE isn't clobbered.
+    store.update_schedule_next_run.assert_called_once()
+    call_args = store.update_schedule_next_run.call_args[0]
+    assert call_args[0] == "sched-1"
+    assert call_args[1] is not None
 
 
 @pytest.mark.asyncio
@@ -88,7 +91,7 @@ async def test_trigger_passes_profile_env() -> None:
     port, store, orch = _make_port()
     store.get_schedule = AsyncMock(return_value=_schedule())
     store.get_profile = AsyncMock(return_value=_profile(env={"PROFILE_VAR": "from-profile"}))
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()
 
@@ -107,7 +110,7 @@ async def test_trigger_uses_profile_runner() -> None:
     store.get_profile = AsyncMock(
         return_value=_profile(runner="playwright", executor_mode="subprocess")
     )
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()
 
@@ -186,7 +189,7 @@ async def test_trigger_allows_admin_schedule_to_use_cross_owner_profile() -> Non
     )
     store.get_profile = AsyncMock(return_value=_profile(id="prof-bob", created_by="bob"))
     store.get_user = AsyncMock(return_value={"username": "admin", "role": "admin"})
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()
 
@@ -203,14 +206,14 @@ async def test_trigger_skips_when_already_claimed() -> None:
     store.get_schedule = AsyncMock(return_value=_schedule())
     store.get_profile = AsyncMock(return_value=_profile())
     store.claim_schedule_run = AsyncMock(return_value=False)
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     orch.create = AsyncMock()
 
     await port._trigger("sched-1")
 
     store.claim_schedule_run.assert_called_once()
     orch.create.assert_not_called()
-    store.save_schedule.assert_not_called()
+    store.update_schedule_next_run.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -247,6 +250,67 @@ async def test_trigger_dedups_across_concurrent_replicas(tmp_path: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_trigger_does_not_clobber_concurrent_schedule_update(tmp_path: Any) -> None:
+    """BUG-6: _trigger() reads a schedule snapshot, then awaits
+    orchestrator.create() (which yields control), then must persist the
+    updated next_run_at. A PUT /schedules/{id} landing during that await
+    must survive — it must not be rolled back by _trigger() saving its
+    now-stale snapshot afterwards."""
+    from qarunner.adapters.sqlite_store import SqliteStore
+
+    store = SqliteStore(str(tmp_path / "sched.db"))
+    await store.initialize()
+    await store.save_profile(_profile())
+    await store.save_schedule(_schedule(name="S", cron_expression="*/5 * * * *"))
+
+    async def create_and_concurrently_update(*args: Any, **kwargs: Any) -> None:
+        # Mirrors ScheduleService.update(): a full-row save with new values,
+        # racing the in-flight trigger's own eventual save.
+        await store.save_schedule(
+            _schedule(name="S-renamed", cron_expression="0 0 * * *", enabled=False)
+        )
+
+    orch = MagicMock()
+    orch.create = AsyncMock(side_effect=create_and_concurrently_update)
+    port = ApschedulerSchedulePort(store=store, orchestrator=orch)
+
+    await port._trigger("sched-1")
+
+    saved = await store.get_schedule("sched-1")
+    assert saved is not None
+    assert saved.name == "S-renamed"
+    assert saved.cron_expression == "0 0 * * *"
+    assert saved.enabled is False
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_trigger_does_not_resurrect_concurrently_deleted_schedule(tmp_path: Any) -> None:
+    """BUG-6: a DELETE /schedules/{id} racing with the orchestrator.create()
+    await must not be undone by _trigger()'s post-run save — a full-row
+    UPSERT has nothing to conflict with once the row is gone, so it would
+    silently re-INSERT the schedule the user just deleted."""
+    from qarunner.adapters.sqlite_store import SqliteStore
+
+    store = SqliteStore(str(tmp_path / "sched.db"))
+    await store.initialize()
+    await store.save_profile(_profile())
+    await store.save_schedule(_schedule(name="S"))
+
+    async def create_and_concurrently_delete(*args: Any, **kwargs: Any) -> None:
+        await store.delete_schedule("sched-1")
+
+    orch = MagicMock()
+    orch.create = AsyncMock(side_effect=create_and_concurrently_delete)
+    port = ApschedulerSchedulePort(store=store, orchestrator=orch)
+
+    await port._trigger("sched-1")
+
+    assert await store.get_schedule("sched-1") is None
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_trigger_handles_orchestrator_exception() -> None:
     port, store, orch = _make_port()
     store.get_schedule = AsyncMock(return_value=_schedule())
@@ -265,18 +329,18 @@ async def test_trigger_next_run_calc_failure() -> None:
     store.get_schedule = AsyncMock(return_value=_schedule())
     store.get_profile = AsyncMock(return_value=_profile())
     store.claim_schedule_run = AsyncMock(return_value=True)
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     orch.create = AsyncMock()
 
     # Both cron computations fail: the tick-claim block falls back to now(UTC)
-    # and the next_run_at computation is logged and skipped; the schedule is
-    # still saved with an updated last_run_at.
+    # and the next_run_at computation is logged and skipped — there is no new
+    # value to persist, so update_schedule_next_run is not called either.
     with (
         patch("qarunner.core.cron.previous_run", side_effect=ValueError("bad cron")),
         patch("qarunner.core.cron.next_run", side_effect=ValueError("bad cron")),
     ):
         await port._trigger("sched-1")
-    store.save_schedule.assert_called_once()
+    store.update_schedule_next_run.assert_not_called()
 
 
 # ── upsert / remove ─────────────────────────────────────────────────────────
@@ -419,7 +483,7 @@ async def test_trigger_passes_profile_id_to_orchestrator() -> None:
     port, store, orch = _make_port()
     store.get_schedule = AsyncMock(return_value=_schedule(profile_id="prof-xyz"))
     store.get_profile = AsyncMock(return_value=_profile(id="prof-xyz"))
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()
 
@@ -449,7 +513,7 @@ async def test_trigger_runs_in_docker_regardless_of_profile_mode() -> None:
             executor_mode="subprocess",
         )
     )
-    store.save_schedule = AsyncMock()
+    store.update_schedule_next_run = AsyncMock()
     store.claim_schedule_run = AsyncMock(return_value=True)
     orch.create = AsyncMock()
 

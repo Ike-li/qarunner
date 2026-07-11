@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from qarunner.api.deps import Container, get_current_admin, get_current_user
 from qarunner.api.schemas import (
+    AiAnalysisResponse,
     CaseHistoryResponse,
     CloneTestSuiteRequest,
     CredentialCreateRequest,
@@ -59,10 +60,12 @@ from qarunner.api.schemas import (
 from qarunner.core import flaky, regression, trend
 from qarunner.core.auth import create_access_token, hash_password, verify_password
 from qarunner.core.credentials import CredentialCipher
+from qarunner.core.failure_analysis import build_failure_context
 from qarunner.errors import (
     InvalidScheduleRequest,
     LoginLockedOut,
     ProfileNotFound,
+    RateLimited,
     RunNotFound,
     ScheduleNotFound,
     UnknownRunner,
@@ -86,6 +89,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# PERF: SqliteStore.list() was unbounded and is the shared data source for
+# every dashboard-facing endpoint below — a ceiling, not a real page size, so
+# it's set high enough that no realistic dataset today hits it (this is an
+# internal team tool, not a public SaaS). Endpoints that must see every run
+# regardless of volume (e.g. delete_user's cascade cleanup) call list() with
+# no limit= and stay unbounded.
+_DASHBOARD_RUNS_LIMIT = 5000
+
 
 def _require_owner_access(created_by: str, user: User) -> None:
     """Raise 403 unless *user* owns the resource (by ``created_by``) or is admin.
@@ -102,6 +113,20 @@ def _require_owner_access(created_by: str, user: User) -> None:
 def _require_run_access(run: Run, user: User) -> None:
     """Raise 403 unless *user* owns *run* or is an admin (object-level authz)."""
     _require_owner_access(run.created_by, user)
+
+
+async def _get_owned_run(container: Container, run_id: str, user: User) -> Run:
+    """Fetch a run by id (404 if missing) and enforce object-level access (403).
+
+    Factors out the "get + 404 + _require_run_access" sequence repeated
+    across every run-scoped endpoint below.
+    """
+    try:
+        run = await container.store.get(run_id)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
+    _require_run_access(run, user)
+    return run
 
 
 async def _require_profile_access(container: Container, profile_id: str, user: User) -> None:
@@ -132,9 +157,7 @@ def _is_shared_suite(suite: TestSuite, admin_user: str) -> bool:
     return suite.created_by in {admin_user, "system"}
 
 
-async def _visible_suite_names(
-    container: Container, names: list[str], user: User
-) -> list[str]:
+async def _visible_suite_names(container: Container, names: list[str], user: User) -> list[str]:
     """Filter recorded suite names for non-admin users; keep unrecorded dirs visible."""
     if user.role == UserRole.ADMIN:
         return names
@@ -142,7 +165,8 @@ async def _visible_suite_names(
     return [
         name
         for name in names
-        if (suite := suites_by_name.get(name)) is None or suite.created_by == user.username
+        if (suite := suites_by_name.get(name)) is None
+        or suite.created_by == user.username
         or _is_shared_suite(suite, container.settings.admin_user)
     ]
 
@@ -162,15 +186,21 @@ async def _require_tests_path_suite_access(
         await _require_registered_suite_access(container, suite_name, user)
 
 
-def _client_ip(request: Request) -> str:
+def _client_ip(request: Request, trusted_proxies: str = "") -> str:
     """Best-effort client IP for audit/throttle keys ('unknown' if unavailable).
 
-    Returns the transport peer address; behind a reverse proxy this is the
-    proxy's IP, so a trusted-proxy ``X-Forwarded-For`` story is needed before
-    relying on it for per-client throttling in such deployments (SEC-6 /
-    deployment hardening).
+    Returns the transport peer address by default.  When ``trusted_proxies`` is
+    non-empty and the peer address is in that set, the leftmost
+    ``X-Forwarded-For`` entry is returned instead — that is the real client IP
+    behind a reverse proxy (BUG-8).
     """
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    if trusted_proxies and peer in {p.strip() for p in trusted_proxies.split(",") if p.strip()}:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # Leftmost entry is the original client per RFC 7239 convention.
+            return xff.split(",")[0].strip()
+    return peer
 
 
 # ── External test-suite git operations (stage 2) ─────────────────────────
@@ -412,7 +442,7 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
     it (XSS). The body still returns the token for programmatic API clients.
     """
     container = request.app.state.container
-    client_ip = _client_ip(request)
+    client_ip = _client_ip(request, container.settings.trusted_proxies)
     throttle_key = f"{req.username}|{client_ip}"
     try:
         container.login_throttle.check(throttle_key)
@@ -425,7 +455,18 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
         ) from exc
 
     user_record = await container.store.get_user(req.username)
-    if not user_record or not verify_password(req.password, user_record["password_hash"]):
+    if not user_record:
+        # BUG-1: always call verify_password even when user doesn't exist to
+        # prevent timing side-channel that distinguishes "user not found" from
+        # "wrong password" (bcrypt takes ~100-200ms; Python short-circuit skips it).
+        verify_password(req.password, "$2b$12$" + "0" * 53)
+        container.login_throttle.record_failure(throttle_key)
+        logger.warning("Failed login username=%r ip=%s", req.username, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    if not verify_password(req.password, user_record["password_hash"]):
         container.login_throttle.record_failure(throttle_key)
         logger.warning("Failed login username=%r ip=%s", req.username, client_ip)
         raise HTTPException(
@@ -434,7 +475,12 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
         )
 
     container.login_throttle.record_success(throttle_key)
-    token = create_access_token(user_record["username"], user_record["role"], container.settings)
+    token = create_access_token(
+        user_record["username"],
+        user_record["role"],
+        container.settings,
+        token_version=user_record.get("token_version", 0),
+    )
     response.set_cookie(
         "token",
         token,
@@ -449,14 +495,33 @@ async def login(req: LoginRequest, request: Request, response: Response) -> Toke
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request) -> Response:
-    """Clear the auth cookie (SEC-6).
+    """Clear the auth cookie and revoke the token (BUG-5+13).
 
-    Deliberately unauthenticated: an expired or otherwise-invalid session must
-    still be tearable down, and clearing a cookie leaks nothing. The delete must
-    echo the same path/SameSite/Secure attributes used at login or the browser
-    keeps the original cookie.
+    Deliberately accepts unauthenticated requests: an expired or otherwise-
+    invalid session must still be tearable down, and clearing a cookie leaks
+    nothing. When a valid token is present, the user's token_version is bumped
+    so every other JWT for that user is immediately invalidated.
+    The delete must echo the same path/SameSite/Secure attributes used at
+    login or the browser keeps the original cookie.
     """
-    settings = request.app.state.container.settings
+    container = request.app.state.container
+    settings = container.settings
+
+    # Best-effort token revocation: extract the JWT from the cookie or
+    # Authorization header and bump the user's token_version so all other
+    # sessions are invalidated. Failures are silent — logout always succeeds.
+    token = request.cookies.get("token")
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:]
+    if token:
+        from qarunner.core.auth import decode_access_token
+
+        payload = decode_access_token(token, settings)
+        if payload and "sub" in payload:
+            await container.store.increment_token_version(payload["sub"])
+
     resp = Response(status_code=status.HTTP_204_NO_CONTENT)
     resp.delete_cookie(
         "token",
@@ -546,6 +611,31 @@ async def delete_user(
     existing = await container.store.get_user(username)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+    # BUG-22: cascade-delete orphaned runs/profiles/schedules/credentials before
+    # deleting the user, so records don't become invisible to all non-admins.
+    # Deliberately unbounded (no limit=) — must see every run this user owns,
+    # not just the newest _DASHBOARD_RUNS_LIMIT, or old runs would survive
+    # the cascade as orphans.
+    runs = await container.store.list()
+    for r in runs:
+        if r.created_by == username:
+            await container.store.delete_run(r.id)
+    profiles = await container.store.list_profiles()
+    for p in profiles:
+        if p.created_by == username:
+            await container.store.delete_profile(p.id)
+    schedules = await container.store.list_schedules()
+    for s in schedules:
+        if s.created_by == username:
+            await container.store.delete_schedule(s.id)
+    creds = await container.store.list_credentials()
+    for c in creds:
+        if c.created_by == username:
+            await container.store.delete_credential(c.id)
+    suites = await container.store.list_suites()
+    for suite in suites:
+        if suite.created_by == username:
+            await container.store.delete_suite(suite.name)
     await container.store.delete_user(username)
     return {"status": "success", "message": f"User {username} deleted"}
 
@@ -575,14 +665,20 @@ async def update_user(
     if req.role is not None and existing["role"] == "admin" and req.role.value != "admin":
         if username == admin_user.username:
             raise HTTPException(status_code=400, detail="You cannot demote your own account.")
-        users = await container.store.list_users()
-        admin_count = sum(1 for u in users if u["role"] == "admin")
-        if admin_count <= 1:
+        # BUG-6: use atomic demote to prevent TOCTOU race that could leave zero admins.
+        demoted = await container.store.demote_if_not_last_admin(username, req.role.value)
+        if not demoted:
             raise HTTPException(status_code=400, detail="Cannot demote the last remaining admin.")
 
     if req.password is not None:
         await container.store.update_password(username, hash_password(req.password))
-    if req.role is not None:
+        # BUG-5+13: invalidate all existing JWTs for this user after a
+        # password change by bumping the stored token_version.
+        await container.store.increment_token_version(username)
+    if req.role is not None and existing["role"] == "admin" and req.role.value != "admin":
+        # Already handled atomically above; skip the redundant update_role.
+        pass
+    elif req.role is not None:
         await container.store.update_role(username, req.role.value)
 
     new_role = req.role.value if req.role is not None else existing["role"]
@@ -1367,7 +1463,7 @@ async def list_runs(
 ) -> RunListResponse:
     """List runs, newest first (non-admins see only their own)."""
     container = request.app.state.container
-    runs = await container.store.list()
+    runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     if current_user.role != UserRole.ADMIN:
         runs = [r for r in runs if r.created_by == current_user.username]
     return RunListResponse(runs=[run_to_response(r) for r in runs])
@@ -1378,7 +1474,7 @@ async def get_runs_trend(
     request: Request,
     tests_path: str,
     profile_id: str | None = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1),
     current_user: User = Depends(get_current_user),
 ) -> RunTrendResponse:
     """Pass-rate trend for a suite across its runs (cross-run stage 1).
@@ -1388,7 +1484,7 @@ async def get_runs_trend(
     own runs); points are COMPLETED runs carrying a summary, oldest-first.
     """
     container = request.app.state.container
-    runs = await container.store.list()
+    runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     if current_user.role != UserRole.ADMIN:
         runs = [r for r in runs if r.created_by == current_user.username]
     if profile_id is not None:
@@ -1408,7 +1504,7 @@ async def get_metrics(
     Owner-scoped: non-admins see only their own runs.
     """
     container = request.app.state.container
-    runs = await container.store.list()
+    runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     owner = current_user.username if current_user.role != UserRole.ADMIN else None
     if owner is not None:
         runs = [r for r in runs if r.created_by == owner]
@@ -1577,20 +1673,12 @@ async def get_run(
 ) -> RunResponse:
     """Retrieve a single run by ID."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    run = await _get_owned_run(container, run_id, current_user)
 
     cfg = container.settings
     run_dir = _safe_run_artifact_dir(cfg.artifacts_root, run_id)
-    stdout_file = (
-        _safe_run_log_file(run_dir, "stdout.log") if run_dir is not None else None
-    )
-    stderr_file = (
-        _safe_run_log_file(run_dir, "stderr.log") if run_dir is not None else None
-    )
+    stdout_file = _safe_run_log_file(run_dir, "stdout.log") if run_dir is not None else None
+    stderr_file = _safe_run_log_file(run_dir, "stderr.log") if run_dir is not None else None
 
     if stdout_file is None:
         run_dir_fallback = _safe_run_artifact_dir("./artifacts", run_id)
@@ -1631,13 +1719,9 @@ async def get_run_diff(
     flooding every case into ``new_cases``.
     """
     container = request.app.state.container
-    try:
-        head = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(head, current_user)
+    head = await _get_owned_run(container, run_id, current_user)
 
-    all_runs = await container.store.list()
+    all_runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
     # Owner-scope the baseline candidates exactly like GET /runs and
     # /runs/trend: a non-admin must not get another user's run picked as the
     # baseline, which would leak that run's id + per-case results through the
@@ -1667,7 +1751,7 @@ async def get_case_history(
     suite: str,
     name: str,
     profile_id: str | None = None,
-    limit: int = 20,
+    limit: int = Query(20, ge=1),
     current_user: User = Depends(get_current_user),
 ) -> CaseHistoryResponse:
     """A single test case's recent outcomes + flaky verdict (cross-run stage 3).
@@ -1693,6 +1777,136 @@ async def get_case_history(
     return CaseHistoryResponse(points=points, flaky=is_flaky, flip_count=flips)
 
 
+def _run_log_tail(artifacts_root: str, run_id: str, max_bytes: int) -> str:
+    """Return a run's combined stdout+stderr tail, trimmed to ``max_bytes``.
+
+    Both streams are included so environment / container / timeout failures that
+    only land on stderr still reach the LLM. The two tails are concatenated with
+    clear markers, then the combined text is right-trimmed to ``max_bytes``.
+    """
+    run_dir = _safe_run_artifact_dir(artifacts_root, run_id)
+    if run_dir is None:
+        return ""
+    parts: list[str] = []
+    for name, label in (("stdout.log", "stdout"), ("stderr.log", "stderr")):
+        log_file = _safe_run_log_file(run_dir, name)
+        if log_file is None:
+            continue
+        text = _read_log_tail(log_file)
+        if text:
+            parts.append(f"--- {label} ---\n{text}")
+    if not parts:
+        return ""
+    return "\n".join(parts)[-max_bytes:]
+
+
+# Backward-compatible alias used by unit tests that still patch the old name.
+_run_stdout_tail = _run_log_tail
+
+
+@router.get("/runs/{run_id}/ai-analysis", response_model=AiAnalysisResponse)
+async def get_ai_analysis(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> AiAnalysisResponse:
+    """Return a run's cached AI failure diagnosis (cross-run stage 4).
+
+    ``enabled`` reflects whether an LLM provider is configured; ``diagnosis`` is
+    null until one is generated via POST. Owner-scoped like the other run views.
+    """
+    container = request.app.state.container
+    await _get_owned_run(container, run_id, current_user)
+    cached = await container.store.get_ai_diagnosis(run_id)
+    return AiAnalysisResponse(enabled=container.ai_analyzer is not None, diagnosis=cached)
+
+
+@router.post("/runs/{run_id}/ai-analysis", response_model=AiAnalysisResponse)
+async def create_ai_analysis(
+    run_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> AiAnalysisResponse:
+    """Generate and cache an AI diagnosis of why a run failed (read-only).
+
+    Aggregates the run's failed cases, log tail (stdout+stderr), baseline diff,
+    pass-rate trend, and per-case flaky history — all owner-scoped exactly like
+    /diff and /cases/history — then asks the configured provider for a structured
+    diagnosis. Never modifies tests or code. Returns ``enabled: false`` when no
+    provider is configured, and an empty diagnosis with ``detail`` when the run
+    has no failing cases. Rate-limited per user (HTTP 429) to bound LLM spend.
+    """
+    container = request.app.state.container
+    run = await _get_owned_run(container, run_id, current_user)
+
+    analyzer = container.ai_analyzer
+    if analyzer is None:
+        return AiAnalysisResponse(enabled=False)
+
+    # Per-user sliding window around the paid LLM call. Checked after authz and
+    # the enabled gate so a disabled feature never burns a token, and a 403 never
+    # counts against the budget. max_calls=0 disables the limiter entirely.
+    limiter = container.ai_rate_limiter
+    if limiter is not None:
+        try:
+            limiter.check_and_record(current_user.username)
+        except RateLimited as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many AI analysis requests. Try again later.",
+                headers={"Retry-After": str(exc.retry_after)},
+            ) from exc
+
+    cfg = container.settings
+    cases = await container.store.get_cases_for_run(run_id)
+
+    all_runs = await container.store.list(limit=_DASHBOARD_RUNS_LIMIT)
+    if current_user.role != UserRole.ADMIN:
+        all_runs = [r for r in all_runs if r.created_by == current_user.username]
+
+    baseline = regression.select_baseline(run, all_runs)
+    baseline_diff = None
+    if baseline is not None:
+        base_cases = await container.store.get_cases_for_run(baseline.id)
+        baseline_diff = regression.diff(base_cases, cases)
+
+    trend_points = trend.trend_points(all_runs, run.tests_path)
+
+    policy = flaky.FlakyPolicy(
+        min_observations=cfg.flaky_min_observations,
+        flip_threshold=cfg.flaky_flip_threshold,
+    )
+    created_by = None if current_user.role == UserRole.ADMIN else current_user.username
+    # PERF: batch every failed/error case's history onto one connection
+    # instead of one get_case_history() call (and connection) per case.
+    failed_identities = [(c.suite, c.name) for c in cases if c.status in ("failed", "error")]
+    histories = await container.store.get_case_histories(
+        run.tests_path, failed_identities, 20, created_by, run.profile_id
+    )
+    flaky_identities: set[tuple[str, str]] = {
+        identity
+        for identity, history in histories.items()
+        if flaky.flakiness([p.status for p in history], policy=policy)[0]
+    }
+
+    log_tail = _run_log_tail(cfg.artifacts_root, run_id, cfg.ai_analysis_max_log_bytes)
+    allure_url = (
+        f"/runs/{run_id}/report" if run.report is not None and run.report.html_generated else None
+    )
+
+    context = build_failure_context(
+        run, cases, log_tail, baseline_diff, trend_points, flaky_identities, allure_url
+    )
+    if context is None:
+        return AiAnalysisResponse(enabled=True, detail="No failing cases to diagnose.")
+
+    diagnosis = await analyzer.analyze(context)
+    await container.store.save_ai_diagnosis(
+        run_id, diagnosis, cfg.ai_provider, cfg.ai_model, datetime.now(UTC)
+    )
+    return AiAnalysisResponse(enabled=True, diagnosis=diagnosis)
+
+
 def _resolve_report_file(report: ReportRef, artifacts_root: str) -> Path:
     """Resolve an Allure HTML entrypoint without allowing report path escape."""
     from qarunner.core.paths import safe_subpath
@@ -1715,11 +1929,7 @@ async def get_report(
 ) -> FileResponse:
     """Serve the HTML report for a completed run."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    run = await _get_owned_run(container, run_id, current_user)
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
     report_file = _resolve_report_file(run.report, container.settings.artifacts_root)
@@ -1735,11 +1945,7 @@ async def get_report_assets(
 ) -> FileResponse:
     """Serve Allure report static assets (JS, CSS, data files) securely."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    run = await _get_owned_run(container, run_id, current_user)
     if not run.report or not run.report.html_generated or not run.report.allure_report_file:
         raise HTTPException(status_code=404, detail="Report not available")
 
@@ -1767,11 +1973,7 @@ async def list_run_artifacts(
 ) -> RunArtifactListResponse:
     """List downloadable runner artifacts for a completed run."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    await _get_owned_run(container, run_id, current_user)
 
     artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
     if artifact_root is None or not artifact_root.is_dir():
@@ -1797,11 +1999,7 @@ async def download_run_artifacts_archive(
 ) -> Response:
     """Download all runner artifacts for a run as a zip archive."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    await _get_owned_run(container, run_id, current_user)
 
     artifact_root = _run_artifacts_dir(container.settings.artifacts_root, run_id)
     if artifact_root is None or not artifact_root.is_dir():
@@ -1828,11 +2026,7 @@ async def download_run_artifact(
 ) -> FileResponse:
     """Download a single runner artifact without allowing path escape."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    await _get_owned_run(container, run_id, current_user)
 
     from qarunner.core.paths import safe_subpath
 
@@ -1865,11 +2059,7 @@ async def stream_run_logs(
 ) -> StreamingResponse:
     """Stream stdout logs in real-time using Server-Sent Events (SSE)."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    await _get_owned_run(container, run_id, current_user)
 
     import asyncio
 
@@ -1965,11 +2155,7 @@ async def lock_run(
 ) -> RunResponse:
     """Toggle lock/pin status of a run to protect it from deletion."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    await _get_owned_run(container, run_id, current_user)
 
     await container.store.lock_run(run_id, req.locked)
     updated_run = await container.store.get(run_id)
@@ -1984,11 +2170,7 @@ async def cancel_run(
 ) -> RunResponse:
     """Cancel a queued or running run (owner/admin). Terminal runs return 409."""
     container = request.app.state.container
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    run = await _get_owned_run(container, run_id, current_user)
     if run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
         raise HTTPException(
             status_code=409,
@@ -2013,11 +2195,7 @@ async def delete_run(
     """
     container = request.app.state.container
     cfg = container.settings
-    try:
-        run = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(run, current_user)
+    run = await _get_owned_run(container, run_id, current_user)
     if run.locked:
         raise HTTPException(status_code=409, detail="Run is locked; unlock it before deleting.")
     if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
@@ -2047,11 +2225,7 @@ async def rerun_run(
     ``system:schedule``.
     """
     container = request.app.state.container
-    try:
-        original = await container.store.get(run_id)
-    except RunNotFound:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found") from None
-    _require_run_access(original, current_user)
+    original = await _get_owned_run(container, run_id, current_user)
     new_run = await _create_run_guarded(
         container,
         RunRequest.from_run(original),

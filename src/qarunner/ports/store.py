@@ -14,6 +14,7 @@ from typing import Protocol, runtime_checkable
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
+    FailureDiagnosis,
     Run,
     TestCaseResult,
     TestProfile,
@@ -32,7 +33,16 @@ class RunStore(Protocol):
         """Return the run or raise RunNotFound."""
         ...
 
-    async def list(self) -> list[Run]: ...
+    async def list(self, limit: int | None = None) -> list[Run]: ...
+
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        """Atomically set CANCELLED only if the run is still QUEUED or RUNNING.
+
+        Returns True if the update was applied, False if the run was already
+        in a terminal state (no-op) — prevents overwriting a legitimate
+        COMPLETED/FAILED/TIMEOUT with CANCELLED.
+        """
+        ...
 
     async def save_cases(
         self,
@@ -76,6 +86,22 @@ class UserStore(Protocol):
         """Set a user's role. Returns True if the user existed (P1-3)."""
         ...
 
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        """Atomically change role only if more than one admin remains.
+
+        Returns True if the update was applied, False if the user is the
+        last admin (no-op) — prevents two concurrent demotion requests from
+        both succeeding and leaving zero admins.
+        """
+        ...
+
+    async def increment_token_version(self, username: str) -> bool:
+        """Bump a user's token_version, invalidating all existing JWTs.
+
+        Returns True if the user existed (BUG-5+13).
+        """
+        ...
+
 
 @runtime_checkable
 class ProfileStore(Protocol):
@@ -103,6 +129,10 @@ class ScheduleStore(Protocol):
     async def delete_schedule(self, schedule_id: str) -> bool: ...
 
     async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool: ...
+
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -188,6 +218,17 @@ class Store(
         """
         ...
 
+    async def get_case_histories(
+        self,
+        tests_path: str,
+        cases: list[tuple[str, str]],
+        limit: int = 20,
+        created_by: str | None = None,
+        profile_id: str | None = None,
+    ) -> dict[tuple[str, str], list[CaseHistoryPoint]]:
+        """Batched get_case_history for several (suite, name) cases at once."""
+        ...
+
     async def count_flaky_tests(
         self,
         days: int = 30,
@@ -197,6 +238,21 @@ class Store(
         flip_threshold: int = 3,
     ) -> int:
         """Count unique test cases matching the configured flaky policy."""
+        ...
+
+    async def save_ai_diagnosis(
+        self,
+        run_id: str,
+        diagnosis: FailureDiagnosis,
+        provider: str,
+        model: str,
+        created_at: datetime,
+    ) -> None:
+        """Cache a run's AI failure diagnosis (upsert; one row per run)."""
+        ...
+
+    async def get_ai_diagnosis(self, run_id: str) -> FailureDiagnosis | None:
+        """Return a run's cached diagnosis, or None if not yet generated."""
         ...
 
     async def dequeue_next_queued(self) -> str | None:

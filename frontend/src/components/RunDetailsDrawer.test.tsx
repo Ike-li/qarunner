@@ -273,4 +273,62 @@ describe('RunDetailsDrawer', () => {
       'metadata.json',
     )
   })
+
+  it('expands a diff-tab case row to fetch and show its history, and stays stable across unmount', async () => {
+    dashboard.current.terminal.drawerTab = 'diff'
+    let resolveHistory!: (v: Response) => void
+    const historyPromise = new Promise<Response>((resolve) => {
+      resolveHistory = resolve
+    })
+
+    dashboard.current.apiFetch = vi.fn((path: string) => {
+      if (path.includes('/diff')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              baseline: { id: 'baseline-1', created_at: '2026-06-30T00:00:00Z', status: 'completed' },
+              diff: {
+                new_failures: [
+                  { suite: 'checkout', name: 'test_guest_checkout', status: 'failed', duration_ms: 100, message: null },
+                ],
+                fixed: [],
+                still_failing: [],
+                new_cases: [],
+                removed_cases: [],
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+      if (path.includes('/cases/history')) return historyPromise
+      return Promise.resolve(new Response(JSON.stringify({ artifacts: [] }), { status: 200 }))
+    })
+
+    const { unmount } = render(<RunDetailsDrawer />)
+
+    const toggle = await screen.findByTestId('diff-case-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    await waitFor(() => {
+      expect(dashboard.current.apiFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/cases/history?tests_path=checkout&suite=checkout&name=test_guest_checkout'),
+      )
+    })
+    expect(screen.getByTestId('case-history')).toHaveTextContent('caseHistoryLoading')
+
+    // The row (and the whole drawer) unmounts before the history request
+    // settles — resolving it afterwards must not throw (BUG: this fetch had
+    // no unmount guard, unlike this file's other fetches).
+    unmount()
+    resolveHistory(
+      new Response(JSON.stringify({ points: [], flaky: false, flip_count: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await historyPromise
+  })
 })

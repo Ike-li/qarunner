@@ -1,18 +1,20 @@
 import {
-  Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2, ChevronDown, ChevronRight,
-  Clock, Copy, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw, Shuffle,
-  Terminal, Trash2, X, XCircle,
+  Activity, AlertTriangle, Ban, BarChart3, Box, Check, CheckCircle2,
+  Clock, Copy, Download, ExternalLink, GitCompare, Maximize2, Minus, Plus, RotateCw,
+  Sparkles, Terminal, Trash2, X, XCircle,
 } from 'lucide-react'
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { SideSheet, Tabs } from '@douyinfe/semi-ui'
 import styles from '../App.module.css'
 import { formatDuration } from '../logUtils'
 import { diffBuckets, diffIsEmpty, type DiffTone } from '../runDiff'
-import { caseCells, type CaseTone } from '../runCaseHistory'
+import { formatBytes, groupRunArtifacts, traceViewerCommand } from '../runArtifacts'
 import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
-import type { TranslationKey } from '../i18n'
-import type { CaseHistory, RunArtifact, RunDiff, TestCaseResult } from '../types'
+import type { RunArtifact, RunDiff, TestCaseResult } from '../types'
+import { AiInsightsTab } from './AiInsightsTab'
+import { CaseRow } from './CaseRow'
+import { LogsBody } from './LogsBody'
 
 const DIFF_TONE_COLOR: Record<DiffTone, string> = {
   danger: '#ef4444',
@@ -38,178 +40,11 @@ const DIFF_BUCKET_LABEL = {
   removed_cases: 'diffRemovedCases',
 } as const
 
-const CASE_TONE_COLOR: Record<CaseTone, string> = {
-  pass: '#10b981',
-  fail: '#ef4444',
-  error: '#b91c1c',
-  skip: '#64748b',
-}
-
 const CASE_STATUS_COLOR: Record<TestCaseResult['status'], string> = {
   passed: '#10b981',
   failed: '#ef4444',
   error: '#b91c1c',
   skipped: '#64748b',
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes % 1024 === 0 ? 0 : 1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-type ArtifactGroupKey = 'trace' | 'screenshot' | 'video' | 'other'
-
-const ARTIFACT_GROUPS: Array<{ key: ArtifactGroupKey; labelKey: TranslationKey }> = [
-  { key: 'trace', labelKey: 'artifactGroupTrace' },
-  { key: 'screenshot', labelKey: 'artifactGroupScreenshot' },
-  { key: 'video', labelKey: 'artifactGroupVideo' },
-  { key: 'other', labelKey: 'artifactGroupOther' },
-]
-
-const ARTIFACT_GROUP_ORDER: Record<ArtifactGroupKey, number> = {
-  trace: 0,
-  screenshot: 1,
-  video: 2,
-  other: 3,
-}
-
-function artifactGroupKey(artifact: RunArtifact): ArtifactGroupKey {
-  const path = artifact.path.toLowerCase()
-  const contentType = artifact.content_type.toLowerCase()
-  if (path.endsWith('trace.zip') || path.includes('/trace.')) return 'trace'
-  if (
-    contentType.startsWith('image/') ||
-    /\.(png|jpe?g|webp)$/.test(path)
-  ) return 'screenshot'
-  if (contentType.startsWith('video/') || /\.(webm|mp4)$/.test(path)) return 'video'
-  return 'other'
-}
-
-function groupRunArtifacts(artifacts: RunArtifact[]) {
-  const sorted = artifacts
-    .map((artifact) => ({ artifact, group: artifactGroupKey(artifact) }))
-    .sort((a, b) => {
-      const groupDelta = ARTIFACT_GROUP_ORDER[a.group] - ARTIFACT_GROUP_ORDER[b.group]
-      if (groupDelta !== 0) return groupDelta
-      return a.artifact.path.localeCompare(b.artifact.path)
-    })
-
-  return ARTIFACT_GROUPS.map((group) => ({
-    ...group,
-    items: sorted
-      .map((item, index) => ({ ...item, index }))
-      .filter((item) => item.group === group.key),
-  })).filter((group) => group.items.length > 0)
-}
-
-function traceViewerCommand(artifact: RunArtifact): string {
-  return `npx playwright show-trace ${artifact.path}`
-}
-
-/** One case row inside the Diff tab. Clicking it lazily pulls the case's
- *  cross-run outcome history (/cases/history) and paints it as a strip of
- *  coloured cells (oldest→newest); a server-computed flaky verdict shows as a
- *  badge that sticks once loaded. History is fetched at most once per mount on
- *  success; a failed fetch retries on the next expand. */
-function CaseRow({ caseResult }: { caseResult: TestCaseResult }) {
-  const d = useDashboard()
-  const [expanded, setExpanded] = useState(false)
-  const [history, setHistory] = useState<CaseHistory | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [historyError, setHistoryError] = useState(false)
-  const c = caseResult
-  const testsPath = d.runs.selectedRun?.tests_path
-  const profileId = d.runs.selectedRun?.profile_id
-  const label = c.suite ? `${c.suite}::${c.name}` : c.name
-
-  const toggle = () => {
-    const next = !expanded
-    setExpanded(next)
-    if (next && history === null && !loading && testsPath) {
-      setLoading(true)
-      setHistoryError(false)
-      const qs = new URLSearchParams({ tests_path: testsPath, suite: c.suite, name: c.name })
-      if (profileId) qs.set('profile_id', profileId)
-      d.apiFetch(`/cases/history?${qs.toString()}`)
-        .then((r) => {
-          if (!r.ok) throw new Error(`Case history request failed: ${r.status}`)
-          return r.json()
-        })
-        .then((data: CaseHistory | null) => {
-          setHistory(data)
-          setHistoryError(false)
-        })
-        .catch(() => {
-          setHistory(null)
-          setHistoryError(true)
-        })
-        .finally(() => setLoading(false))
-    }
-  }
-
-  const cells = history ? caseCells(history.points) : []
-
-  return (
-    <div style={{ fontSize: '0.8rem' }}>
-      <button
-        type="button"
-        onClick={toggle}
-        data-testid="diff-case-toggle"
-        aria-expanded={expanded}
-        style={{
-          display: 'flex', alignItems: 'center', gap: '0.3rem', width: '100%',
-          padding: 0, background: 'transparent', border: 'none', cursor: 'pointer',
-          color: 'inherit', textAlign: 'left', font: 'inherit',
-        }}
-      >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <code>{label}</code>
-        {history?.flaky && (
-          <span
-            data-testid="flaky-badge"
-            title={d.t('flakyTooltip')}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '2px',
-              padding: '0 0.35rem', borderRadius: 8, fontSize: '0.65rem', fontWeight: 600,
-              color: '#f59e0b', border: '1px solid #f59e0b',
-            }}
-          >
-            <Shuffle size={10} />{d.t('flakyBadge')}
-          </span>
-        )}
-      </button>
-      {c.message && (
-        <div style={{ opacity: 0.6, fontSize: '0.75rem', whiteSpace: 'pre-wrap', paddingLeft: '1rem' }}>{c.message}</div>
-      )}
-      {expanded && (
-        <div data-testid="case-history" style={{ marginTop: '0.35rem', paddingLeft: '1rem' }}>
-          {loading ? (
-            <span style={{ opacity: 0.6 }}>{d.t('caseHistoryLoading')}</span>
-          ) : historyError ? (
-            <span data-testid="case-history-error" style={{ opacity: 0.75, color: '#f59e0b' }}>
-              {d.t('caseHistoryLoadError')}
-            </span>
-          ) : !history || cells.length === 0 ? (
-            <span style={{ opacity: 0.6 }}>{d.t('caseHistoryEmpty')}</span>
-          ) : (
-            <>
-              <div style={{ opacity: 0.6, fontSize: '0.7rem', marginBottom: '0.25rem' }}>{d.t('caseHistoryHint')}</div>
-              <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
-                {cells.map((cell, i) => (
-                  <span
-                    key={i}
-                    title={`${cell.status} · ${new Date(cell.at).toLocaleString()}`}
-                    style={{ width: 12, height: 12, borderRadius: 2, background: CASE_TONE_COLOR[cell.tone], display: 'inline-block' }}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 /** Shared outline style for the drawer's header action buttons (cancel / re-run
@@ -401,9 +236,7 @@ export function RunDetailsDrawer() {
               type="button"
               onClick={() => {
                 if (
-                  window.confirm(
-                    d.lang === 'zh' ? '确定要取消这个运行吗？' : 'Cancel this run?',
-                  )
+                  window.confirm(d.t('drawerCancelRunConfirm'))
                 ) {
                   d.runs.handleCancelRun(d.runs.selectedRun!.id)
                 }
@@ -411,7 +244,7 @@ export function RunDetailsDrawer() {
               style={{ ...actionBtnStyle('var(--semi-color-danger)'), marginRight: '2.5rem' }}
             >
               <Ban size={15} />
-              {d.lang === 'zh' ? '终止运行' : 'Cancel Run'}
+              {d.t('drawerCancelRunBtn')}
             </button>
           )}
           {d.runs.selectedRun &&
@@ -424,18 +257,14 @@ export function RunDetailsDrawer() {
                 style={actionBtnStyle('var(--semi-color-primary)')}
               >
                 <RotateCw size={15} />
-                {d.lang === 'zh' ? '重新运行' : 'Re-run'}
+                {d.t('drawerRerunBtn')}
               </button>
               {!d.runs.selectedRun.locked && (
                 <button
                   type="button"
                   onClick={() => {
                     if (
-                      window.confirm(
-                        d.lang === 'zh'
-                          ? '确定删除此运行及其产物吗？此操作不可撤销。'
-                          : 'Delete this run and its artifacts? This cannot be undone.',
-                      )
+                      window.confirm(d.t('drawerDeleteRunConfirm'))
                     ) {
                       d.runs.handleDeleteRun(d.runs.selectedRun!.id)
                     }
@@ -443,7 +272,7 @@ export function RunDetailsDrawer() {
                   style={actionBtnStyle('var(--semi-color-danger)')}
                 >
                   <Trash2 size={15} />
-                  {d.lang === 'zh' ? '删除运行' : 'Delete Run'}
+                  {d.t('drawerDeleteRunBtn')}
                 </button>
               )}
             </div>
@@ -551,6 +380,15 @@ export function RunDetailsDrawer() {
                   </span>
                 }
               />
+              <Tabs.TabPane
+                itemKey="ai-insights"
+                tab={
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }} data-testid="drawer-tab-ai">
+                    <Sparkles size={14} />
+                    <span>{d.t('aiTab')}</span>
+                  </span>
+                }
+              />
             </Tabs>
 
             {d.runs.detailsError && (
@@ -576,7 +414,7 @@ export function RunDetailsDrawer() {
                       {(d.runs.selectedRun.status === 'running' || d.runs.selectedRun.status === 'queued') && (
                         <span className={d.runs.isStreaming ? styles.livePulse : styles.streamingIndicator}>
                           {!d.runs.isStreaming && <span className={styles.streamingDot}></span>}
-                          {d.runs.isStreaming ? (d.lang === 'zh' ? '实时' : 'LIVE') : d.t('streaming')}
+                          {d.runs.isStreaming ? d.t('drawerLive') : d.t('streaming')}
                         </span>
                       )}
 
@@ -599,7 +437,7 @@ export function RunDetailsDrawer() {
                       <button 
                         className={styles.terminalIconOnlyButton}
                         onClick={() => downloadLogs(d.runs.selectedRun!.id)}
-                        title={d.lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
+                        title={d.t('drawerDownloadRawLogTitle')}
                         aria-label={d.t('download')}
                       >
                         <Download size={14} />
@@ -612,11 +450,11 @@ export function RunDetailsDrawer() {
                           event.currentTarget.focus()
                           d.terminal.setIsTerminalFullscreen(true)
                         }}
-                        title={d.lang === 'zh' ? "全屏终端" : "Fullscreen Terminal"}
+                        title={d.t('drawerFullscreenTerminalTitle')}
                         data-testid="terminal-fullscreen-button"
                       >
                         <Maximize2 size={13} />
-                        <span>{d.lang === 'zh' ? "全屏终端" : "Fullscreen"}</span>
+                        <span>{d.t('drawerFullscreenTerminalLabel')}</span>
                       </button>
                     </div>
                   </div>
@@ -625,50 +463,12 @@ export function RunDetailsDrawer() {
                     ref={d.terminalRef}
                     style={{ fontSize: `${d.terminal.terminalFontSize}px` }}
                   >
-                    {d.runs.detailsError ? (
-                      <span className={styles.terminalPlaceholder}>
-                        {d.t('runDetailsLoadError')}
-                      </span>
-                    ) : d.runs.isStreaming ? (
-                      filteredStreamed ? (
-                        <pre className={styles.stdoutPre}>{d.terminal.renderFormattedLogs(filteredStreamed)}</pre>
-                      ) : d.runs.streamedStdout ? (
-                        <span className={styles.terminalPlaceholder}>
-                          {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
-                        </span>
-                      ) : (
-                        <span className={styles.terminalPlaceholder}>
-                          <span className={styles.waitingLogs}>
-                            <span className={styles.pulsingText}>{d.t('waitingLogs')}</span>
-                          </span>
-                        </span>
-                      )
-                    ) : (d.runs.selectedRun.stdout || d.runs.selectedRun.stderr || d.runs.streamedStdout) ? (
-                      (filteredStdout || filteredStderr || filteredStreamed) ? (
-                        <>
-                          {(filteredStdout || (d.runs.selectedRunDetails ? null : filteredStreamed)) && (
-                            <pre className={styles.stdoutPre}>
-                              {d.terminal.renderFormattedLogs(filteredStdout || filteredStreamed)}
-                            </pre>
-                          )}
-                          {filteredStderr && <pre className={styles.stderrPre}>{d.terminal.renderFormattedLogs(filteredStderr)}</pre>}
-                        </>
-                      ) : (
-                        <span className={styles.terminalPlaceholder}>
-                          {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
-                        </span>
-                      )
-                    ) : d.runs.detailsLoading ? (
-                      <span className={styles.terminalPlaceholder}>
-                        <span className={styles.waitingLogs}>
-                          <span className={styles.pulsingText}>{d.lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
-                        </span>
-                      </span>
-                    ) : (
-                      <span className={styles.terminalPlaceholder}>
-                        {d.t('noLogsAvailable')}
-                      </span>
-                    )}
+                    <LogsBody
+                      filteredStdout={filteredStdout}
+                      filteredStderr={filteredStderr}
+                      filteredStreamed={filteredStreamed}
+                      showDetailsError
+                    />
                   </div>
                 </div>
 
@@ -1024,11 +824,11 @@ export function RunDetailsDrawer() {
                         type="button"
                         className={styles.portalBtnPrimary}
                         onClick={() => d.terminal.setIsReportFullscreen(true)}
-                        title={d.lang === 'zh' ? '全屏查看测试报告' : 'View Test Report in Fullscreen'}
+                        title={d.t('drawerFullscreenReportTitle')}
                         data-testid="report-fullscreen-button"
                       >
                         <Maximize2 size={14} />
-                        <span>{d.lang === 'zh' ? '全屏查看报告' : 'Fullscreen Report'}</span>
+                        <span>{d.t('drawerFullscreenReportLabel')}</span>
                       </button>
 
                       <a
@@ -1036,11 +836,11 @@ export function RunDetailsDrawer() {
                         target="_blank"
                         rel="noreferrer"
                         className={styles.portalBtnSecondary}
-                        title={d.lang === 'zh' ? '在新窗口中打开' : 'Open in New Window'}
+                        title={d.t('drawerOpenNewWindowTitle')}
                         data-testid="report-new-window-link"
                       >
                         <ExternalLink size={14} />
-                        <span>{d.lang === 'zh' ? '在新窗口打开' : 'Open in New Window'}</span>
+                        <span>{d.t('drawerOpenNewWindowLabel')}</span>
                       </a>
                     </div>
                   </div>
@@ -1102,8 +902,8 @@ export function RunDetailsDrawer() {
                               <span style={{ opacity: 0.7 }}>({b.cases.length})</span>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                              {b.cases.map((c, i) => (
-                                <CaseRow key={i} caseResult={c} />
+                              {b.cases.map((c) => (
+                                <CaseRow key={`${c.suite}::${c.name}`} caseResult={c} />
                               ))}
                             </div>
                           </div>
@@ -1112,6 +912,10 @@ export function RunDetailsDrawer() {
                   </>
                 )}
               </div>
+            )}
+
+            {d.terminal.drawerTab === 'ai-insights' && d.runs.selectedRunId && (
+              <AiInsightsTab runId={d.runs.selectedRunId} apiFetch={d.apiFetch} t={d.t} />
             )}
           </div>
         )}

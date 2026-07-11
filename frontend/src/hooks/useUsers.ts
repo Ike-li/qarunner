@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { UserProfile } from '../types'
 import { apiMutate } from './useApi'
 
@@ -23,6 +23,19 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
   const [isCleaningStorage, setIsCleaningStorage] = useState(false)
 
   const isAdmin = currentUser?.role === 'admin'
+
+  /**
+   * BUG: a bare `Number(value)` accepted NaN (non-numeric input) and
+   * negative/zero values into retentionDays, which feeds the destructive
+   * storage-cleanup call — reject anything that isn't a positive integer
+   * and keep the last valid value instead.
+   */
+  const handleRetentionDaysChange = useCallback((value: string) => {
+    const n = Number(value)
+    if (Number.isFinite(n) && n >= 1) {
+      setRetentionDays(Math.floor(n))
+    }
+  }, [])
 
   const fetchUsers = useCallback(async () => {
     if (!isAdmin) return
@@ -126,37 +139,50 @@ export function useUsers({ apiFetch, currentUser }: UseUsersOpts) {
     [apiFetch],
   )
 
-  return {
-    usersList,
-    usersLoading,
-    newUsername,
-    setNewUsername,
-    newPassword,
-    setNewPassword,
-    newUserRole,
-    setNewUserRole,
-    newUserError,
-    setNewUserError,
-    newUserLoading,
-    retentionDays,
-    setRetentionDays,
-    isCleaningStorage,
-    setIsCleaningStorage,
-    isAdmin,
-    currentUsername: currentUser?.username ?? null,
-    fetchUsers,
-    handleCreateUserSubmit,
-    handleDeleteUser,
-    handleUpdateUserRole,
-    handleUpdateUserPassword,
-    _reset: () => {
-      setUsersList([])
-      setUsersLoading(false)
-      setNewUsername('')
-      setNewPassword('')
-      setNewUserRole('user')
-      setNewUserError(null)
-      setNewUserLoading(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setUsersList([])
+    setUsersLoading(false)
+    setNewUsername('')
+    setNewPassword('')
+    setNewUserRole('user')
+    setNewUserError(null)
+    setNewUserLoading(false)
+  }, [])
+
+  const currentUsername = currentUser?.username ?? null
+
+  return useMemo(
+    () =>
+      ({
+        usersList,
+        usersLoading,
+        newUsername,
+        setNewUsername,
+        newPassword,
+        setNewPassword,
+        newUserRole,
+        setNewUserRole,
+        newUserError,
+        setNewUserError,
+        newUserLoading,
+        retentionDays,
+        handleRetentionDaysChange,
+        isCleaningStorage,
+        setIsCleaningStorage,
+        isAdmin,
+        currentUsername,
+        fetchUsers,
+        handleCreateUserSubmit,
+        handleDeleteUser,
+        handleUpdateUserRole,
+        handleUpdateUserPassword,
+        _reset,
+      }) as const,
+    [
+      usersList, usersLoading, newUsername, newPassword, newUserRole, newUserError,
+      newUserLoading, retentionDays, handleRetentionDaysChange, isCleaningStorage,
+      isAdmin, currentUsername, fetchUsers, handleCreateUserSubmit, handleDeleteUser,
+      handleUpdateUserRole, handleUpdateUserPassword, _reset,
+    ],
+  )
 }

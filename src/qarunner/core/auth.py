@@ -30,13 +30,16 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(username: str, role: str, settings: Settings) -> str:
+def create_access_token(
+    username: str, role: str, settings: Settings, token_version: int = 0
+) -> str:
     """Generate a JWT access token signed with the injected *settings*."""
     expire = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
     payload = {
         "sub": username,
         "role": role,
         "exp": expire,
+        "token_version": token_version,
     }
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 

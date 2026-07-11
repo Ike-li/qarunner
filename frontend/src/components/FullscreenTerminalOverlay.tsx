@@ -2,6 +2,7 @@ import { Check, Copy, Download, Search, Terminal, X, ZoomIn, ZoomOut } from 'luc
 import styles from '../App.module.css'
 import { useDashboard } from '../hooks/DashboardContext'
 import { useDialogA11y } from '../hooks/useDialogA11y'
+import { LogsBody } from './LogsBody'
 
 /** Fullscreen read-only terminal overlay opened from the drawer logs tab. Mirrors
  *  the inline console (search/level/font + word-wrap + auto-scroll toggles) over
@@ -54,7 +55,7 @@ export function FullscreenTerminalOverlay() {
           <div className={styles.terminalTitleGroup}>
             <Terminal size={16} className={styles.terminalHeaderIcon} />
             <h3 className={styles.fullscreenTerminalTitle} id="fullscreen-terminal-title">
-              {d.lang === 'zh' ? '只读控制台终端' : 'Read-only Console Terminal'}
+              {d.t('fsTerminalTitle')}
               <span className={styles.fullscreenTerminalSub}>
                 #{selectedRun.id}
               </span>
@@ -68,7 +69,7 @@ export function FullscreenTerminalOverlay() {
               <input 
                 type="text" 
                 className={styles.terminalSearchInput}
-                placeholder={d.lang === 'zh' ? "搜索日志..." : "Search logs..."}
+                placeholder={d.t('fsTerminalSearchPlaceholder')}
                 value={d.terminal.logSearchQuery}
                 onChange={(e) => d.terminal.setLogSearchQuery(e.target.value)}
               />
@@ -76,8 +77,8 @@ export function FullscreenTerminalOverlay() {
                 <button
                   className={styles.terminalSearchClear}
                   onClick={() => d.terminal.setLogSearchQuery('')}
-                  title={d.lang === 'zh' ? "清除搜索" : "Clear search"}
-                  aria-label={d.lang === 'zh' ? "清除搜索" : "Clear search"}
+                  title={d.t('fsTerminalClearSearch')}
+                  aria-label={d.t('fsTerminalClearSearch')}
                 >
                   <X size={10} />
                 </button>
@@ -87,12 +88,14 @@ export function FullscreenTerminalOverlay() {
             {/* Log Level Capsule Filters */}
             <div className={styles.logLevelCapsules}>
               {(['ALL', 'ERROR', 'WARNING', 'SUCCESS'] as const).map(level => {
-                let levelLabel: string = level;
-                if (d.lang === 'zh') {
-                  levelLabel = level === 'ALL' ? '全部' : level === 'ERROR' ? '异常' : level === 'WARNING' ? '警告' : '成功';
-                } else {
-                  levelLabel = level === 'ALL' ? 'ALL' : level === 'ERROR' ? 'ERR' : level === 'WARNING' ? 'WARN' : 'OK';
-                }
+                const levelLabel =
+                  level === 'ALL'
+                    ? d.t('fsTerminalLevelAll')
+                    : level === 'ERROR'
+                      ? d.t('fsTerminalLevelError')
+                      : level === 'WARNING'
+                        ? d.t('fsTerminalLevelWarning')
+                        : d.t('fsTerminalLevelSuccess');
                 return (
                   <button
                     key={level}
@@ -110,8 +113,8 @@ export function FullscreenTerminalOverlay() {
               <button
                 className={styles.fontSizeBtn}
                 onClick={() => d.terminal.setTerminalFontSize(prev => Math.max(10, prev - 1))}
-                title={d.lang === 'zh' ? "减小字号" : "Decrease Font Size"}
-                aria-label={d.lang === 'zh' ? "减小字号" : "Decrease Font Size"}
+                title={d.t('fsTerminalDecreaseFontSize')}
+                aria-label={d.t('fsTerminalDecreaseFontSize')}
               >
                 <ZoomOut size={12} />
               </button>
@@ -119,8 +122,8 @@ export function FullscreenTerminalOverlay() {
               <button
                 className={styles.fontSizeBtn}
                 onClick={() => d.terminal.setTerminalFontSize(prev => Math.min(24, prev + 1))}
-                title={d.lang === 'zh' ? "增大字号" : "Increase Font Size"}
-                aria-label={d.lang === 'zh' ? "增大字号" : "Increase Font Size"}
+                title={d.t('fsTerminalIncreaseFontSize')}
+                aria-label={d.t('fsTerminalIncreaseFontSize')}
               >
                 <ZoomIn size={12} />
               </button>
@@ -130,18 +133,18 @@ export function FullscreenTerminalOverlay() {
             <button 
               className={`${styles.terminalToolbarBtn} ${d.terminal.isWordWrapEnabled ? styles.terminalToolbarBtnActive : ''}`}
               onClick={() => d.terminal.setIsWordWrapEnabled(!d.terminal.isWordWrapEnabled)}
-              title={d.terminal.isWordWrapEnabled ? (d.lang === 'zh' ? "禁用自动换行" : "Disable word wrap") : (d.lang === 'zh' ? "启用自动换行" : "Enable word wrap")}
+              title={d.terminal.isWordWrapEnabled ? d.t('fsTerminalDisableWordWrap') : d.t('fsTerminalEnableWordWrap')}
             >
-              {d.lang === 'zh' ? '自动换行' : 'Word Wrap'}
+              {d.t('fsTerminalWordWrap')}
             </button>
 
             {/* Auto Scroll Toggle */}
             <button 
               className={`${styles.terminalToolbarBtn} ${d.terminal.isAutoScrollEnabled ? styles.terminalToolbarBtnActive : ''}`}
               onClick={() => d.terminal.setIsAutoScrollEnabled(!d.terminal.isAutoScrollEnabled)}
-              title={d.terminal.isAutoScrollEnabled ? (d.lang === 'zh' ? "锁定滚动" : "Freeze scrolling") : (d.lang === 'zh' ? "自动滚动" : "Auto scroll")}
+              title={d.terminal.isAutoScrollEnabled ? d.t('fsTerminalFreezeScrolling') : d.t('fsTerminalAutoScroll')}
             >
-              {d.lang === 'zh' ? '滚动锁定' : 'Scroll Lock'}
+              {d.t('fsTerminalScrollLock')}
             </button>
 
             {/* Copy Button */}
@@ -162,7 +165,7 @@ export function FullscreenTerminalOverlay() {
             <button 
               className={styles.terminalCopyButton}
               onClick={handleDownloadLogs}
-              title={d.lang === 'zh' ? '下载完整日志' : 'Download raw log file'}
+              title={d.t('fsTerminalDownloadRawLog')}
             >
               <Download size={12} />
               <span>{d.t('download')}</span>
@@ -172,8 +175,8 @@ export function FullscreenTerminalOverlay() {
             <button
               className={styles.fullscreenTerminalCloseBtn}
               onClick={() => d.terminal.setIsTerminalFullscreen(false)}
-              title={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
-              aria-label={d.lang === 'zh' ? "关闭全屏" : "Close fullscreen"}
+              title={d.t('fsTerminalCloseFullscreen')}
+              aria-label={d.t('fsTerminalCloseFullscreen')}
             >
               <X size={16} />
             </button>
@@ -186,46 +189,11 @@ export function FullscreenTerminalOverlay() {
           ref={d.fullscreenTerminalRef}
           style={{ fontSize: `${d.terminal.terminalFontSize}px` }}
         >
-          {d.runs.isStreaming ? (
-            filteredStreamed ? (
-              <pre className={styles.stdoutPre}>{d.terminal.renderFormattedLogs(filteredStreamed)}</pre>
-            ) : d.runs.streamedStdout ? (
-              <span className={styles.terminalPlaceholder}>
-                {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
-              </span>
-            ) : (
-              <span className={styles.terminalPlaceholder}>
-                <span className={styles.waitingLogs}>
-                  <span className={styles.pulsingText}>{d.t('waitingLogs')}</span>
-                </span>
-              </span>
-            )
-          ) : (selectedRun.stdout || selectedRun.stderr || d.runs.streamedStdout) ? (
-            (filteredStdout || filteredStderr || filteredStreamed) ? (
-              <>
-                {(filteredStdout || (d.runs.selectedRunDetails ? null : filteredStreamed)) && (
-                  <pre className={styles.stdoutPre}>
-                    {d.terminal.renderFormattedLogs(filteredStdout || filteredStreamed)}
-                  </pre>
-                )}
-                {filteredStderr && <pre className={styles.stderrPre}>{d.terminal.renderFormattedLogs(filteredStderr)}</pre>}
-              </>
-            ) : (
-              <span className={styles.terminalPlaceholder}>
-                {d.lang === 'zh' ? '无匹配搜索结果' : 'No matching logs found'}
-              </span>
-            )
-          ) : d.runs.detailsLoading ? (
-            <span className={styles.terminalPlaceholder}>
-              <span className={styles.waitingLogs}>
-                <span className={styles.pulsingText}>{d.lang === 'zh' ? '正在加载控制台日志...' : 'Loading console logs...'}</span>
-              </span>
-            </span>
-          ) : (
-            <span className={styles.terminalPlaceholder}>
-              {d.t('noLogsAvailable')}
-            </span>
-          )}
+          <LogsBody
+            filteredStdout={filteredStdout}
+            filteredStderr={filteredStderr}
+            filteredStreamed={filteredStreamed}
+          />
         </div>
       </div>
     </div>

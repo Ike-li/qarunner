@@ -51,3 +51,15 @@ class LoginLockedOut(Exception):
     def __init__(self, retry_after: int) -> None:
         super().__init__(f"too many failed login attempts; retry after {retry_after}s")
         self.retry_after = retry_after
+
+
+class RateLimited(Exception):
+    """Raised when a caller exceeds a rate budget (e.g. AI diagnosis POST).
+
+    Carries ``retry_after`` (whole seconds) so the API layer can answer HTTP 429
+    with a ``Retry-After`` header — same shape as :class:`LoginLockedOut`.
+    """
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(f"rate limit exceeded; retry after {retry_after}s")
+        self.retry_after = retry_after

@@ -158,6 +158,23 @@ class TestParseJUnitXml:
         assert result.summary.passed == 1
         assert result.cases[0].duration_ms == 0
 
+    def test_infinite_time_treated_as_zero(self, tmp_path):
+        """BUG-26: Python's float() happily parses "inf", but
+        int(float("inf") * 1000) raises OverflowError rather than ValueError
+        — an untrusted-producer edge case the old except clause didn't
+        catch, breaking the same "never raise" contract as the non-numeric
+        case above."""
+        f = tmp_path / "junit.xml"
+        f.write_text(
+            '<?xml version="1.0"?>\n'
+            '<testsuite name="s" tests="1">\n'
+            '  <testcase name="ok" classname="s" time="inf"/>\n'
+            "</testsuite>\n"
+        )
+        result = parse_junit_xml(str(f))
+        assert result is not None
+        assert result.cases[0].duration_ms == 0
+
 
 class TestTextOrNone:
     """_text_or_none helper edge cases."""

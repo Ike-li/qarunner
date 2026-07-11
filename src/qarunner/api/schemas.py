@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from qarunner.models import (
     MAX_TIMEOUT_SECONDS,
     CaseHistoryPoint,
+    FailureDiagnosis,
     RegressionDiff,
     ReportRef,
     Run,
@@ -20,7 +22,57 @@ from qarunner.models import (
     TestSummary,
     TrendPoint,
     UserRole,
+    _reject_path_traversal,
 )
+
+# BUG-17: private/internal address prefixes for SSRF protection on webhook_url.
+_PRIVATE_HOSTNAME_PREFIXES = (
+    "10.",
+    "172.16.",
+    "172.17.",
+    "172.18.",
+    "172.19.",
+    "172.20.",
+    "172.21.",
+    "172.22.",
+    "172.23.",
+    "172.24.",
+    "172.25.",
+    "172.26.",
+    "172.27.",
+    "172.28.",
+    "172.29.",
+    "172.30.",
+    "172.31.",
+    "192.168.",
+    "169.254.",
+)
+_PRIVATE_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "metadata.google.internal",
+    }
+)
+
+
+def _validate_webhook_url_field(value: str | None) -> str | None:
+    """BUG-17: reject webhook URLs pointing to private/internal addresses (SSRF)."""
+    if value is None or value == "":
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme not in ("https",):
+        raise ValueError("webhook_url must use https://")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("webhook_url must have a valid hostname")
+    if hostname in _PRIVATE_HOSTNAMES:
+        raise ValueError("webhook_url must not point to localhost")
+    if any(hostname.startswith(prefix) for prefix in _PRIVATE_HOSTNAME_PREFIXES):
+        raise ValueError("webhook_url must not point to a private/internal address")
+    return value
 
 
 class TestProfileResponse(BaseModel):
@@ -46,6 +98,8 @@ class TestProfileResponse(BaseModel):
 class TestProfileCreateRequest(BaseModel):
     """Payload to create a new test profile."""
 
+    __test__ = False
+
     name: str
     description: str | None = None
     tests_path: str
@@ -57,11 +111,23 @@ class TestProfileCreateRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     # Feishu bot webhook URL for run-completion notifications.
     webhook_url: str | None = None
+
+    @field_validator("tests_path")
+    @classmethod
+    def _validate_tests_path(cls, value: str) -> str:
+        return _reject_path_traversal(value)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _validate_webhook_url(cls, value: str | None) -> str | None:
+        return _validate_webhook_url_field(value)
 
 
 class TestProfileUpdateRequest(BaseModel):
     """Payload to update an existing test profile."""
 
+    __test__ = False
+
     name: str
     description: str | None = None
     tests_path: str
@@ -73,6 +139,16 @@ class TestProfileUpdateRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     # Feishu bot webhook URL for run-completion notifications.
     webhook_url: str | None = None
+
+    @field_validator("tests_path")
+    @classmethod
+    def _validate_tests_path(cls, value: str) -> str:
+        return _reject_path_traversal(value)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _validate_webhook_url(cls, value: str | None) -> str | None:
+        return _validate_webhook_url_field(value)
 
 
 class RunResponse(BaseModel):
@@ -155,6 +231,19 @@ class CaseHistoryResponse(BaseModel):
     flip_count: int = 0
 
 
+class AiAnalysisResponse(BaseModel):
+    """AI failure diagnosis for a run (read-only, cross-run stage 4).
+
+    ``enabled`` reflects whether an LLM provider is configured — when False the
+    UI hides the feature. ``diagnosis`` is null when not yet generated or when
+    the run has no failing cases (then ``detail`` explains why).
+    """
+
+    enabled: bool
+    diagnosis: FailureDiagnosis | None = None
+    detail: str | None = None
+
+
 class LoginRequest(BaseModel):
     """Payload to log in."""
 
@@ -173,14 +262,14 @@ class UserCreateRequest(BaseModel):
     """Payload to create a new user (Admin-only)."""
 
     username: str
-    password: str
+    password: str = Field(min_length=8, max_length=128)
     role: UserRole = UserRole.USER
 
 
 class UserUpdateRequest(BaseModel):
     """Payload to update a user (Admin-only); at least one field required."""
 
-    password: str | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
     role: UserRole | None = None
 
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useCallback, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useCallback, useMemo, useRef, useState } from 'react'
 import { type Lang, type TranslationKey, translations } from '../i18n'
 import { useApi } from './useApi'
 import { useAuth } from './useAuth'
@@ -209,28 +209,41 @@ export function DashboardProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTriggerModalOpen])
 
-  return (
-    <Ctx.Provider
-      value={{
-        apiFetch, handleLogout, lang, setLang, theme, setTheme, t,
-        auth, runs, profiles, schedules, suites, users, credentials, form, terminal,
-        selectedFiles, setSelectedFiles,
-        selectedMarkers, setSelectedMarkers,
-        expandedFolders, setExpandedFolders,
-        isTriggerModalOpen, setIsTriggerModalOpen,
-        isAddSuiteModalOpen, setIsAddSuiteModalOpen,
-        isUserModalOpen, setIsUserModalOpen,
-        selectedSuiteFilter, setSelectedSuiteFilter,
-        selectedProfileFilter, setSelectedProfileFilter,
-        logFilterTab, setLogFilterTab,
-        searchRunId, setSearchRunId,
-        filterStatus, setFilterStatus,
-        filterOwner, setFilterOwner,
-        terminalRef, fullscreenTerminalRef,
-        clearSession,
-      }}
-    >
-      {children}
-    </Ctx.Provider>
+  // PERF: every child hook below now memoizes its own return value, so this
+  // value object only gets a new identity when something actually relevant
+  // changed — not on every DashboardProvider render. Note this doesn't by
+  // itself stop the 1.5s poll from re-rendering every consumer (that needs
+  // splitting this single Context into several smaller ones, a larger
+  // change not made here); it does stop *unrelated* state changes (e.g.
+  // typing in a modal) from doing so.
+  const value = useMemo(
+    () => ({
+      apiFetch, handleLogout, lang, setLang, theme, setTheme, t,
+      auth, runs, profiles, schedules, suites, users, credentials, form, terminal,
+      selectedFiles, setSelectedFiles,
+      selectedMarkers, setSelectedMarkers,
+      expandedFolders, setExpandedFolders,
+      isTriggerModalOpen, setIsTriggerModalOpen,
+      isAddSuiteModalOpen, setIsAddSuiteModalOpen,
+      isUserModalOpen, setIsUserModalOpen,
+      selectedSuiteFilter, setSelectedSuiteFilter,
+      selectedProfileFilter, setSelectedProfileFilter,
+      logFilterTab, setLogFilterTab,
+      searchRunId, setSearchRunId,
+      filterStatus, setFilterStatus,
+      filterOwner, setFilterOwner,
+      terminalRef, fullscreenTerminalRef,
+      clearSession,
+    }),
+    [
+      apiFetch, handleLogout, lang, theme, t,
+      auth, runs, profiles, schedules, suites, users, credentials, form, terminal,
+      selectedFiles, selectedMarkers, expandedFolders,
+      isTriggerModalOpen, isAddSuiteModalOpen, isUserModalOpen,
+      selectedSuiteFilter, selectedProfileFilter, logFilterTab, searchRunId,
+      filterStatus, filterOwner, clearSession,
+    ],
   )
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

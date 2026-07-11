@@ -34,8 +34,11 @@ export function TriggerRunModal() {
     d.form.handleSaveProfile(e, d.selectedFiles, d.selectedMarkers, () => {
       d.profiles.fetchProfiles()
     })
-  const onDeleteProfile = (profileId: string, e?: React.MouseEvent) => {
-    d.profiles.handleDeleteProfile(profileId, e)
+  const onDeleteProfile = async (profileId: string, e?: React.MouseEvent) => {
+    // B3: same fix as ProjectSidebar — only clear the selection if the
+    // delete actually happened, not on a cancelled confirm or a failure.
+    const deleted = await d.profiles.handleDeleteProfile(profileId, e)
+    if (!deleted) return
     if (d.form.selectedProfileId === profileId) d.form.setSelectedProfileId('')
   }
 
@@ -55,7 +58,7 @@ export function TriggerRunModal() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <SlidersHorizontal size={20} style={{ color: 'var(--semi-color-primary)' }} />
           <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>
-            {d.form.editingProfileId ? (d.lang === 'zh' ? '修改预设执行方案' : 'Modify Saved Execution Profile') : d.t('triggerTitle')}
+            {d.form.editingProfileId ? d.t('triggerModifyProfileTitle') : d.t('triggerTitle')}
           </h3>
         </div>
       }
@@ -119,7 +122,7 @@ export function TriggerRunModal() {
             <Select.Option value="playwright" data-testid="runner-option-playwright">playwright</Select.Option>
           </Select>
           <span className={styles.fieldHelp}>
-            {d.lang === 'zh' ? '选择测试执行引擎（Pytest 或 Playwright）' : 'Choose the test runner engine (Pytest or Playwright)'}
+            {d.t('triggerRunnerHelp')}
           </span>
         </div>
 
@@ -157,7 +160,7 @@ export function TriggerRunModal() {
                     d.form.setEnvVars([])
                   }
                 }}
-                placeholder={d.lang === 'zh' ? '-- 手动配置 (自定义) --' : '-- Manual Configuration (Custom) --'}
+                placeholder={d.t('triggerManualConfigPlaceholder')}
                 style={{ flex: 1 }}
                 showClear={true}
                 onClear={() => {
@@ -184,8 +187,8 @@ export function TriggerRunModal() {
                   type="danger"
                   theme="light"
                   icon={<X size={16} />}
-                  title={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
-                  aria-label={d.lang === 'zh' ? '删除方案' : 'Delete Profile'}
+                  title={d.t('triggerDeleteProfileTitle')}
+                  aria-label={d.t('triggerDeleteProfileTitle')}
                   onClick={(e) => onDeleteProfile(d.form.selectedProfileId, e as any)}
                   style={{ flexShrink: 0 }}
                 />
@@ -200,7 +203,7 @@ export function TriggerRunModal() {
           <div className={styles.treeContainer} style={{ border: '1px solid var(--semi-color-border)', borderRadius: '8px', padding: '12px', maxHeight: '300px', overflowY: 'auto', backgroundColor: 'var(--semi-color-fill-0)' }}>
             {d.suites.scannedFilesTree.length === 0 ? (
               <div className={styles.directoryFallbackText} style={{ padding: '0.5rem' }}>
-                {d.lang === 'zh' ? '无可用测试文件。' : 'No pytest files discovered.'}
+                {d.t('triggerNoTestFiles')}
               </div>
             ) : (
               <TestFileTree
@@ -263,33 +266,33 @@ export function TriggerRunModal() {
         {/* Custom Environment Variables Grid Editor */}
         <div className={styles.formField}>
           <label className={styles.label} id="trigger-customenv-label">
-            <span>{d.lang === 'zh' ? '自定义环境变量' : 'Custom Environment Variables'}</span>
+            <span>{d.t('triggerCustomEnvVarsLabel')}</span>
           </label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {d.form.envVars.map((env, idx) => (
               <Row key={idx} gutter={8} style={{ display: 'flex', alignItems: 'center' }}>
                 <Col span={11}>
                   <Input
-                    placeholder={d.lang === 'zh' ? '变量名 e.g. BASE_URL' : 'Name e.g. BASE_URL'}
+                    placeholder={d.t('triggerEnvVarNamePlaceholder')}
                     value={env.key}
                     onChange={(val) => {
                       const updated = [...d.form.envVars]
                       updated[idx].key = val
                       d.form.setEnvVars(updated)
                     }}
-                    aria-label={d.lang === 'zh' ? `环境变量名 ${idx + 1}` : `Environment variable name ${idx + 1}`}
+                    aria-label={`${d.t('triggerEnvVarNameAriaLabel')} ${idx + 1}`}
                   />
                 </Col>
                 <Col span={11}>
                   <Input
-                    placeholder={d.lang === 'zh' ? '变量值' : 'Value'}
+                    placeholder={d.t('triggerEnvVarValuePlaceholder')}
                     value={env.value}
                     onChange={(val) => {
                       const updated = [...d.form.envVars]
                       updated[idx].value = val
                       d.form.setEnvVars(updated)
                     }}
-                    aria-label={d.lang === 'zh' ? `环境变量值 ${idx + 1}` : `Environment variable value ${idx + 1}`}
+                    aria-label={`${d.t('triggerEnvVarValueAriaLabel')} ${idx + 1}`}
                   />
                 </Col>
                 <Col span={2} style={{ display: 'flex', justifyContent: 'center' }}>
@@ -297,7 +300,7 @@ export function TriggerRunModal() {
                     type="danger"
                     theme="borderless"
                     icon={<X size={16} />}
-                    aria-label={d.lang === 'zh' ? '删除环境变量' : 'Remove environment variable'}
+                    aria-label={d.t('triggerRemoveEnvVarAriaLabel')}
                     onClick={() => {
                       d.form.setEnvVars(d.form.envVars.filter((_, i) => i !== idx))
                     }}
@@ -314,7 +317,7 @@ export function TriggerRunModal() {
               }}
               style={{ alignSelf: 'flex-start', marginTop: '4px' }}
             >
-              {d.lang === 'zh' ? '添加环境变量' : 'Add Variable'}
+              {d.t('triggerAddEnvVar')}
             </Button>
           </div>
         </div>
@@ -330,7 +333,7 @@ export function TriggerRunModal() {
               placeholder={d.t('timeoutPlaceholder')}
               min="1"
               value={d.form.timeoutSeconds === '' ? '' : String(d.form.timeoutSeconds)}
-              onChange={(val) => d.form.setTimeoutSeconds(val === '' ? '' : Number(val))}
+              onChange={(val) => d.form.handleTimeoutSecondsChange(val)}
             />
             <span className={styles.fieldHelp}>
               {d.t('timeoutHelp')}
@@ -344,7 +347,7 @@ export function TriggerRunModal() {
               onChange={(e) => d.form.setAllureEnabled(!!e.target.checked)}
               style={{ marginTop: '8px' }}
             >
-              {d.lang === 'zh' ? '生成 HTML 全阶测试报告' : 'Enable HTML reports'}
+              {d.t('triggerEnableHtmlReports')}
             </Checkbox>
           </Col>
         </Row>
@@ -355,12 +358,12 @@ export function TriggerRunModal() {
             <div style={{ border: '1px solid var(--semi-color-border)', borderRadius: '8px', padding: '16px', backgroundColor: 'var(--semi-color-fill-0)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                 <SlidersHorizontal size={14} style={{ color: 'var(--semi-color-primary)' }} />
-                <h4 style={{ margin: 0 }}>{d.lang === 'zh' ? '修改预设方案信息' : 'Modify Profile Information'}</h4>
+                <h4 style={{ margin: 0 }}>{d.t('triggerModifyProfileInfoTitle')}</h4>
               </div>
               <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: 'var(--semi-color-text-2)' }}>
-                {d.lang === 'zh' ? '在此处更新当前执行方案的名称和描述信息。' : 'Update the name and description of the current execution profile here.'}
+                {d.t('triggerModifyProfileInfoDesc')}
               </p>
-                  
+
               <Row gutter={12}>
                 <Col span={12}>
                   <Input
@@ -368,7 +371,7 @@ export function TriggerRunModal() {
                     value={d.form.profileName}
                     onChange={(val) => d.form.setProfileName(val)}
                     required
-                    aria-label={d.lang === 'zh' ? '方案名称' : 'Profile name'}
+                    aria-label={d.t('triggerProfileNameAriaLabel')}
                   />
                 </Col>
                 <Col span={12}>
@@ -376,7 +379,7 @@ export function TriggerRunModal() {
                     placeholder={d.t('profileDescPlaceholder')}
                     value={d.form.profileDesc}
                     onChange={(val) => d.form.setProfileDesc(val)}
-                    aria-label={d.lang === 'zh' ? '方案描述' : 'Profile description'}
+                    aria-label={d.t('triggerProfileDescAriaLabel')}
                   />
                 </Col>
               </Row>
@@ -405,7 +408,7 @@ export function TriggerRunModal() {
                     value={d.form.profileName}
                     onChange={(val) => d.form.setProfileName(val)}
                     required={d.form.isSavingProfile}
-                    aria-label={d.lang === 'zh' ? '方案名称' : 'Profile name'}
+                    aria-label={d.t('triggerProfileNameAriaLabel')}
                   />
                 </Col>
                 <Col span={12}>
@@ -413,11 +416,11 @@ export function TriggerRunModal() {
                     placeholder={d.t('profileDescPlaceholder')}
                     value={d.form.profileDesc}
                     onChange={(val) => d.form.setProfileDesc(val)}
-                    aria-label={d.lang === 'zh' ? '方案描述' : 'Profile description'}
+                    aria-label={d.t('triggerProfileDescAriaLabel')}
                   />
                 </Col>
               </Row>
-                  
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                 <Button
                   size="small"
@@ -433,9 +436,10 @@ export function TriggerRunModal() {
                 <Button
                   size="small"
                   theme="solid"
+                  disabled={d.form.isSubmitting}
                   onClick={(e) => onSaveProfile(e as any)}
                 >
-                  {d.lang === 'zh' ? '确认保存' : 'Save'}
+                  {d.t('triggerConfirmSave')}
                 </Button>
               </div>
             </div>
@@ -470,9 +474,9 @@ export function TriggerRunModal() {
             }
           >
             {d.form.isSubmitting ? (
-              <span>{d.form.editingProfileId ? (d.lang === 'zh' ? '正在保存...' : 'Saving Changes...') : d.t('schedulingTask')}</span>
+              <span>{d.form.editingProfileId ? d.t('triggerSavingChanges') : d.t('schedulingTask')}</span>
             ) : d.form.editingProfileId ? (
-              <span>{d.lang === 'zh' ? '保存方案修改' : 'Save Profile Changes'}</span>
+              <span>{d.t('triggerSaveProfileChanges')}</span>
             ) : (
               <span>{d.t('launchRun')}</span>
             )}

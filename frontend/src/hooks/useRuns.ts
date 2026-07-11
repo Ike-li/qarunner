@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { summarizeRuns } from '../runStats'
 import type { Run } from '../types'
 import { apiMutate } from './useApi'
@@ -23,6 +23,16 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const [streamedStdout, setStreamedStdout] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
 
+  // B2: fetchSelectedRunDetails is called from several async call sites
+  // (polling, SSE reconnect, status-transition) that don't know whether the
+  // selection has moved on by the time their response arrives. Declared
+  // ahead of fetchSelectedRunDetails (rather than down with the other SSE
+  // refs) so that callback can read it.
+  const selectedRunIdRef = useRef(selectedRunId)
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId
+  }, [selectedRunId])
+
   // ── fetch helpers ──────────────────────────────────────────────────────
 
   const fetchRuns = useCallback(async () => {
@@ -45,16 +55,19 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
       setDetailsError(false)
       try {
         const resp = await apiFetch(`/runs/${runId}`)
+        if (selectedRunIdRef.current !== runId) return // stale: selection moved on
         if (!resp.ok) throw new Error(`Run details request failed: ${resp.status}`)
         const data = await resp.json()
+        if (selectedRunIdRef.current !== runId) return // stale: selection moved on
         setSelectedRunDetails(data)
         setDetailsError(false)
       } catch (err) {
+        if (selectedRunIdRef.current !== runId) return
         console.error('Error fetching run details:', err)
         setSelectedRunDetails((prev) => (prev?.id === runId ? null : prev))
         setDetailsError(true)
       } finally {
-        setDetailsLoading(false)
+        if (selectedRunIdRef.current === runId) setDetailsLoading(false)
       }
     },
     [apiFetch],
@@ -65,7 +78,9 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   const handleToggleLock = useCallback(
     async (runId: string, e: React.MouseEvent) => {
       e.stopPropagation()
-      const run = runs.find((r) => r.id === runId)
+      // BUG-9: read from ref to avoid closing over the entire runs array,
+      // which changes every 1.5s poll cycle and causes unnecessary re-renders.
+      const run = runsRef.current.find((r) => r.id === runId)
       if (!run) return
       const newLocked = !run.locked
 
@@ -79,7 +94,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
           setRuns((prev) =>
             prev.map((r) => (r.id === runId ? { ...r, locked: newLocked } : r)),
           )
-          if (selectedRunDetails?.id === runId) {
+          if (selectedRunDetailsRef.current?.id === runId) {
             setSelectedRunDetails((prev) =>
               prev ? { ...prev, locked: newLocked } : null,
             )
@@ -92,7 +107,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
         console.error('Error toggling lock:', err)
       }
     },
-    [runs, selectedRunDetails, apiFetch],
+    [apiFetch],
   )
 
   // ── cancel a queued / running run ──────────────────────────────────────
@@ -159,12 +174,11 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
   // ── SSE streaming ──────────────────────────────────────────────────────
 
   // Snapshot refs so the SSE effect doesn't depend on frequently-changing state.
+  // (selectedRunIdRef itself is declared earlier, alongside fetchSelectedRunDetails.)
   const runsRef = useRef(runs)
-  const selectedRunIdRef = useRef(selectedRunId)
   const selectedRunDetailsRef = useRef(selectedRunDetails)
 
   useEffect(() => { runsRef.current = runs }, [runs])
-  useEffect(() => { selectedRunIdRef.current = selectedRunId }, [selectedRunId])
   useEffect(() => {
     selectedRunDetailsRef.current = selectedRunDetails
   }, [selectedRunDetails])
@@ -233,6 +247,7 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
 
     const connect = () => {
       if (disposed) return
+      setStreamedStdout('')  // BUG-24: clear old content on reconnect to avoid duplicate lines
       eventSource = new EventSource(`/runs/${selectedRunId}/stream`)
 
       eventSource.onopen = () => {
@@ -343,8 +358,12 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     runs.find((r) => r.id === selectedRunId) ||
     null
 
-  const completedRuns = runs.filter((r) => r.status === 'completed')
-  const runStats = summarizeRuns(runs)
+  // PERF: .filter()/summarizeRuns() build a new array/object every render
+  // even when `runs` hasn't changed — memoize so the final api object below
+  // (and everything DashboardContext feeds it into) can actually stay
+  // referentially stable across the 1.5s poll cycle.
+  const completedRuns = useMemo(() => runs.filter((r) => r.status === 'completed'), [runs])
+  const runStats = useMemo(() => summarizeRuns(runs), [runs])
 
   // ── close drawer ───────────────────────────────────────────────────────
 
@@ -356,47 +375,58 @@ export function useRuns({ apiFetch, enabled }: UseRunsOpts) {
     setIsStreaming(false)
   }, [])
 
-  return {
-    // state
-    runs,
-    loading,
-    selectedRunId,
-    setSelectedRunId,
-    selectedRunDetails,
-    closeDrawer,
-    detailsLoading,
-    detailsError,
-    streamedStdout,
-    isStreaming,
-    selectedRun,
-    // actions
-    fetchRuns,
-    fetchSelectedRunDetails,
-    handleToggleLock,
-    handleCancelRun,
-    handleDeleteRun,
-    handleRerunRun,
-    // derived
-    totalRuns: runStats.totalRuns,
-    completedRuns,
-    overallSuccessRate: runStats.overallSuccessRate,
-    activeRunsCount: runStats.activeRunsCount,
-    failedRunsCount: runStats.failedRunsCount,
-    manualRunsCount: runStats.manualRunsCount,
-    scheduledRunsCount: runStats.scheduledRunsCount,
-    passedTestCases: runStats.passedTestCases,
-    failedTestCases: runStats.failedTestCases,
-    totalTestCases: runStats.totalTestCases,
-    // reset
-    _reset: () => {
-      setRuns([])
-      setLoading(true)
-      setSelectedRunId(null)
-      setSelectedRunDetails(null)
-      setDetailsLoading(false)
-      setDetailsError(false)
-      setStreamedStdout('')
-      setIsStreaming(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setRuns([])
+    setLoading(true)
+    setSelectedRunId(null)
+    setSelectedRunDetails(null)
+    setDetailsLoading(false)
+    setDetailsError(false)
+    setStreamedStdout('')
+    setIsStreaming(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        // state
+        runs,
+        loading,
+        selectedRunId,
+        setSelectedRunId,
+        selectedRunDetails,
+        closeDrawer,
+        detailsLoading,
+        detailsError,
+        streamedStdout,
+        isStreaming,
+        selectedRun,
+        // actions
+        fetchRuns,
+        fetchSelectedRunDetails,
+        handleToggleLock,
+        handleCancelRun,
+        handleDeleteRun,
+        handleRerunRun,
+        // derived
+        totalRuns: runStats.totalRuns,
+        completedRuns,
+        overallSuccessRate: runStats.overallSuccessRate,
+        activeRunsCount: runStats.activeRunsCount,
+        failedRunsCount: runStats.failedRunsCount,
+        manualRunsCount: runStats.manualRunsCount,
+        scheduledRunsCount: runStats.scheduledRunsCount,
+        passedTestCases: runStats.passedTestCases,
+        failedTestCases: runStats.failedTestCases,
+        totalTestCases: runStats.totalTestCases,
+        // reset
+        _reset,
+      }) as const,
+    [
+      runs, loading, selectedRunId, selectedRunDetails, closeDrawer, detailsLoading,
+      detailsError, streamedStdout, isStreaming, selectedRun, fetchRuns,
+      fetchSelectedRunDetails, handleToggleLock, handleCancelRun, handleDeleteRun,
+      handleRerunRun, runStats, completedRuns, _reset,
+    ],
+  )
 }

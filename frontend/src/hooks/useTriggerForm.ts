@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { Profile } from '../types'
 import { buildProfilePayload } from '../profilePayload'
 
@@ -34,6 +34,23 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
   const [formError, setFormError] = useState<string | null>(null)
 
   // ── helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * BUG: a bare `Number(value)` accepted NaN (non-numeric input) and
+   * negative/zero values into timeoutSeconds — reject anything that isn't
+   * "" (use the default timeout) or a positive integer, keeping the last
+   * valid value on invalid keystrokes.
+   */
+  const handleTimeoutSecondsChange = useCallback((value: string) => {
+    if (value === '') {
+      setTimeoutSeconds('')
+      return
+    }
+    const n = Number(value)
+    if (Number.isFinite(n) && n >= 1) {
+      setTimeoutSeconds(Math.floor(n))
+    }
+  }, [])
 
   const makeEnvPayload = useCallback(
     () =>
@@ -149,6 +166,8 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         setFormError('Please enter a profile name.')
         return
       }
+      setIsSubmitting(true)
+      setFormError(null)
       try {
         const resp = await apiFetch('/profiles', {
           method: 'POST',
@@ -176,6 +195,8 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
         }
       } catch {
         setFormError('Network error. Failed to save execution profile.')
+      } finally {
+        setIsSubmitting(false)
       }
     },
     [apiFetch, profileName, profileDesc, testsPath, selectedRunner, customArgs, timeoutSeconds, makeEnvPayload],
@@ -227,28 +248,38 @@ export function useTriggerForm({ apiFetch }: UseTriggerFormOpts) {
     [apiFetch, editingProfileId, profileName, profileDesc, testsPath, selectedRunner, customArgs, timeoutSeconds, makeEnvPayload, resetForm],
   )
 
-  return {
-    // state
-    testsPath, setTestsPath,
-    selectedRunner, setSelectedRunner,
-    customArgs, setCustomArgs,
-    allureEnabled, setAllureEnabled,
-    timeoutSeconds, setTimeoutSeconds,
-    envVars, setEnvVars,
-    editingProfileId, setEditingProfileId,
-    selectedProfileId, setSelectedProfileId,
-    profileName, setProfileName,
-    profileDesc, setProfileDesc,
-    isSavingProfile, setIsSavingProfile,
-    isSubmitting,
-    formError,
-    // helpers
-    makeEnvPayload,
-    resetForm,
-    // actions
-    openEditProfile,
-    handleTriggerRun,
-    handleSaveProfile,
-    handleUpdateProfile,
-  } as const
+  return useMemo(
+    () =>
+      ({
+        // state
+        testsPath, setTestsPath,
+        selectedRunner, setSelectedRunner,
+        customArgs, setCustomArgs,
+        allureEnabled, setAllureEnabled,
+        timeoutSeconds, setTimeoutSeconds, handleTimeoutSecondsChange,
+        envVars, setEnvVars,
+        editingProfileId, setEditingProfileId,
+        selectedProfileId, setSelectedProfileId,
+        profileName, setProfileName,
+        profileDesc, setProfileDesc,
+        isSavingProfile, setIsSavingProfile,
+        isSubmitting,
+        formError,
+        // helpers
+        makeEnvPayload,
+        resetForm,
+        // actions
+        openEditProfile,
+        handleTriggerRun,
+        handleSaveProfile,
+        handleUpdateProfile,
+      }) as const,
+    [
+      testsPath, selectedRunner, customArgs, allureEnabled, timeoutSeconds,
+      handleTimeoutSecondsChange, envVars, editingProfileId, selectedProfileId,
+      profileName, profileDesc, isSavingProfile, isSubmitting, formError,
+      makeEnvPayload, resetForm, openEditProfile, handleTriggerRun,
+      handleSaveProfile, handleUpdateProfile,
+    ],
+  )
 }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 class RunStatus(enum.StrEnum):
@@ -39,6 +39,22 @@ class User(BaseModel):
 MAX_TIMEOUT_SECONDS = 86_400  # 24h
 
 
+def _reject_path_traversal(value: str) -> str:
+    """BUG-25: reject tests_path values containing a '..' path segment.
+
+    Owner-scope checks (api.routes._suite_name_from_tests_path) only inspect
+    the first path component to determine which suite a request is touching,
+    but execution (core.paths.safe_subpath) resolves the *whole* path — so a
+    value like "owned-suite/../victim-suite" passes the owner check (it only
+    ever sees "owned-suite") yet actually executes against a sibling suite
+    the caller doesn't own. Rejecting '..' outright keeps both checks talking
+    about the same suite.
+    """
+    if ".." in value.replace("\\", "/").split("/"):
+        raise ValueError("tests_path must not contain '..' path segments")
+    return value
+
+
 class RunRequest(BaseModel):
     """Incoming API request to trigger a test run."""
 
@@ -56,6 +72,11 @@ class RunRequest(BaseModel):
     selected_markers: list[str] = Field(default_factory=list)
     extra_args: str = ""
     env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("tests_path")
+    @classmethod
+    def _validate_tests_path(cls, value: str) -> str:
+        return _reject_path_traversal(value)
 
     @classmethod
     def from_profile(cls, profile: TestProfile) -> RunRequest:
@@ -253,6 +274,44 @@ class CaseHistoryPoint(BaseModel):
 
     created_at: datetime
     status: str
+
+
+class RootCauseCategory(enum.StrEnum):
+    """Root-cause buckets for an AI failure diagnosis (read-only analysis)."""
+
+    NEW_FAILURE = "new_failure"  # newly-red case vs baseline — likely a regression
+    HISTORICAL_FLAKY = "historical_flaky"  # oscillating history, not a real break
+    ENVIRONMENT = "environment"  # infra/network/dependency, not the test's fault
+    ASSERTION = "assertion"  # a genuine assertion mismatch
+    TIMEOUT = "timeout"  # exceeded the run/step time budget
+    PERMISSION_PATH = "permission_path"  # permission denied / missing path
+
+
+class DiagnosisConfidence(enum.StrEnum):
+    """How confident the diagnosis is."""
+
+    HIGH = "HIGH"
+    MED = "MED"
+    LOW = "LOW"
+
+
+class NextStep(BaseModel):
+    """One actionable next step suggested by a failure diagnosis."""
+
+    kind: str  # rerun_profile | inspect_log | check_regression | inspect_diff | other
+    action: str
+    reference: str | None = None  # profile_id / log anchor / baseline run_id, etc.
+
+
+class FailureDiagnosis(BaseModel):
+    """Structured AI diagnosis of why a run failed. Read-only — never edits code."""
+
+    category: RootCauseCategory
+    confidence: DiagnosisConfidence
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+    is_likely_regression: bool = False
+    next_steps: list[NextStep] = Field(default_factory=list)
 
 
 class ReportRef(BaseModel):

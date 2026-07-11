@@ -1,12 +1,14 @@
 # 外部测试套件接入：跨环境（dev / 服务器）设计
 
-> 状态：**round 3（2026-06-24），做减法收敛 + P1 补丁（依赖准备网络归属）**。不含实现代码。
+> 状态：**round 3（2026-06-24）设计定稿 → ✅ 已实现**。本文档记录的 git 接入方案（元数据层 + clone/pull/delete + 依赖准备）已全部落地为生产代码，详见各阶段旁的实现位置标注（§5、§6、§10、§11）。
 > round 1 方案有洞 → round 2 补洞补过头（引入与单实例架构/SQLite/playwright 冲突的复杂度）
 > → round 3 砍掉多副本过度设计、修正 G2 错误、贴回项目现状。修订轨迹见 §12。
 > 背景触发：容器化后用 `AddSuiteModal` 绑定本地项目 `~/code/my-e2e-suite`，
 > 后端在容器内 `external_tests/` 建了指向宿主绝对路径的软链接，但容器未挂载该路径 →
 > 软链悬空 → 警告；orchestrator `copytree(..., ignore_dangling_symlinks=True)` 跳过悬空软链 →
 > **测试拿不到文件**。
+>
+> **实现速查**：`TestSuite` model（`src/qarunner/models.py:122`）· `POST /tests/clone`（`src/qarunner/api/routes.py:886`）· `POST /tests/{suite_name}/pull`（`routes.py:972`）· `DELETE /tests/{suite_name}`（`routes.py:1101`）· 前端 Git URL/凭证 Tab（`frontend/src/components/AddSuiteModal.tsx`，`data-testid="clone-*"` 系列）。
 
 ## 1. 问题陈述
 
@@ -97,25 +99,25 @@ volumes:
 
 ## 5. 后端改动点
 
-1. **suite 元数据层**（§3.3）：新 `TestSuite` model + store + sqlite 表 + 迁移。**先决项**。
-2. **`POST /tests/clone`**：入参 `{ url, name?, ref?, credential_ref? }`；`git clone --depth 1 [-b ref]` 落 suites 根 + 写记录（`source="git"`, `created_by`=当前用户, ref=实际默认分支）。已存在则拒绝（更新走 pull）。
-3. **`POST /tests/{name}/pull`**（决策 1）：`git fetch --depth 1 origin <记录的 ref> && git reset --hard FETCH_HEAD`。**owner-scope**。
-4. **`DELETE /tests/{name}`**（G1）：git → `rmtree`+删记录；local → `unlink`+删记录。**owner-scope**。
-5. **`list_tests`**：文件系统实体 + `suites` 左 join（R5），返回带 `source`。
-6. **安全**（§7）：URL 白名单、子进程参数化、`name` 路径逃逸校验、克隆超时/体积上限、**owner-scope**。
-7. **依赖准备 / jail 复制（R1，重做 G2；含 P1 闭环）**——**不能 ignore `node_modules`**：playwright runner 跑 `npx playwright test`（playwright_runner.py:23），依赖 `node_modules/@playwright/test`（package.json:23），ignore 会让它跑不起来。
+1. **suite 元数据层**（§3.3）：新 `TestSuite` model + store + sqlite 表 + 迁移。**先决项**。✅ 已实现（`TestSuite`，`src/qarunner/models.py:122`）。
+2. **`POST /tests/clone`**：入参 `{ url, name?, ref?, credential_ref? }`；`git clone --depth 1 [-b ref]` 落 suites 根 + 写记录（`source="git"`, `created_by`=当前用户, ref=实际默认分支）。已存在则拒绝（更新走 pull）。✅ 已实现（`src/qarunner/api/routes.py:886`）。
+3. **`POST /tests/{name}/pull`**（决策 1）：`git fetch --depth 1 origin <记录的 ref> && git reset --hard FETCH_HEAD`。**owner-scope**。✅ 已实现（`routes.py:972`）。
+4. **`DELETE /tests/{name}`**（G1）：git → `rmtree`+删记录；local → `unlink`+删记录。**owner-scope**。✅ 已实现（`routes.py:1101`）。
+5. **`list_tests`**：文件系统实体 + `suites` 左 join（R5），返回带 `source`。✅ 已实现。
+6. **安全**（§7）：URL 白名单、子进程参数化、`name` 路径逃逸校验、克隆超时/体积上限、**owner-scope**。✅ 已实现。
+7. **依赖准备 / jail 复制（R1，重做 G2；含 P1 闭环）**——**不能 ignore `node_modules`**：playwright runner 跑 `npx playwright test`（playwright_runner.py:23），依赖 `node_modules/@playwright/test`（package.json:23），ignore 会让它跑不起来。✅ 已实现（`npm ci` 准备逻辑见 `routes.py`，clone 端点附近）。
    - **依赖准备只在 platform 的 clone/link 阶段做**（P1）：`npm ci` 要联网拉包，而 executor 是 `network_mode="none"`（docker_runner.py:138，SEC-3 零网络）→ 装依赖只能发生在有出网的 **platform 容器**，**executor 内永不联网、不装包**。git suite（仓库通常 `.gitignore` 掉 node_modules，clone 后没有）在 clone 后由 platform 执行一次 `npm ci`；local suite 复用宿主已装依赖。
-   - **装完依赖后两种来源同样面临 copytree 开销**（P1 纠正 round 2 的"git 就没事"）：node_modules 一旦在 suite 目录里（git = `npm ci` 之后，local = 本来就有），orchestrator `copytree` 进 jail 都会全量复制（可能 GB 级）。缓解策略（只读 mount node_modules 而非复制 / jail 内按需装 / 接受复制）对**两种来源统一**留待实现时定。
-   - **唯一红线**：`_JAIL_IGNORE_NAMES`（orchestrator.py:57）**不加 node_modules**（否则 playwright 跑不了）。
-8. **实现注意项（写代码时定，非设计阻塞）**：`clone -b <tag>` 时 `rev-parse --abbrev-ref HEAD` 返回 detached `HEAD`，记录 ref 需特判（N1）；suites 表孤儿记录（目录被手动删、记录残留）的清理时机（N2）；手动放进 `external_tests`、无记录无 owner 的目录其 `DELETE` 权限判定（N3）。
+   - **装完依赖后两种来源同样面临 copytree 开销**（P1 纠正 round 2 的"git 就没事"）：node_modules 一旦在 suite 目录里（git = `npm ci` 之后，local = 本来就有），orchestrator `copytree` 进 jail 都会全量复制（可能 GB 级）。缓解策略（只读 mount node_modules 而非复制 / jail 内按需装 / 接受复制）对**两种来源统一**留待实现时定——具体择定了哪种缓解策略未在本次核实范围内，需查 orchestrator 复制逻辑现状确认。
+   - **唯一红线**：`_JAIL_IGNORE_NAMES`（orchestrator.py:88，现为 `{".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"}`）**不含 node_modules**——红线已守住，playwright 可正常跑。
+8. **实现注意项（写代码时定，非设计阻塞）**：`clone -b <tag>` 时 `rev-parse --abbrev-ref HEAD` 返回 detached `HEAD`，记录 ref 需特判（N1）；suites 表孤儿记录（目录被手动删、记录残留）的清理时机（N2）；手动放进 `external_tests`、无记录无 owner 的目录其 `DELETE` 权限判定（N3）。✅ 三项均已实现：N1（`routes.py:928` 附近，显式 ref 信任原值以规避 detached HEAD 下 `rev-parse` 不可靠）、N2/N3（`delete_test_suite` 文档字符串，`routes.py:1110-1111`：无目录的孤儿记录直接清、无记录的目录仅 admin 可删）。
 
-## 6. 前端改动点
+## 6. 前端改动点 ✅ 已实现
 
-- `AddSuiteModal`（已接入 `App.tsx`）扩展为两个 tab：
-  - **Git URL**（主力）：URL + 可选分支 + 可选凭证 → `POST /tests/clone`。
-  - **本地路径**（dev）：→ `POST /tests/link`，保留"路径不可达"警告。
-- suite 列表按 `source` 区分：git 显示"更新"（`/pull`）+"移除"（`DELETE`）；local 显示"移除"。
-- 沿用 `onSuiteLinked`（`fetchTests`）刷新。
+- `AddSuiteModal`（已接入 `App.tsx`）扩展为两个 tab：✅ 已实现（`frontend/src/components/AddSuiteModal.tsx`）。
+  - **Git URL**（主力）：URL + 可选分支 + 可选凭证 → `POST /tests/clone`。✅ 已实现（`data-testid="clone-url-input"` / `clone-ref-input` / `clone-cred-select` / `clone-newcred-name` / `clone-newcred-secret` / `clone-newcred-save` / `clone-submit` / `clone-feedback`）。
+  - **本地路径**（dev）：→ `POST /tests/link`，保留"路径不可达"警告。✅ 已实现。
+- suite 列表按 `source` 区分：git 显示"更新"（`/pull`）+"移除"（`DELETE`）；local 显示"移除"。✅ 已实现（`frontend/src/components/ProjectSidebar.tsx`：按 `suiteInfoByName.get(suite)?.source === 'git'` 分支，接 `handlePullSuite`/`handleDeleteSuite`，`frontend/src/hooks/useSuites.ts`）。
+- 沿用刷新逻辑（`fetchTests`）。✅ 已实现——回调改经 `d.suites.fetchTests()`（`useSuites.ts` hook 模式），非文档原文写的 `onSuiteLinked` prop 名，但行为一致。
 
 ## 7. 安全考量 [COMMON]
 
@@ -141,26 +143,26 @@ volumes:
 - list_tests 左 join 后，**未登记目录仍显示**（不强制回填即可见，R5）。
 - 不删 `POST /tests/link`。
 
-## 10. 分阶段落地建议（round 3）
+## 10. 分阶段落地建议（round 3）—— 阶段 0-5 全部 ✅ 已实现
 
-- **阶段 0（已完成）**：dev artifacts 浅挂载修复（`/app/artifacts`），消除 DB 503。
-- **阶段 1（地基）**：suite 元数据层（model/store/sqlite 表/迁移/回填）+ `list_tests` 左 join。
-- **阶段 2**：`POST /tests/clone`（落实际 ref）+ `/pull`（fetch+reset）+ `DELETE` + 安全（owner-scope/URL 白名单/注入）。
-- **阶段 3**：node 类 suite 的依赖准备（`npm ci`）+ jail 复制策略（不 ignore node_modules）。
-- **阶段 4**：compose 把 suites 根卷化（dev/服务器单实例两套）。
-- **阶段 5**：前端 Git tab + 来源区分 + 更新/移除按钮 + 凭证输入。
-- **（未来，超范围）**：多副本支持——先解决 CONC-2，再设计 suites 跨副本一致性（含 SQLite 元数据共享）。
+- **阶段 0（已完成）**：dev artifacts 浅挂载修复（`/app/artifacts`），消除 DB 503。✅ 已实现。
+- **阶段 1（地基）**：suite 元数据层（model/store/sqlite 表/迁移/回填）+ `list_tests` 左 join。✅ 已实现（`TestSuite`，`src/qarunner/models.py:122`）。
+- **阶段 2**：`POST /tests/clone`（落实际 ref）+ `/pull`（fetch+reset）+ `DELETE` + 安全（owner-scope/URL 白名单/注入）。✅ 已实现（`src/qarunner/api/routes.py:886`、`:972`、`:1101`）。
+- **阶段 3**：node 类 suite 的依赖准备（`npm ci`）+ jail 复制策略（不 ignore node_modules）。✅ 已实现（`npm ci` 见 routes.py；`_JAIL_IGNORE_NAMES` 不含 node_modules，见 orchestrator.py:88）。
+- **阶段 4**：compose 把 suites 根卷化（dev/服务器单实例两套）。✅ 已实现——`docker-compose.dev.yml` 含 `./external_tests:/app/external_tests` + `QARUNNER_PROJECTS_ROOT` 驱动的本地链接挂载；`docker-compose.yml`（服务器）含 `${PWD}/external_tests` 绑定挂载（注释指向可换成持久化目录），与本节设计意图一致，具体卷语法（bind vs. named volume）与 §4 示例略有出入，不影响结论。
+- **阶段 5**：前端 Git tab + 来源区分 + 更新/移除按钮 + 凭证输入。✅ 已实现（`AddSuiteModal.tsx` + `ProjectSidebar.tsx`）。
+- **（未来，超范围）**：多副本支持——先解决 CONC-2，再设计 suites 跨副本一致性（含 SQLite 元数据共享）。**仍是计划中，未实现**（本设计明确锁定单实例，§2 非目标）。
 
-## 11. 决策（已定稿，含 round 3 修订）
+## 11. 决策（已定稿，含 round 3 修订）—— 全部 ✅ 已实现
 
-| # | 决策 | 落地含义 |
-|---|---|---|
-| 1 | **更新方式：手动** | 不自动 pull / 无 webhook；"更新"按钮 → `/pull`，内部 `fetch --depth 1 + reset --hard`（兼容浅克隆）。 |
-| 2 | **凭证：每仓库** | 每 git suite 存自己的凭证引用；值经环境/挂载注入、不落明文（SEC-2）；由平台单实例持有。 |
-| 3 | **dev 本地软链根：保留** | `QARUNNER_PROJECTS_ROOT` 默认 `~/code`，可 `.env` 调窄。 |
-| 4 | **部署模型：单实例**（round 3 修订） | 平台单实例 = 唯一 git 执行者与写者，贴合 CONC-2。**多副本超出范围**，列为未来前置工程。 |
-| 5 | **suite 持久化：新建元数据层** | 新建 `TestSuite` model + store + 迁移 + owner；list_tests 文件系统实体左 join 元数据（不破坏手动放目录）。 |
-| 6 | **node_modules：不 ignore**（round 3 修订） | playwright 需要它；改为依赖准备（git suite `npm ci`）+ 复制/只读 mount 策略，绝不加进 jail ignore。 |
+| # | 决策 | 落地含义 | 落地状态 |
+|---|---|---|---|
+| 1 | **更新方式：手动** | 不自动 pull / 无 webhook；"更新"按钮 → `/pull`，内部 `fetch --depth 1 + reset --hard`（兼容浅克隆）。 | ✅ 已实现（`routes.py:972`） |
+| 2 | **凭证：每仓库** | 每 git suite 存自己的凭证引用；值经环境/挂载注入、不落明文（SEC-2）；由平台单实例持有。 | ✅ 已实现（`TestSuite.credential_ref`，`models.py:122`） |
+| 3 | **dev 本地软链根：保留** | `QARUNNER_PROJECTS_ROOT` 默认 `~/code`，可 `.env` 调窄。 | ✅ 已实现（`docker-compose.dev.yml`） |
+| 4 | **部署模型：单实例**（round 3 修订） | 平台单实例 = 唯一 git 执行者与写者，贴合 CONC-2。**多副本超出范围**，列为未来前置工程。 | ✅ 设计按单实例落地；多副本仍是计划中，未实现 |
+| 5 | **suite 持久化：新建元数据层** | 新建 `TestSuite` model + store + 迁移 + owner；list_tests 文件系统实体左 join 元数据（不破坏手动放目录）。 | ✅ 已实现（`models.py:122`） |
+| 6 | **node_modules：不 ignore**（round 3 修订） | playwright 需要它；改为依赖准备（git suite `npm ci`）+ 复制/只读 mount 策略，绝不加进 jail ignore。 | ✅ 已实现（`_JAIL_IGNORE_NAMES`，`orchestrator.py:88`，不含 node_modules） |
 
 ## 12. 评审修订记录
 

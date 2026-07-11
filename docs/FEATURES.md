@@ -73,13 +73,25 @@
 
 - **基线 diff** — `GET /runs/{id}/diff`:把本次 run 与**同执行范围**(同套件 + runner + 参数)的最近一次 `COMPLETED` run 比对,分五桶——**新增失败 / 已修复 / 持续失败 / 新增用例 / 消失用例**。范围不可比则不强行 diff(返回空基线),不把没跑的用例误判成「消失」。
 - **通过率趋势** — `GET /runs/trend`:某套件历次 `COMPLETED` run 的通过率随时间曲线(升序);前端在仪表板手绘 SVG 折线(零图表依赖)。
-- **Flaky 检测** — 单用例最近 N 次结果在 `pass ↔ fail/error` 间反复翻转(**≥2 次**)即标记**不稳定**,区别于单次回归 / 单次修复(单调变化不算 flaky)。阈值为保守占位,待真实数据校准。
+- **Flaky 检测** — 单用例最近 N 次结果在 `pass ↔ fail/error` 间反复翻转即标记**不稳定**,默认阈值**至少 4 次观测、翻转 ≥3 次**,区别于单次回归 / 单次修复(单调变化不算 flaky)。阈值为保守占位,待真实数据校准。
 - **用例级历史** — `GET /cases/history`:点开 diff 里任一用例,懒加载它的跨 run 结果序列(状态格条 + flaky 徽章)。
 
 owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run**(diff 的基线候选亦然,不泄露他人 run),admin 跨全部。纯判定逻辑(diff 分桶 / 基线选择 / flaky 翻转)均为 `core/` 下**零 DB 依赖的纯函数**,可独立单测。
 → `core/regression.py`(diff + 基线)、`core/trend.py`、`core/flaky.py`、`adapters/sqlite_store.py`(`run_test_cases` 表 + `get_case_history`)、`frontend/src/components/{RunDetailsDrawer,SuiteTrend}.tsx`
 
-## 6. 定时调度
+## 6. AI 失败诊断
+
+在跨次对比的基础上,把失败用例交给 LLM 做结构化根因诊断——只读,从不修改测试或代码:
+
+- **结构化诊断** — `POST /runs/{id}/ai-analysis` 聚合本次 run 的失败用例 + **stdout/stderr 日志尾部** + 基线 diff + 通过率趋势 + 逐用例 flaky 历史,一并交给 LLM,产出**六类根因**之一(新增失败 / 历史 flaky / 环境问题 / 断言不符 / 超时 / 权限路径问题)+ **置信度**(HIGH/MED/LOW)+ 证据列表 + 是否疑似回归 + 建议下一步;`GET /runs/{id}/ai-analysis` 取回缓存的诊断结果。
+- **Provider 中立、可切换** — `FailureAnalyzer` 端口(`ports/ai.py`)抽象 LLM 调用,`anthropic` / `openai` 两个 provider 实现共享同一套 prompt 构建与回复解析(`core/failure_analysis.py`),诊断内容不因换 provider 而变;经 `QARUNNER_AI_PROVIDER` 选择,`QARUNNER_AI_BASE_URL` 可指向自建网关。
+- **无 key 自动降级** — `QARUNNER_AI_API_KEY` 为空时端点返回 `enabled:false`,前端 **Tab 入口仍可见**,点入后展示未配置说明(不报错、不调 LLM),不影响平台正常启动与使用;LLM 调用失败或回复解析失败同样降级为 LOW 置信度的兜底诊断,不让端点 500。
+- **POST 限流** — 按认证用户滑动窗口限制 `POST` 频率(默认 10 次 / 60 秒,可用 `QARUNNER_AI_POST_MAX_CALLS` / `QARUNNER_AI_POST_WINDOW_SECONDS` 调整;`max_calls=0` 关闭),超额返回 `429` + `Retry-After`。
+- **owner-scope + read-only** — 鉴权与 `/diff`、`/cases/history` 完全一致(非 admin 只能诊断自己的 run);诊断过程只读聚合数据,不落回写测试代码或用例文件。
+- **前端入口** — `RunDetailsDrawer` 详情抽屉第 4 个 Tab「AI 分析」(始终显示;未配置时内页说明)。
+→ `core/failure_analysis.py`(prompt 构建 + 回复解析)、`ports/ai.py`(`FailureAnalyzer` 协议)、`adapters/anthropic_analyzer.py`、`adapters/openai_analyzer.py`、`api/routes.py`(`/runs/{id}/ai-analysis`)、`frontend/src/components/AiInsightsTab.tsx`
+
+## 7. 定时调度
 
 - **cron + 时区** — 标准 cron 表达式,每个调度独立 IANA 时区。
 - **下次运行预览** — 创建前预览未来 5 次触发时间。
@@ -87,7 +99,7 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 - **多副本安全** — 数据库级 `claim_schedule_run()` 原子竞选,保证每个触发点只有一个副本真正建 run(防重复触发);启动**崩溃恢复**把上次遗留的 queued/running 标 failed(单实例前提)。
 → `core/cron.py`、`adapters/apscheduler_schedule.py`、`core/schedule_service.py`
 
-## 7. 账户与权限
+## 8. 账户与权限
 
 - **认证** — JWT(HS256)+ bcrypt;令牌走 `Authorization: Bearer` 或 HttpOnly Cookie。
 - **角色** — `admin` / `user` 两级。
@@ -96,13 +108,13 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 - **登录限流** — 同 `用户名|IP` 连错 5 次指数退避锁定(60→900s),防爆破。
 → `core/auth.py`、`core/login_throttle.py`、`api/routes.py`
 
-## 8. 两种使用界面
+## 9. 两种使用界面
 
-- **Web 控制台**(React 18 + Vite + Semi UI 单页应用):登录;仪表板 4 张统计卡片(总数 / 成功率 / 失败 / 活跃队列);左栏套件 + Profile 管理;右栏运行表格(按状态 / 引擎 / 归属 / 手动·调度多维过滤 + 搜索);详情抽屉(日志 + 报告);触发弹窗(文件树 + marker + env 编辑);调度 / 用户管理弹窗。工程特性:中英 **i18n**、**明暗主题**、**无障碍 a11y**(焦点管理 + 键盘激活)、SSE 实时更新 + 轮询。
-- **REST API**(46 端点)+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema);完整契约见 [`API_REFERENCE.md`](API_REFERENCE.md)。
+- **Web 控制台**(React 18 + Vite + Semi UI 单页应用):登录;仪表板 4 张统计卡片(总数 / 成功率 / 失败 / 活跃队列);左栏套件 + Profile 管理;右栏运行表格(按状态 / 引擎 / 归属 / 手动·调度多维过滤 + 搜索);详情抽屉(日志 / 报告 / 基线 diff / AI 分析四个 Tab);触发弹窗(文件树 + marker + env 编辑);调度 / 用户管理弹窗。工程特性:中英 **i18n**、**明暗主题**、**无障碍 a11y**(焦点管理 + 键盘激活)、SSE 实时更新 + 轮询。
+- **REST API**(端点数随迭代增长,完整清单见 [`API_REFERENCE.md`](API_REFERENCE.md))+ FastAPI 自带 **`/docs`**(Swagger UI)、**`/redoc`**、**`/openapi.json`**(权威 schema)。
 → `frontend/src/components/*`、`frontend/src/hooks/*`
 
-## 9. 部署与运维
+## 10. 部署与运维
 
 - **Docker Compose 两套** — 生产单镜像同源(API + SPA 同端口 8000)、开发双容器热重载。
 - **就绪探针** — `GET /health`(DB 可达才 200)。
@@ -110,7 +122,7 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 - **全环境变量配置** — `QARUNNER_` 前缀;`SECRET_KEY` / `ADMIN_PASSWORD` 必填且拒弱值。
 → `../README.md` 配置表、`config.py`
 
-## 10. 产品边界（刻意不做的）
+## 11. 产品边界（刻意不做的）
 
 经源码逐项查证**确实不存在**,便于理解产品范围:
 
@@ -127,5 +139,5 @@ owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run
 
 ## 附：可信度与交叉引用
 
-- 全文功能均经源码核对(`routes.py` / `orchestrator.py` / `docker_runner.py` / `subprocess_runner.py` / `apscheduler_schedule.py` / `auth.py` / `config.py` 及 `frontend/src/*`)`[KNOWN] HIGH`;第 10 节否定结论为逐项查证「不存在」,非「未找到」。
+- 全文功能均经源码核对(`routes.py` / `orchestrator.py` / `docker_runner.py` / `subprocess_runner.py` / `apscheduler_schedule.py` / `auth.py` / `config.py` 及 `frontend/src/*`)`[KNOWN] HIGH`;第 11 节否定结论为逐项查证「不存在」,非「未找到」。
 - 接口细节(字段 / 状态码 / 权限)→ [`API_REFERENCE.md`](API_REFERENCE.md);架构分层 → [`../ARCHITECTURE.md`](../ARCHITECTURE.md);部署配置 → [`../README.md`](../README.md)。

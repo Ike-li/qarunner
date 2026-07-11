@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import docker
+import requests
 from docker.errors import ImageNotFound
 
 from qarunner.errors import RunnerError
@@ -260,14 +261,29 @@ class DockerRunner:
             try:
                 wait_result = await asyncio.to_thread(_wait_container)
                 exit_code = wait_result.get("StatusCode", -1)
-            except Exception:
+            except requests.exceptions.ReadTimeout:
+                # BUG-10: this is the *only* exception docker-py's own
+                # Container.wait() docstring attributes to the timeout
+                # actually elapsing — everything else (APIError, connection
+                # resets) is an infrastructure failure, not "the suite ran
+                # too long", and must not be reported as timed_out=True.
                 timed_out = True
-                logger.warning("Container execution timed out or failed. Killing container...")
+                logger.warning("Container execution timed out. Killing container...")
                 try:
                     await asyncio.to_thread(container.kill)
                 except Exception as kill_exc:
                     logger.warning("Failed to kill container: %s", kill_exc)
                 exit_code = 137  # Standard SIGKILL exit code
+            except Exception as wait_exc:
+                logger.warning(
+                    "Container wait failed (not a timeout): %s. Killing container...",
+                    wait_exc,
+                )
+                try:
+                    await asyncio.to_thread(container.kill)
+                except Exception as kill_exc:
+                    logger.warning("Failed to kill container: %s", kill_exc)
+                exit_code = 137  # Standard SIGKILL exit code; state is unknown
             finally:
                 if timed_out:
                     log_task.cancel()

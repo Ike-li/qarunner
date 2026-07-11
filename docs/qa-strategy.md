@@ -67,14 +67,16 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 
 ### Current State
 
+> Counts refreshed from an actual repo scan on 2026-07-10 (backend: 39 test files / 741 tests; frontend unit: 28 test files / 118 tests; E2E: 38 spec files — up from 11 as AI failure diagnosis and other features shipped with full test coverage). Percentages below are file-count shares of the four rows shown and will not sum against unmeasured categories.
+
 | Level | Count | Percentage | Notes |
 |-------|-------|------------|-------|
-| **Unit (Backend)** | 53 test files | 68% | 100% line + branch coverage |
-| **Unit (Frontend)** | ~5 test files | 6% | Not enforced |
-| **Integration (Backend)** | ~15 test files | 19% | API + database tests |
-| **E2E (Frontend)** | 7 spec files | 100% (7/7 journeys) | All critical paths covered |
+| **Unit (Backend)** | 39 test files | 32% | 100% line + branch coverage |
+| **Unit (Frontend)** | 28 test files | 23% | Not enforced |
+| **Integration (Backend)** | ~15 test files | 12% | API + database tests |
+| **E2E (Frontend)** | 38 spec files | 32% | All critical paths covered |
 
-**Shape:** Healthy pyramid (68% unit, 19% integration, 6% E2E)
+**Shape:** Unit/integration/E2E mix has shifted since this document was first written, mainly from E2E growth (11→38 files) as new features shipped with matching test coverage — see note above.
 
 **CI Duration:** ~5 minutes (target: <10 minutes) ✅
 **Flakiness Rate:** Unknown (flaky detection just implemented)
@@ -84,7 +86,7 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 
 | Level | Count | Percentage | Notes |
 |-------|-------|------------|-------|
-| **Unit (Backend)** | 53+ test files | 60% | Maintain 100% coverage |
+| **Unit (Backend)** | 39+ test files | 60% | Maintain 100% coverage |
 | **Unit (Frontend)** | 20+ test files | 25% | Enforce 80% coverage |
 | **Integration (Backend)** | 15+ test files | 12% | Maintain current coverage |
 | **E2E (Frontend)** | 7 spec files | 3% | All critical journeys |
@@ -310,7 +312,7 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 - ✅ Integration tests for all API endpoints
 - ✅ E2E for 5 critical user journeys
 - 🔄 Frontend unit test enforcement (80% coverage target)
-- 🔄 E2E for remaining 2 critical journeys (regression analysis, scheduling)
+- ✅ E2E for remaining 2 critical journeys (regression analysis, scheduling) — see `journey-regression-loop`, `run-diff`, `suite-trend`, `journey-schedule-heartbeat`, `schedule-mgmt` specs
 - ✅ Test data management (fixtures, fakes)
 
 **Exit:** All critical paths have E2E coverage, integration tests cover all APIs.

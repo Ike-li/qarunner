@@ -10,7 +10,10 @@ from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.errors import RunNotFound
 from qarunner.models import (
     Credential,
+    DiagnosisConfidence,
+    FailureDiagnosis,
     ReportRef,
+    RootCauseCategory,
     Run,
     RunStatus,
     TestCaseResult,
@@ -128,6 +131,22 @@ async def test_list_ordered_by_created_at_desc(store: SqliteStore) -> None:
     await store.save(run2)
     result = await store.list()
     assert [r.id for r in result] == ["run-002", "run-001"]
+
+
+async def test_list_default_is_unbounded(store: SqliteStore) -> None:
+    # Callers that must see every run (e.g. delete_user's cascade cleanup)
+    # rely on list() with no limit= staying unbounded.
+    for i in range(3):
+        await store.save(_make_run(id=f"run-{i}", created_at=datetime(2025, 1, i + 1, tzinfo=UTC)))
+    result = await store.list()
+    assert len(result) == 3
+
+
+async def test_list_respects_limit_newest_first(store: SqliteStore) -> None:
+    for i in range(3):
+        await store.save(_make_run(id=f"run-{i}", created_at=datetime(2025, 1, i + 1, tzinfo=UTC)))
+    result = await store.list(limit=2)
+    assert [r.id for r in result] == ["run-2", "run-1"]  # newest 2, DESC order preserved
 
 
 async def test_save_with_summary(store: SqliteStore) -> None:
@@ -267,6 +286,48 @@ async def test_user_delete_and_update(store: SqliteStore) -> None:
     assert await store.delete_user("dave") is False
 
 
+async def test_demote_if_not_last_admin_no_op_when_sole_admin(store: SqliteStore) -> None:
+    """BUG-6: the seeded default admin is the only admin — demoting it must
+    be refused so the platform can't lock itself out of every admin route."""
+    admins = [u for u in await store.list_users() if u["role"] == "admin"]
+    assert len(admins) == 1
+    sole_admin = admins[0]["username"]
+
+    demoted = await store.demote_if_not_last_admin(sole_admin, "user")
+
+    assert demoted is False
+    assert (await store.get_user(sole_admin))["role"] == "admin"
+
+
+async def test_demote_if_not_last_admin_succeeds_with_second_admin(store: SqliteStore) -> None:
+    await store.create_user("second-admin", "hashed", "admin")
+
+    demoted = await store.demote_if_not_last_admin("second-admin", "user")
+
+    assert demoted is True
+    assert (await store.get_user("second-admin"))["role"] == "user"
+
+
+async def test_cancel_if_inflight_transitions_queued_run(store: SqliteStore) -> None:
+    await store.save(_make_run(id="run-inflight", status=RunStatus.QUEUED))
+
+    changed = await store.cancel_if_inflight("run-inflight", "2025-01-01T00:00:05+00:00")
+
+    assert changed is True
+    assert (await store.get("run-inflight")).status == RunStatus.CANCELLED
+
+
+async def test_cancel_if_inflight_is_no_op_on_terminal_run(store: SqliteStore) -> None:
+    """A run that already finished (COMPLETED/FAILED/TIMEOUT) must not be
+    silently overwritten with CANCELLED by a late cancel request."""
+    await store.save(_make_run(id="run-done", status=RunStatus.COMPLETED))
+
+    changed = await store.cancel_if_inflight("run-done", "2025-01-01T00:00:05+00:00")
+
+    assert changed is False
+    assert (await store.get("run-done")).status == RunStatus.COMPLETED
+
+
 async def test_schema_migration_adds_created_by(tmp_path) -> None:
     import aiosqlite
 
@@ -352,6 +413,59 @@ async def test_profile_crud(store: SqliteStore) -> None:
 
     retrieved2 = await store.get_profile("profile-001")
     assert retrieved2 is None
+
+
+async def test_ai_diagnosis_roundtrip_upsert_and_cascade(store: SqliteStore) -> None:
+    run = _make_run(id="run-ai")
+    await store.save(run)
+    assert await store.get_ai_diagnosis("run-ai") is None
+
+    diagnosis = FailureDiagnosis(
+        category=RootCauseCategory.ASSERTION,
+        confidence=DiagnosisConfidence.HIGH,
+        summary="an assertion failed",
+        evidence=["expected 200"],
+        is_likely_regression=True,
+    )
+    await store.save_ai_diagnosis(
+        "run-ai", diagnosis, "anthropic", "claude-x", datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    got = await store.get_ai_diagnosis("run-ai")
+    assert got is not None
+    assert got.category == RootCauseCategory.ASSERTION
+    assert got.is_likely_regression is True
+    assert got.evidence == ["expected 200"]
+
+    # Upsert: re-generating replaces rather than duplicating.
+    await store.save_ai_diagnosis(
+        "run-ai",
+        diagnosis.model_copy(update={"summary": "revised"}),
+        "openai",
+        "gpt-x",
+        datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    got2 = await store.get_ai_diagnosis("run-ai")
+    assert got2 is not None
+    assert got2.summary == "revised"
+
+    # FK ON DELETE CASCADE: deleting the run drops its cached diagnosis.
+    await store.delete_run("run-ai")
+    assert await store.get_ai_diagnosis("run-ai") is None
+
+
+async def test_get_ai_diagnosis_corrupt_json_returns_none(store: SqliteStore) -> None:
+    """A corrupt cache row must degrade to None (never 500 the GET endpoint)."""
+    run = _make_run(id="run-corrupt")
+    await store.save(run)
+    async with store._connect() as db:
+        await db.execute(
+            "INSERT INTO run_ai_diagnosis "
+            "(run_id, diagnosis_json, provider, model, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("run-corrupt", "{not-valid-json", "anthropic", "m", "2026-01-01T00:00:00+00:00"),
+        )
+        await db.commit()
+    assert await store.get_ai_diagnosis("run-corrupt") is None
 
 
 async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
@@ -1123,6 +1237,67 @@ async def test_get_case_history_profile_scoped(store: SqliteStore) -> None:
 
     hist = await store.get_case_history("suite_a", "s", "t", profile_id="profile-a")
     assert [p.status for p in hist] == ["passed", "passed"]
+
+
+async def test_get_case_histories_batches_multiple_cases_one_connection(
+    store: SqliteStore,
+) -> None:
+    """PERF: create_ai_analysis looped get_case_history per failed case, each
+    opening its own connection (N+1). get_case_histories answers every case
+    in one connection instead."""
+    for i, (suite, name, st) in enumerate(
+        [("s1", "t1", "failed"), ("s1", "t1", "passed"), ("s2", "t2", "failed")]
+    ):
+        run = _make_run(
+            id=f"h{i}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, i + 1, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            f"h{i}",
+            "suite_a",
+            run.created_at,
+            [TestCaseResult(suite=suite, name=name, status=st, duration_ms=0)],
+        )
+
+    result = await store.get_case_histories("suite_a", [("s1", "t1"), ("s2", "t2")])
+
+    assert [p.status for p in result[("s1", "t1")]] == ["failed", "passed"]  # oldest-first
+    assert [p.status for p in result[("s2", "t2")]] == ["failed"]
+
+
+async def test_get_case_histories_owner_and_profile_scoped(store: SqliteStore) -> None:
+    for rid, owner, profile_id in [("ha", "alice", "prof-a"), ("hb", "bob", "prof-b")]:
+        run = _make_run(
+            id=rid,
+            tests_path="suite_a",
+            created_by=owner,
+            profile_id=profile_id,
+            status=RunStatus.COMPLETED,
+            created_at=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            rid,
+            "suite_a",
+            run.created_at,
+            [TestCaseResult(suite="s", name="t", status="passed", duration_ms=0)],
+        )
+
+    admin_view = await store.get_case_histories("suite_a", [("s", "t")])
+    assert len(admin_view[("s", "t")]) == 2
+
+    alice_view = await store.get_case_histories("suite_a", [("s", "t")], created_by="alice")
+    assert len(alice_view[("s", "t")]) == 1
+
+    profile_a_view = await store.get_case_histories("suite_a", [("s", "t")], profile_id="prof-a")
+    assert len(profile_a_view[("s", "t")]) == 1
+
+
+async def test_get_case_histories_empty_cases_returns_empty_dict(store: SqliteStore) -> None:
+    assert await store.get_case_histories("suite_a", []) == {}
 
 
 async def test_cases_cascade_deleted_with_run(store: SqliteStore) -> None:

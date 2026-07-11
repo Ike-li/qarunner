@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from docker.errors import DockerException, ImageNotFound
+import requests
+from docker.errors import APIError, DockerException, ImageNotFound
 
 from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.errors import RunnerError
@@ -45,8 +46,13 @@ class MockContainer:
         return not self.is_falsy
 
     def wait(self, timeout: int | None = None) -> dict[str, int]:
+        # docker-py's own Container.wait() docstring: ReadTimeout specifically
+        # for an exceeded timeout, APIError for a server-side failure — two
+        # distinct exception types the runner must not conflate (BUG-10).
         if self.wait_status == "timeout":
-            raise Exception("Timeout")
+            raise requests.exceptions.ReadTimeout("Read timed out")
+        if self.wait_status == "api_error":
+            raise APIError("daemon connection reset")
         return {"StatusCode": int(self.wait_status)}
 
     def kill(self) -> None:
@@ -341,6 +347,36 @@ async def test_docker_runner_timeout_kill_fails() -> None:
 
     assert result.exit_code == 137
     assert result.timed_out is True
+
+
+async def test_docker_runner_wait_api_error_kill_fails() -> None:
+    # Mirrors test_docker_runner_timeout_kill_fails for the non-timeout branch.
+    mock_client = MockClient(images_exist=True, wait_status="api_error", kill_fails=True)
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests", timeout=1)
+
+    assert result.exit_code == 137
+    assert result.timed_out is False
+    assert mock_client.mock_container.kill_called is True
+
+
+async def test_docker_runner_wait_api_error_is_not_reported_as_timeout() -> None:
+    """BUG-10: a Docker daemon/API failure while waiting on the container
+    (connection reset, daemon restart, etc.) is not the same thing as the
+    run's own timeout elapsing — the two used to be indistinguishable
+    (bare ``except Exception``), misreporting infra failures as "the test
+    suite ran too long" instead of a container-runner failure. The
+    container is still force-killed either way (its state is unknown)."""
+    mock_client = MockClient(images_exist=True, wait_status="api_error")
+    runner = DockerRunner(client=mock_client)
+
+    cmd = ["python", "-m", "pytest"]
+    result = await runner.run(cmd, cwd="/tmp/tests", timeout=1)
+
+    assert result.exit_code == 137
+    assert result.timed_out is False
     assert mock_client.mock_container.kill_called is True
     assert mock_client.mock_container.remove_called is True
 

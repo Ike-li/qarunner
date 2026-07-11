@@ -11,10 +11,12 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from qarunner.adapters.allure_cli_reporter import AllureCliReporter
+from qarunner.adapters.anthropic_analyzer import AnthropicFailureAnalyzer
 from qarunner.adapters.apscheduler_schedule import ApschedulerSchedulePort
 from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
 from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.adapters.junit_collector import JunitCollector
+from qarunner.adapters.openai_analyzer import OpenAiFailureAnalyzer
 from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.adapters.subprocess_runner import SubprocessRunner
 from qarunner.adapters.system_clock import SystemClock
@@ -24,11 +26,13 @@ from qarunner.core.auth import decode_access_token
 from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.profile_service import ProfileService
+from qarunner.core.rate_limit import SlidingWindowRateLimiter
 from qarunner.core.runners.playwright_runner import PlaywrightRunner
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
 from qarunner.core.schedule_service import ScheduleService
 from qarunner.models import User, UserRole
+from qarunner.ports.ai import FailureAnalyzer
 from qarunner.ports.schedule import SchedulePort
 from qarunner.ports.store import Store
 
@@ -49,6 +53,29 @@ class Container:
     profile_service: ProfileService
     login_throttle: LoginThrottle
     settings: Settings
+    ai_analyzer: FailureAnalyzer | None = None
+    ai_rate_limiter: SlidingWindowRateLimiter | None = None
+
+
+def _build_ai_analyzer(cfg: Settings) -> FailureAnalyzer | None:
+    """Construct the configured provider adapter, or None when AI is disabled.
+
+    An empty api_key or an unknown provider yields None — the endpoints then
+    report the feature as disabled rather than failing.
+    """
+    if not cfg.ai_api_key:
+        return None
+    kwargs = {
+        "api_key": cfg.ai_api_key,
+        "model": cfg.ai_model,
+        "base_url": cfg.ai_base_url,
+        "timeout": cfg.ai_request_timeout_seconds,
+    }
+    if cfg.ai_provider == "anthropic":
+        return AnthropicFailureAnalyzer(**kwargs)
+    if cfg.ai_provider == "openai":
+        return OpenAiFailureAnalyzer(**kwargs)
+    return None
 
 
 def create_container(settings: Settings | None = None) -> Container:
@@ -104,6 +131,11 @@ def create_container(settings: Settings | None = None) -> Container:
         base_seconds=cfg.login_throttle_base_seconds,
         max_seconds=cfg.login_throttle_max_seconds,
     )
+    ai_rate_limiter = SlidingWindowRateLimiter(
+        clock=clock,
+        max_calls=cfg.ai_post_max_calls,
+        window_seconds=cfg.ai_post_window_seconds,
+    )
 
     return Container(
         orchestrator=orchestrator,
@@ -114,6 +146,8 @@ def create_container(settings: Settings | None = None) -> Container:
         profile_service=profile_service,
         login_throttle=login_throttle,
         settings=cfg,
+        ai_analyzer=_build_ai_analyzer(cfg),
+        ai_rate_limiter=ai_rate_limiter,
     )
 
 
@@ -155,6 +189,16 @@ async def get_current_user(request: Request, token: str | None = Depends(oauth2_
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # BUG-5+13: reject tokens whose version no longer matches the stored
+    # version (password change or logout bumped it).
+    payload_tv = payload.get("token_version", 0)
+    if payload_tv != user_record.get("token_version", 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

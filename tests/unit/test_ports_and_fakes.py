@@ -7,15 +7,21 @@ from datetime import UTC, datetime
 import pytest
 
 from qarunner.adapters.sqlite_store import SqliteStore
+from qarunner.core.failure_analysis import build_failure_context
 from qarunner.errors import RunNotFound
 from qarunner.models import (
     CollectResult,
+    DiagnosisConfidence,
+    FailureDiagnosis,
     ProcessResult,
     ReportRef,
+    RootCauseCategory,
     Run,
     RunStatus,
+    TestCaseResult,
     TestSummary,
 )
+from qarunner.ports.ai import FailureAnalyzer
 from qarunner.ports.clock import Clock
 from qarunner.ports.collector import ResultCollector
 from qarunner.ports.ids import IdGenerator
@@ -29,6 +35,7 @@ from qarunner.ports.store import (
     Store,
     UserStore,
 )
+from tests.fakes.fake_ai_analyzer import FakeFailureAnalyzer
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_collector import FakeResultCollector
 from tests.fakes.fake_ids import FakeIdGenerator
@@ -75,6 +82,22 @@ _SAMPLE_REPORT = ReportRef(
     html_generated=True,
 )
 
+_SAMPLE_DIAGNOSIS = FailureDiagnosis(
+    category=RootCauseCategory.ASSERTION,
+    confidence=DiagnosisConfidence.HIGH,
+    summary="an assertion failed",
+)
+
+_SAMPLE_CONTEXT = build_failure_context(
+    _SAMPLE_RUN,
+    cases=[TestCaseResult(suite="s", name="t", status="failed", duration_ms=1, message="boom")],
+    log_tail="",
+    baseline_diff=None,
+    trend=[],
+    flaky_identities=set(),
+    allure_report_url=None,
+)
+
 
 # ── 1. Protocol conformance (runtime_checkable) ────────────────────────────
 
@@ -111,6 +134,9 @@ class TestProtocolConformance:
 
     def test_fake_allure_reporter_is_allure_reporter(self) -> None:
         assert isinstance(FakeAllureReporter(preset=_SAMPLE_REPORT), AllureReporter)
+
+    def test_fake_failure_analyzer_is_failure_analyzer(self) -> None:
+        assert isinstance(FakeFailureAnalyzer(preset=_SAMPLE_DIAGNOSIS), FailureAnalyzer)
 
 
 # ── 2. FakeProcessRunner behaviour ─────────────────────────────────────────
@@ -314,3 +340,17 @@ class TestFakeAllureReporter:
         await reporter.generate("/a")
         await reporter.generate("/b", enabled=False)
         assert len(reporter.calls) == 2
+
+
+# ── 9. FakeFailureAnalyzer behaviour ───────────────────────────────────────
+
+
+class TestFakeFailureAnalyzer:
+    async def test_returns_preset(self) -> None:
+        analyzer = FakeFailureAnalyzer(preset=_SAMPLE_DIAGNOSIS)
+        assert await analyzer.analyze(_SAMPLE_CONTEXT) is _SAMPLE_DIAGNOSIS
+
+    async def test_records_contexts(self) -> None:
+        analyzer = FakeFailureAnalyzer(preset=_SAMPLE_DIAGNOSIS)
+        await analyzer.analyze(_SAMPLE_CONTEXT)
+        assert analyzer.calls == [_SAMPLE_CONTEXT]

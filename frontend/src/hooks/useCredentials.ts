@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Credential } from '../types'
 import { apiMutate } from './useApi'
 
@@ -67,15 +67,24 @@ export function useCredentials({ apiFetch, enabled }: UseCredentialsOpts) {
     [apiFetch, fetchCredentials],
   )
 
-  return {
-    credentials,
-    credentialsLoadError,
-    fetchCredentials,
-    createCredential,
-    deleteCredential,
-    _reset: () => {
-      setCredentials([])
-      setCredentialsLoadError(false)
-    },
-  } as const
+  const _reset = useCallback(() => {
+    setCredentials([])
+    setCredentialsLoadError(false)
+  }, [])
+
+  return useMemo(
+    () =>
+      ({
+        credentials,
+        credentialsLoadError,
+        fetchCredentials,
+        createCredential,
+        deleteCredential,
+        _reset,
+      }) as const,
+    [
+      credentials, credentialsLoadError, fetchCredentials, createCredential,
+      deleteCredential, _reset,
+    ],
+  )
 }

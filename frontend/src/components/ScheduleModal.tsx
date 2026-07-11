@@ -25,7 +25,7 @@ export function ScheduleModal() {
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Calendar size={18} style={{ color: 'var(--semi-color-primary)' }} />
-          {d.lang === 'zh' ? '定时调度' : 'Schedule'}
+          {d.t('scheduleTitle')}
           <span style={{ fontSize: '0.8rem', color: 'var(--semi-color-text-2)', fontWeight: 400 }}>
             — {s.scheduleProfile.name}
           </span>
@@ -43,16 +43,16 @@ export function ScheduleModal() {
         <Row gutter={16}>
           <Col span={18}>
             <Input
-              placeholder={d.lang === 'zh' ? '调度名称' : 'Schedule name'}
+              placeholder={d.t('scheduleNamePlaceholder')}
               value={s.schedName}
               onChange={s.setSchedName}
               data-testid="schedule-name-input"
-              aria-label={d.lang === 'zh' ? '调度名称' : 'Schedule name'}
+              aria-label={d.t('scheduleNamePlaceholder')}
             />
           </Col>
           <Col span={6}>
             <Checkbox checked={s.schedEnabled} onChange={(e) => s.setSchedEnabled((e.target as HTMLInputElement).checked)}>
-              {d.lang === 'zh' ? '启用' : 'Enabled'}
+              {d.t('scheduleEnabled')}
             </Checkbox>
           </Col>
         </Row>
@@ -65,7 +65,7 @@ export function ScheduleModal() {
               onChange={s.setSchedExpression}
               prefix={<Clock size={14} />}
               data-testid="schedule-cron-input"
-              aria-label={d.lang === 'zh' ? 'Cron 表达式' : 'Cron expression'}
+              aria-label={d.t('scheduleCronExpressionLabel')}
             />
           </Col>
           <Col span={8}>
@@ -74,7 +74,7 @@ export function ScheduleModal() {
               onChange={(v) => s.setSchedTimezone(v as string)}
               style={{ width: '100%' }}
               data-testid="schedule-timezone-select"
-              aria-label={d.lang === 'zh' ? '时区' : 'Timezone'}
+              aria-label={d.t('scheduleTimezoneLabel')}
             >
               <Select.Option value="UTC">UTC</Select.Option>
               <Select.Option value="Asia/Shanghai">Asia/Shanghai</Select.Option>
@@ -92,7 +92,7 @@ export function ScheduleModal() {
         {s.previewNextRuns.length > 0 && (
           <div className={styles.schedulePreview} data-testid="schedule-preview">
             <span className={styles.schedulePreviewTitle}>
-              {d.lang === 'zh' ? '接下来 5 次触发时间' : 'Next 5 fire times'}
+              {d.t('scheduleNextFireTimes')}
             </span>
             <ul className={styles.schedulePreviewList}>
               {s.previewNextRuns.map((iso, i) => (
@@ -113,28 +113,30 @@ export function ScheduleModal() {
               onClick={() => s.handleDeleteSchedule(existing.id)}
               data-testid="schedule-delete-button"
             >
-              {d.lang === 'zh' ? '删除调度' : 'Delete'}
+              {d.t('scheduleDelete')}
             </Button>
           )}
           {existing && (
             <Button
               theme="light"
               icon={<Play size={14} />}
+              loading={s.isTriggeringSchedule}
+              disabled={s.isTriggeringSchedule}
               onClick={async () => {
                 const ok = await s.handleTriggerSchedule(existing.id)
                 if (ok) {
                   d.runs.fetchRuns()
                   s.setIsScheduleModalOpen(false)
-                  alert(d.lang === 'zh' ? '已触发一次运行' : 'Run triggered')
+                  alert(d.t('scheduleRunTriggered'))
                 }
               }}
               data-testid="schedule-trigger-button"
             >
-              {d.lang === 'zh' ? '立即触发' : 'Run Now'}
+              {d.t('scheduleRunNow')}
             </Button>
           )}
-          <Button type="primary" theme="solid" onClick={s.handleSaveSchedule} data-testid="schedule-save-button">
-            {d.lang === 'zh' ? '保存调度' : 'Save'}
+          <Button type="primary" theme="solid" onClick={s.handleSaveSchedule} loading={s.isSavingSchedule} data-testid="schedule-save-button">
+            {d.t('scheduleSave')}
           </Button>
         </div>
       </div>

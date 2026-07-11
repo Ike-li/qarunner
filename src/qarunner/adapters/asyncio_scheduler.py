@@ -6,7 +6,10 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from qarunner.ports.store import RunStore
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,7 @@ class AsyncioScheduler:
 
     def __init__(
         self,
-        store: Any,  # RunStore with dequeue_next_queued
+        store: RunStore,
         run_fn: Callable[[str], Coroutine[Any, Any, None]] | None = None,
         max_concurrency: int = 4,
         poll_interval: float = 0.5,
