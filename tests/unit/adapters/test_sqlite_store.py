@@ -1480,7 +1480,7 @@ async def test_dequeue_next_queued_returns_oldest_fifo(store: SqliteStore) -> No
     now = datetime.now(UTC)
     run_a = _make_run(id="a", status=RunStatus.QUEUED, created_at=now)
     run_b = _make_run(
-        id="b", status=RunStatus.QUEUED, created_at=now.replace(second=now.second + 1)
+        id="b", status=RunStatus.QUEUED, created_at=now + timedelta(seconds=1)
     )
     await store.save(run_a)
     await store.save(run_b)
