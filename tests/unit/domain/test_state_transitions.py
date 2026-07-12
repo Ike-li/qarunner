@@ -3,6 +3,24 @@
 import pytest
 
 
+def _committed_attempt():
+    from qarunner.domain import Attempt, WorkerRef, canonical_digest
+
+    return Attempt.create(
+        attempt_id="attempt-001",
+        run_id="run-001",
+        attempt_no=1,
+        fence=1,
+        assignment_id="assignment-001",
+        worker=WorkerRef(worker_id="worker-001", generation=1),
+        spec_digest=canonical_digest(
+            schema_version="qep.execution-spec.v1",
+            payload={"run_id": "run-001"},
+        ),
+        start_commit_key="commit-001",
+    )
+
+
 def test_batch_rejects_skipping_from_draft_to_running_without_mutation() -> None:
     """A rejected transition keeps the immutable Batch at its prior version."""
     from qarunner.domain import Batch, BatchState, InvalidTransition
@@ -87,9 +105,9 @@ def test_run_legal_transition_returns_a_new_version() -> None:
 
 def test_attempt_rejects_skipping_provisioning_without_mutation() -> None:
     """A committed Attempt cannot claim that test execution already started."""
-    from qarunner.domain import Attempt, AttemptState, InvalidTransition
+    from qarunner.domain import AttemptState, InvalidTransition
 
-    attempt = Attempt.create(attempt_id="attempt-001")
+    attempt = _committed_attempt()
 
     with pytest.raises(InvalidTransition) as caught:
         attempt.transition(AttemptState.RUNNING, expected_version=0)
@@ -105,9 +123,9 @@ def test_attempt_rejects_skipping_provisioning_without_mutation() -> None:
 
 def test_attempt_legal_transition_returns_a_new_version() -> None:
     """Provisioning starts from a durable commit and advances one version."""
-    from qarunner.domain import Attempt, AttemptState
+    from qarunner.domain import AttemptState
 
-    committed = Attempt.create(attempt_id="attempt-001")
+    committed = _committed_attempt()
 
     provisioning = committed.transition(AttemptState.PROVISIONING, expected_version=0)
 

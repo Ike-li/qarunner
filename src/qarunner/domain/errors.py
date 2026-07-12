@@ -20,6 +20,18 @@ class CanonicalizationError(ValueError):
         super().__init__(f"cannot canonicalize {path}: {reason}")
 
 
+class AssignmentConflict(ValueError):
+    """Raised when an Assignment command does not match the Run reservation."""
+
+    code = "assignment_conflict"
+
+    def __init__(self, *, run_id: str, assignment_id: str, reason: str) -> None:
+        self.run_id = run_id
+        self.assignment_id = assignment_id
+        self.reason = reason
+        super().__init__(f"assignment {assignment_id} conflicts with run {run_id}: {reason}")
+
+
 class InvalidTransition(ValueError):
     """Raised when a domain aggregate rejects a requested state edge."""
 

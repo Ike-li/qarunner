@@ -5,7 +5,9 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, replace
 
+from qarunner.domain.digest import Digest
 from qarunner.domain.errors import InvalidTransition, ensure_expected_version
+from qarunner.domain.worker import WorkerRef
 
 
 class AttemptState(enum.StrEnum):
@@ -51,13 +53,42 @@ class Attempt:
     """Immutable record of one committed execution attempt."""
 
     id: str
+    run_id: str
+    attempt_no: int
+    fence: int
+    assignment_id: str
+    worker: WorkerRef
+    spec_digest: Digest
+    start_commit_key: str
     state: AttemptState
     version: int
 
     @classmethod
-    def create(cls, *, attempt_id: str) -> Attempt:
+    def create(
+        cls,
+        *,
+        attempt_id: str,
+        run_id: str,
+        attempt_no: int,
+        fence: int,
+        assignment_id: str,
+        worker: WorkerRef,
+        spec_digest: Digest,
+        start_commit_key: str,
+    ) -> Attempt:
         """Create the Attempt only after start commit is durable."""
-        return cls(id=attempt_id, state=AttemptState.START_COMMITTED, version=0)
+        return cls(
+            id=attempt_id,
+            run_id=run_id,
+            attempt_no=attempt_no,
+            fence=fence,
+            assignment_id=assignment_id,
+            worker=worker,
+            spec_digest=spec_digest,
+            start_commit_key=start_commit_key,
+            state=AttemptState.START_COMMITTED,
+            version=0,
+        )
 
     def transition(self, target: AttemptState, *, expected_version: int) -> Attempt:
         """Reject stale commands or transitions that skip execution phases."""
