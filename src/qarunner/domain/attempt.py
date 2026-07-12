@@ -1,0 +1,79 @@
+"""Attempt aggregate for the greenfield execution lifecycle."""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass, replace
+
+from qarunner.domain.errors import InvalidTransition, ensure_expected_version
+
+
+class AttemptState(enum.StrEnum):
+    """States of one real execution Attempt."""
+
+    START_COMMITTED = "start_committed"
+    PROVISIONING = "provisioning"
+    RUNNING = "running"
+    UPLOADING = "uploading"
+    PASSED = "passed"
+    TEST_FAILED = "test_failed"
+    INFRA_FAILED = "infra_failed"
+    CANCELLED = "cancelled"
+    ATTEMPT_UNKNOWN = "attempt_unknown"
+
+
+_TERMINAL_STATES = frozenset(
+    {
+        AttemptState.PASSED,
+        AttemptState.TEST_FAILED,
+        AttemptState.INFRA_FAILED,
+        AttemptState.CANCELLED,
+        AttemptState.ATTEMPT_UNKNOWN,
+    }
+)
+_ALLOWED_TRANSITIONS: dict[AttemptState, frozenset[AttemptState]] = {
+    AttemptState.START_COMMITTED: frozenset(
+        {AttemptState.PROVISIONING, AttemptState.ATTEMPT_UNKNOWN}
+    ),
+    AttemptState.PROVISIONING: frozenset(
+        {AttemptState.RUNNING, AttemptState.UPLOADING, AttemptState.ATTEMPT_UNKNOWN}
+    ),
+    AttemptState.RUNNING: frozenset({AttemptState.UPLOADING, AttemptState.ATTEMPT_UNKNOWN}),
+    # Terminal classification is deliberately not exposed through transition().
+    # A later M0 slice adds Evidence finalize with trusted exit facts.
+    AttemptState.UPLOADING: frozenset(),
+    **{state: frozenset() for state in _TERMINAL_STATES},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Attempt:
+    """Immutable record of one committed execution attempt."""
+
+    id: str
+    state: AttemptState
+    version: int
+
+    @classmethod
+    def create(cls, *, attempt_id: str) -> Attempt:
+        """Create the Attempt only after start commit is durable."""
+        return cls(id=attempt_id, state=AttemptState.START_COMMITTED, version=0)
+
+    def transition(self, target: AttemptState, *, expected_version: int) -> Attempt:
+        """Reject stale commands or transitions that skip execution phases."""
+        ensure_expected_version(
+            entity_type="attempt",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        if target not in _ALLOWED_TRANSITIONS[self.state]:
+            raise InvalidTransition(
+                entity_type="attempt",
+                entity_id=self.id,
+                current_state=self.state,
+                requested_state=target,
+                current_version=self.version,
+                expected_version=expected_version,
+            )
+        return replace(self, state=target, version=self.version + 1)
