@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from qarunner.domain.digest import Digest
+    from qarunner.domain.event import AttemptEvent
+    from qarunner.domain.worker import WorkerRef
 
 
 class CanonicalizationError(ValueError):
@@ -77,6 +79,58 @@ class IdempotencyConflict(ValueError):
         self.stored_digest = stored_digest
         self.received_digest = received_digest
         super().__init__(f"idempotency key {scope}/{key} is already bound to another digest")
+
+
+class EventConflict(ValueError):
+    """Raised when an event ID or sequence is reused with different content."""
+
+    code = "event_conflict"
+
+    def __init__(
+        self,
+        *,
+        attempt_id: str,
+        stored_event: AttemptEvent,
+        received_event: AttemptEvent,
+    ) -> None:
+        self.attempt_id = attempt_id
+        self.stored_event = stored_event
+        self.received_event = received_event
+        super().__init__(f"attempt {attempt_id} received conflicting event identity")
+
+
+class StaleFence(ValueError):
+    """Raised when an Attempt command carries a non-current fence."""
+
+    code = "stale_fence"
+
+    def __init__(self, *, attempt_id: str, current_fence: int, received_fence: int) -> None:
+        self.attempt_id = attempt_id
+        self.current_fence = current_fence
+        self.received_fence = received_fence
+        super().__init__(
+            f"attempt {attempt_id} has fence {current_fence}; received {received_fence}"
+        )
+
+
+class StaleGeneration(ValueError):
+    """Raised when an Attempt command comes from a non-current Worker generation."""
+
+    code = "stale_generation"
+
+    def __init__(
+        self,
+        *,
+        attempt_id: str,
+        current_worker: WorkerRef,
+        received_worker: WorkerRef,
+    ) -> None:
+        self.attempt_id = attempt_id
+        self.current_worker = current_worker
+        self.received_worker = received_worker
+        super().__init__(
+            f"attempt {attempt_id} belongs to {current_worker}; received {received_worker}"
+        )
 
 
 class VersionConflict(ValueError):

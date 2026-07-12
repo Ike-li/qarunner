@@ -6,7 +6,14 @@ import enum
 from dataclasses import dataclass, replace
 
 from qarunner.domain.digest import Digest
-from qarunner.domain.errors import InvalidTransition, ensure_expected_version
+from qarunner.domain.errors import (
+    EventConflict,
+    InvalidTransition,
+    StaleFence,
+    StaleGeneration,
+    ensure_expected_version,
+)
+from qarunner.domain.event import AttemptEvent
 from qarunner.domain.worker import WorkerRef
 
 
@@ -60,6 +67,7 @@ class Attempt:
     worker: WorkerRef
     spec_digest: Digest
     start_commit_key: str
+    events: tuple[AttemptEvent, ...]
     state: AttemptState
     version: int
 
@@ -86,6 +94,7 @@ class Attempt:
             worker=worker,
             spec_digest=spec_digest,
             start_commit_key=start_commit_key,
+            events=(),
             state=AttemptState.START_COMMITTED,
             version=0,
         )
@@ -108,3 +117,48 @@ class Attempt:
                 expected_version=expected_version,
             )
         return replace(self, state=target, version=self.version + 1)
+
+    def record_event(
+        self,
+        event: AttemptEvent,
+        *,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+    ) -> Attempt:
+        """Append a Worker event only for the Attempt's current fence."""
+        if worker != self.worker:
+            raise StaleGeneration(
+                attempt_id=self.id,
+                current_worker=self.worker,
+                received_worker=worker,
+            )
+        if fence != self.fence:
+            raise StaleFence(
+                attempt_id=self.id,
+                current_fence=self.fence,
+                received_fence=fence,
+            )
+        existing = next(
+            (
+                candidate
+                for candidate in self.events
+                if candidate.event_id == event.event_id or candidate.event_seq == event.event_seq
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing != event:
+                raise EventConflict(
+                    attempt_id=self.id,
+                    stored_event=existing,
+                    received_event=event,
+                )
+            return self
+        ensure_expected_version(
+            entity_type="attempt",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(self, events=(*self.events, event), version=self.version + 1)
