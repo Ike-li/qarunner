@@ -163,7 +163,8 @@ Run 是最小调度单位，Attempt 是实际执行事实，Assignment 是执行
 ```text
 Run planned → queued
   → Assignment offered → claimed
-      ├─ commit 前过期/释放 → Run queued（没有 Attempt，可安全重分配）
+      ├─ commit 前过期/释放 → 初次 Run queued；retry Run retry_queued
+      │                         （没有 Attempt，可安全重分配；retry 保留 pending RetryIntent）
       └─ commit-start → 创建 Attempt N + fence F
              → provisioning → running → uploading
              → passed | test_failed | infra_failed | cancelled | attempt_unknown
@@ -172,7 +173,8 @@ Run planned → queued
 
 关键规则：
 
-- Assignment 在 commit-start 前没有业务 Attempt；过期可安全重新分配。
+- Assignment 在 commit-start 前没有业务 Attempt；过期/释放可安全重新分配。初次 reservation 回
+  `queued`；retry reservation 回 `retry_queued` 并保留 pending RetryIntent。
 - commit-start 与创建 Attempt 在同一个数据库事务中完成，返回持久 `attempt_id/fence` 后 Worker 才能创建容器。
 - `fence` 对每个 Run 单调递增，任何事件/上传/finalize 都携带 fence。
 - `provisioning` 已可能产生执行副作用；其状态丢失不能退回“未启动”。
@@ -303,7 +305,8 @@ LIMIT :n;
 2. 重新校验 Profile、quota、Target Grant、Lease 和资源余量。
 3. 原子预留资源/Lease，创建短期 Assignment，Run → `assigned`。
 4. 返回 opaque offer token；数据库只存 token hash。
-5. commit 前 Assignment 过期时释放预留，Run → `queued`；不产生 Attempt。
+5. commit 前 Assignment 过期/释放时释放预留；初次 reservation 的 Run → `queued`，retry
+   reservation 的 Run → `retry_queued` 并保留 pending RetryIntent；不产生 Attempt。
 
 #### Commit-start
 
