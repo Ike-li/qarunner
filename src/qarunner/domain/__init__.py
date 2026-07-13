@@ -8,6 +8,7 @@ from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     ArtifactValidationError,
     AssignmentConflict,
+    AttemptUnknownReviewRequired,
     CanonicalizationError,
     DomainValidationError,
     EventConflict,
@@ -18,6 +19,7 @@ from qarunner.domain.errors import (
     InvalidTransition,
     StaleFence,
     StaleGeneration,
+    UnknownObservationConflict,
     VersionConflict,
     WorkerGenerationConflict,
     WorkerNotClaimable,
@@ -51,6 +53,7 @@ from qarunner.domain.manifest import (
     WorkEstimate,
 )
 from qarunner.domain.run import Run, RunState
+from qarunner.domain.unknown import UnknownObservation, UnknownReason, UnknownSource
 from qarunner.domain.worker import (
     WORKER_TERMINAL_STATES,
     WORKER_TRANSITIONS,
@@ -68,6 +71,7 @@ __all__ = [
     "Assignment",
     "AssignmentConflict",
     "AssignmentState",
+    "AttemptUnknownReviewRequired",
     "ArtifactClass",
     "ArtifactPath",
     "ArtifactValidationError",
@@ -107,6 +111,10 @@ __all__ = [
     "ShardRequirements",
     "VersionConflict",
     "TrustedExitFacts",
+    "UnknownObservation",
+    "UnknownObservationConflict",
+    "UnknownReason",
+    "UnknownSource",
     "ValidatedCaseSummary",
     "VerifiedArtifact",
     "WORKER_TERMINAL_STATES",

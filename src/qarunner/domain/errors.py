@@ -106,6 +106,41 @@ class EvidenceConflict(ValueError):
         )
 
 
+class UnknownObservationConflict(ValueError):
+    """Raised when one unknown observation ID is reused with changed facts."""
+
+    code = "unknown_observation_conflict"
+
+    def __init__(self, *, attempt_id: str, observation_id: str) -> None:
+        self.attempt_id = attempt_id
+        self.observation_id = observation_id
+        super().__init__(
+            f"attempt {attempt_id} received conflicting unknown observation {observation_id}"
+        )
+
+
+class AttemptUnknownReviewRequired(ValueError):
+    """Raised when automatic recovery tries to retry an unknown Attempt."""
+
+    code = "attempt_unknown_review_required"
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        fence: int,
+        reason: str,
+    ) -> None:
+        self.run_id = run_id
+        self.attempt_id = attempt_id
+        self.fence = fence
+        self.reason = reason
+        super().__init__(
+            f"attempt {attempt_id} on run {run_id} requires review before retry: {reason}"
+        )
+
+
 class CanonicalizationError(ValueError):
     """Raised when a value is outside the frozen canonical JSON domain."""
 

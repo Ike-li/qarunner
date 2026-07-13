@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from qarunner.domain.authority import AttemptAuthority
 from qarunner.domain.digest import Digest
 from qarunner.domain.errors import (
+    DomainValidationError,
     EventConflict,
     EvidenceConflict,
     EvidenceDigestMismatch,
@@ -15,6 +16,7 @@ from qarunner.domain.errors import (
     InvalidTransition,
     StaleFence,
     StaleGeneration,
+    UnknownObservationConflict,
     ensure_expected_version,
 )
 from qarunner.domain.event import AttemptEvent
@@ -27,6 +29,7 @@ from qarunner.domain.evidence import (
     VerifiedArtifact,
     build_evidence_manifest,
 )
+from qarunner.domain.unknown import UnknownObservation
 from qarunner.domain.worker import WorkerRef
 
 
@@ -63,13 +66,9 @@ _TERMINAL_STATES = frozenset(
     }
 )
 _ALLOWED_TRANSITIONS: dict[AttemptState, frozenset[AttemptState]] = {
-    AttemptState.START_COMMITTED: frozenset(
-        {AttemptState.PROVISIONING, AttemptState.ATTEMPT_UNKNOWN}
-    ),
-    AttemptState.PROVISIONING: frozenset(
-        {AttemptState.RUNNING, AttemptState.UPLOADING, AttemptState.ATTEMPT_UNKNOWN}
-    ),
-    AttemptState.RUNNING: frozenset({AttemptState.UPLOADING, AttemptState.ATTEMPT_UNKNOWN}),
+    AttemptState.START_COMMITTED: frozenset({AttemptState.PROVISIONING}),
+    AttemptState.PROVISIONING: frozenset({AttemptState.RUNNING, AttemptState.UPLOADING}),
+    AttemptState.RUNNING: frozenset({AttemptState.UPLOADING}),
     # Terminal classification is deliberately not exposed through transition().
     # A later M0 slice adds Evidence finalize with trusted exit facts.
     AttemptState.UPLOADING: frozenset(),
@@ -91,8 +90,39 @@ class Attempt:
     start_commit_key: str
     events: tuple[AttemptEvent, ...]
     evidence: EvidenceManifest | None
+    unknown_observation: UnknownObservation | None
     state: AttemptState
     version: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, AttemptState):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="state",
+                reason="unknown_state",
+            )
+        if self.unknown_observation is not None and not isinstance(
+            self.unknown_observation, UnknownObservation
+        ):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="unknown_observation",
+                reason="invalid_type",
+            )
+        is_unknown = self.state is AttemptState.ATTEMPT_UNKNOWN
+        has_observation = self.unknown_observation is not None
+        if is_unknown and not has_observation:
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="unknown_observation",
+                reason="required_for_unknown",
+            )
+        if not is_unknown and has_observation:
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="unknown_observation",
+                reason="only_allowed_for_unknown",
+            )
 
     @classmethod
     def create(
@@ -119,6 +149,7 @@ class Attempt:
             start_commit_key=start_commit_key,
             events=(),
             evidence=None,
+            unknown_observation=None,
             state=AttemptState.START_COMMITTED,
             version=0,
         )
@@ -141,6 +172,58 @@ class Attempt:
                 expected_version=expected_version,
             )
         return replace(self, state=target, version=self.version + 1)
+
+    def mark_unknown(
+        self,
+        *,
+        observation: UnknownObservation,
+        authority: AttemptAuthority,
+        expected_version: int,
+    ) -> Attempt:
+        """Attach trusted review facts and enter the absorbing unknown state."""
+        self._ensure_authority(authority=authority, worker=self.worker, fence=self.fence)
+        if not isinstance(observation, UnknownObservation):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="unknown_observation",
+                reason="invalid_type",
+            )
+        if self.unknown_observation is not None and self.unknown_observation.id == observation.id:
+            if self.unknown_observation == observation:
+                return self
+            raise UnknownObservationConflict(
+                attempt_id=self.id,
+                observation_id=observation.id,
+            )
+        ensure_expected_version(
+            entity_type="attempt",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        eligible_states = frozenset(
+            {
+                AttemptState.START_COMMITTED,
+                AttemptState.PROVISIONING,
+                AttemptState.RUNNING,
+                AttemptState.UPLOADING,
+            }
+        )
+        if self.state not in eligible_states:
+            raise InvalidTransition(
+                entity_type="attempt",
+                entity_id=self.id,
+                current_state=self.state,
+                requested_state=AttemptState.ATTEMPT_UNKNOWN,
+                current_version=self.version,
+                expected_version=expected_version,
+            )
+        return replace(
+            self,
+            state=AttemptState.ATTEMPT_UNKNOWN,
+            unknown_observation=observation,
+            version=self.version + 1,
+        )
 
     def record_event(
         self,

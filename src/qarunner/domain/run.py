@@ -6,15 +6,17 @@ import enum
 from dataclasses import dataclass, replace
 
 from qarunner.domain.assignment import Assignment, AssignmentState
-from qarunner.domain.attempt import Attempt
-from qarunner.domain.authority import WorkerAuthority
+from qarunner.domain.attempt import Attempt, AttemptState
+from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     AssignmentConflict,
+    AttemptUnknownReviewRequired,
     IdempotencyConflict,
     InvalidTransition,
     ensure_expected_version,
 )
+from qarunner.domain.unknown import UnknownObservation
 from qarunner.domain.worker import WorkerGeneration, WorkerRef
 
 
@@ -237,6 +239,75 @@ class Run:
             fence=fence,
             replayed=False,
         )
+
+    def mark_current_attempt_unknown(
+        self,
+        *,
+        attempt_id: str,
+        observation: UnknownObservation,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> Run:
+        """Record unknown on the Run-owned latest Attempt snapshot."""
+        if not self.attempts or self.attempts[-1].id != attempt_id:
+            raise AttemptUnknownReviewRequired(
+                run_id=self.id,
+                attempt_id=attempt_id,
+                fence=self.current_fence,
+                reason="source_attempt_not_current",
+            )
+        current = self.attempts[-1]
+        authority = AttemptAuthority(
+            current_fence=self.current_fence,
+            current_worker=current.worker,
+        )
+        unknown = current.mark_unknown(
+            observation=observation,
+            authority=authority,
+            expected_version=expected_attempt_version,
+        )
+        if unknown is current:
+            return self
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            attempts=(*self.attempts[:-1], unknown),
+            version=self.version + 1,
+        )
+
+    def ensure_automatic_retry_source_is_not_unknown(
+        self, *, attempt_id: str, expected_version: int
+    ) -> None:
+        """Let later retry policy proceed only when its source is not unknown."""
+        if (
+            self.attempts
+            and self.attempts[-1].id == attempt_id
+            and self.attempts[-1].state is AttemptState.ATTEMPT_UNKNOWN
+        ):
+            raise AttemptUnknownReviewRequired(
+                run_id=self.id,
+                attempt_id=attempt_id,
+                fence=self.current_fence,
+                reason="manual_adjudication_required",
+            )
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        if not self.attempts or self.attempts[-1].id != attempt_id:
+            raise AttemptUnknownReviewRequired(
+                run_id=self.id,
+                attempt_id=attempt_id,
+                fence=self.current_fence,
+                reason="source_attempt_not_current",
+            )
 
 
 def _start_commit_digest(*, assignment_id: str, worker: WorkerRef, spec_digest: Digest) -> Digest:
