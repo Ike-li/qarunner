@@ -3,7 +3,7 @@
 > 文档编号：QEP-DES-001<br>
 > 版本：V0.1.0<br>
 > 状态：草稿，待详细设计评审<br>
-> 日期：2026-07-12<br>
+> 日期：2026-07-13<br>
 > 上游：[MVP PRD](01_MVP_REQUIREMENTS.md)、[企业 PRD](02_ENTERPRISE_REQUIREMENTS.md)、[架构设计](03_ARCHITECTURE_DESIGN.md)<br>
 > 设计原则：本文件先于现有代码对比冻结，不以现有类、表或 API 为前提
 
@@ -130,6 +130,12 @@ adapters/store/  Object storage、secret、egress policy
 - JSON 摘要使用 RFC 8785 JSON Canonicalization Scheme 或等价冻结实现；数组顺序具有业务意义，集合在进入摘要前按稳定键排序。
 - ExecutionSpec、Manifest、Shard Plan、Artifact part 和 Evidence Manifest 均存 schema version 与 digest。
 - 服务端拒绝“同 ID/同序号、不同 digest”的重复写入，并产生高优先级审计事件。
+- 取消使用两层摘要：`qep.cancellation-request.v1` 只绑定调用方提供的 Run、幂等键、来源、
+  actor 和 reason，不含服务端 `recorded_at`；`qep.cancellation-intent.v1` 再绑定 request digest
+  与服务端记录时间，形成不可变取消事实。
+- `CANCELLED_PRESTART` Assignment closure 的 request digest 不含 intent digest，完整 closure
+  fact digest 必须绑定 intent digest。expiry/release 既有 closure root 不漂移；不同取消意图也
+  不能借 closure replay 覆盖 Run 已保存的 intent。
 
 ### 3.3 Batch 状态
 
@@ -169,6 +175,18 @@ Run planned → queued
              → provisioning → running → uploading
              → passed | test_failed | infra_failed | cancelled | attempt_unknown
                          └─ policy allows retry → Run retry_queued → new Assignment → Attempt N+1
+
+commit 前 cancel，且早于 expiry
+  → Assignment cancelled_prestart + Run cancelled
+  → 不创建 Attempt/fence
+
+cancel 在 expiry 边界或之后被观察
+  → expiry closure 保持权威 + Run 保存 cancel intent
+
+commit 后 cancel
+  → 只保存 intent，Run/Assignment/Attempt/fence 不立即改写
+      ├─ 受信 process + SUT-access stop proof → Run/Attempt cancelled
+      └─ stop 不可证明 → Attempt attempt_unknown
 ```
 
 关键规则：
@@ -180,6 +198,14 @@ Run planned → queued
 - `provisioning` 已可能产生执行副作用；其状态丢失不能退回“未启动”。
 - Attempt 终态不可修改；重新分类只能新增有审计的 adjudication，不重写原始事实。
 - `test_failed` 只表示测试进程完成且断言/用例失败；Worker/容器/上传/证据故障不能伪装为测试失败。
+- cancel request 与 cancelled outcome 是不同事实。postcommit request 只记录 intent，不能直接
+  宣称 Attempt 已停止；`attempt_unknown` 为吸收终态，迟到 stop proof 不得改写它。
+- `retry_queued` 的 prestart cancel 保留历史 Attempt、RetryIntent 和 pending pointer，但取消
+  intent 会阻止继续 offer 或消费该 retry。
+- cancelled Evidence 与 completed Evidence 采用 first-finalized：任一方向先持久化的 root
+  获胜，另一方向只能得到冲突，不能覆盖原始 Attempt Evidence。
+- completed Evidence 先于取消证明完成时，当前只保留 immutable Attempt Evidence 与 cancel
+  intent；完整 Run/Batch derived terminal 尚未冻结，见 `OI-DES-011`。
 
 ### 3.5 Worker 状态
 
@@ -332,6 +358,11 @@ LIMIT :n;
 3. 条件插入 `evidence_manifest`；相同 digest 重试幂等，不同 digest 冲突。
 4. 更新 Attempt 终态和 Run 聚合，写 outbox。
 5. Batch 只在所有 Run 完成对账后进入 finalizing/terminal。
+
+取消专用 finalize 必须在同一事务中校验 Run-owned cancellation intent、current
+Attempt/fence/Worker authority、`TrustedCancellationStop` 与服务端重建的 Evidence root，随后
+原子写入 Attempt `cancelled`、Run `cancelled` 并清除 current Assignment pointer。cancel request
+本身不得执行该终态更新；exact replay 优先于 Run/Attempt CAS，异 root 或异 stop proof 冲突。
 
 ### 4.5 隔离级别与锁
 
@@ -649,6 +680,10 @@ local_hard_deadline  = min(
 
 ### 6.8 release 与 reconcile
 
+`TrustedCancellationStop` 只证明对应 Attempt 的测试进程已经停止，且该 Attempt 获准的 SUT
+access 已停止。它不证明 sandbox/workspace 已销毁、Worker capacity 已释放或完整 runtime
+cleanup 已完成；这些事实仍必须由下面的 release/reconcile 契约证明。
+
 `release` 只有在以下条件满足后发送：
 
 - 测试/子进程已结束；
@@ -774,10 +809,30 @@ Evidence Manifest 是 canonical JSON，至少包含：
 }
 ```
 
+取消 Evidence 额外绑定：
+
+```json
+{
+  "cancellation_stop": {
+    "proof_digest": "sha256:...",
+    "cancellation_intent_digest": "sha256:...",
+    "source_event_id": "evt_...",
+    "process_stopped_at": "2026-07-12T12:00:01Z",
+    "sut_access_stopped_at": "2026-07-12T12:00:02Z",
+    "recorded_at": "2026-07-12T12:00:03Z"
+  }
+}
+```
+
 - `root_digest` 对除自身外的 canonical manifest 计算，或使用明确的 envelope 规则，版本化后固定。
 - Worker 提议 manifest，控制面基于数据库受信事实重建/校验关键字段；Worker 不能自报任意身份/fence/退出分类。
 - finalize 后不可原位修改。后续人工 adjudication 是单独签名/审计记录，引用原 root digest。
 - Batch evidence bundle 引用所有原始/重试 Attempt manifests、聚合规则版本和未执行/unknown 清单。
+- 非取消 Evidence 继续使用 `qep.m0-attempt-evidence.v1`，既有 root 不漂移；取消 Evidence
+  使用 `qep.m0-attempt-evidence.v2`。classification 仍为 `qep.attempt-classification.v1`，
+  outcome 映射未变，stop-proof gate 与新增 root 字段由外层 v2 表达。
+- 裸 `PlatformExitClass.CANCELLED` 不足以生成 cancelled Evidence；必须同时存在与 Run intent、
+  Attempt/fence、Worker generation 和停止时间一致的受信 stop proof。
 
 ### 7.5 结果解析
 
@@ -1284,6 +1339,8 @@ ID 作为结构化日志/trace 字段，不作为 Prometheus 无界 label。Metr
 | Assignment commit 前 Worker 消失 | offer 过期、释放资源、重新分配 | 创建 Attempt/记 infra failure |
 | commit 后、sandbox 前 Worker 消失 | Attempt 进入 lost 评估；已证明无执行可 infra_failed | 直接退回 queued、抹去 Attempt |
 | running Worker 失联 | TTL 停访问；标 unknown/infra based on proof | 立即盲重跑非幂等测试 |
+| postcommit cancel 但 stop 不可证明 | 写入 intent-bound unknown，等待显式裁决 | 直接标 cancelled 或盲重跑 |
+| cancelled/completed Evidence 竞争 | 保留先 finalized 的 root，另一方向返回冲突 | 用较晚到达事实覆盖终态 |
 | Worker 恢复带旧 fence | 要求停止、隔离迟到证据 | 允许推进当前状态 |
 | 容器/Pod 重复启动 | 只有当前 fence/attempt token 生效，其余终止 | 让两个副本共享 Artifact 路径 |
 | PostgreSQL 短时不可用 | stop new commit；Worker 到 lease deadline 停止 | 本地无限续租/新启动 |
@@ -1393,6 +1450,11 @@ GC 分级：
 - 多 Dispatcher 对同一队列 claim：每个 Run 同一时刻最多一个活动 Assignment。
 - Assignment commit 响应丢失并并发重试：一个 Attempt/fence。
 - renew/cancel/lease expiry 竞态：最终状态合法，过期 Worker 不能继续访问。
+- cancel 与 commit-start 的双向 CAS：只有一个权威顺序，败者不能补造 Attempt 或取消终态。
+- cancel 与 expiry/release 边界：expiry 边界优先，历史 closure 不被 backdated intent 改写。
+- cancelled/completed Evidence 双向先后：先 finalized root 不可被另一 outcome 覆盖。
+- stop proof 与 unknown 竞争：unknown 一旦持久化即为吸收终态；迟到 proof 只能形成冲突。
+- finalized cancel 后迟到 event/Evidence：exact replay 幂等，其余事实不得推进终态。
 - 同 `event_id/seq` 相同/不同 digest：分别幂等/冲突。
 - Evidence finalize 与迟到 upload/retry 竞态：旧 fence 不覆盖，新 Attempt 路径独立。
 - Grant revoke 与 Worker renew/egress request 竞态：在 TTL 上限内 fail closed。
@@ -1485,6 +1547,7 @@ GC 分级：
 | OI-DES-008 | schedule misfire 和 deadline 策略 | 不自动并发补跑多个大回归 | 产品规则签署 |
 | OI-DES-009 | 企业 K8s/Kueue 是否已有组织能力 | 无能力则停留静态 VM Pool | 运维 readiness review |
 | OI-DES-010 | 预测模型样本阈值/衰减/置信度 | 未达门禁使用保守 class default | Shadow Planning 报告 |
+| OI-DES-011 | cancel intent 后 completed Evidence 先 finalize 时的完整 Run/Batch derived terminal | 保留 immutable Attempt Evidence 与 cancel intent，不补造 Run terminal | 完整状态模型、数据库并发与 reconcile 测试 |
 
 ---
 
