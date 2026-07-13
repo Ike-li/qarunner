@@ -1,6 +1,7 @@
 """M0 Evidence value-object and deterministic-manifest contracts."""
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -9,8 +10,10 @@ from qarunner.domain import (
     ArtifactPath,
     ArtifactValidationError,
     Digest,
+    EvidenceManifest,
     EvidenceNotReady,
     PlatformExitClass,
+    TrustedCancellationStop,
     TrustedExitFacts,
     ValidatedCaseSummary,
     VerifiedArtifact,
@@ -66,6 +69,7 @@ def _build_manifest(
     artifacts: tuple[VerifiedArtifact, ...],
     case_summary: ValidatedCaseSummary | None,
     trusted_exit: TrustedExitFacts | None = None,
+    cancellation_stop: TrustedCancellationStop | None = None,
 ):
     return build_evidence_manifest(
         attempt_id="attempt-001",
@@ -93,6 +97,7 @@ def _build_manifest(
         ),
         case_summary=case_summary,
         artifacts=artifacts,
+        cancellation_stop=cancellation_stop,
     )
 
 
@@ -185,6 +190,43 @@ def test_artifact_input_order_does_not_change_manifest_root() -> None:
 
     assert forward.root_digest == reverse.root_digest
     assert forward.artifacts == reverse.artifacts
+
+
+def test_v1_evidence_manifest_constructor_keeps_cancellation_stop_optional() -> None:
+    result = _artifact(
+        "case-results.json",
+        content_class=ArtifactClass.STRUCTURED_RESULT,
+    )
+    manifest = _build_manifest(
+        artifacts=(result,),
+        case_summary=_passing_summary(result),
+    )
+    legacy_fields = {
+        field: getattr(manifest, field)
+        for field in (
+            "schema_version",
+            "attempt_id",
+            "run_id",
+            "attempt_no",
+            "assignment_id",
+            "fence",
+            "worker",
+            "execution_spec_digest",
+            "platform_exit",
+            "case_summary",
+            "artifacts",
+            "classification_version",
+            "outcome",
+            "root_digest",
+        )
+    }
+
+    restored = EvidenceManifest(**legacy_fields)
+
+    assert restored == manifest
+    assert restored.schema_version == "qep.m0-attempt-evidence.v1"
+    assert restored.classification_version == "qep.attempt-classification.v1"
+    assert restored.cancellation_stop is None
 
 
 @pytest.mark.parametrize(
@@ -313,7 +355,7 @@ def test_case_summary_rejects_counts_that_do_not_account_for_expected_cases() ->
     assert caught.value.reason == "case summary does not account for every expected case"
 
 
-def test_manifest_classifies_trusted_cancellation_without_case_results() -> None:
+def test_manifest_rejects_cancelled_exit_without_cancellation_stop_proof() -> None:
     cancelled = TrustedExitFacts(
         source_event_id="event-cancelled-001",
         pid=None,
@@ -324,14 +366,138 @@ def test_manifest_classifies_trusted_cancellation_without_case_results() -> None
         timeout=False,
     )
 
+    with pytest.raises(EvidenceNotReady) as caught:
+        _build_manifest(
+            artifacts=(),
+            case_summary=None,
+            trusted_exit=cancelled,
+        )
+
+    assert caught.value.reason == "trusted cancellation stop proof is missing"
+
+
+def test_manifest_rejects_non_stop_value_for_cancelled_exit_stably() -> None:
+    cancelled = TrustedExitFacts(
+        source_event_id="event-cancelled-001",
+        pid=731,
+        exit_class=PlatformExitClass.CANCELLED,
+        exit_code=None,
+        signal=15,
+        oom=False,
+        timeout=False,
+    )
+
+    with pytest.raises(EvidenceNotReady) as caught:
+        _build_manifest(
+            artifacts=(),
+            case_summary=None,
+            trusted_exit=cancelled,
+            cancellation_stop="bad",  # type: ignore[arg-type]
+        )
+
+    assert caught.value.reason == "trusted cancellation stop proof is invalid"
+
+
+def test_cancelled_manifest_binds_trusted_stop_proof_in_a_new_schema() -> None:
+    worker = WorkerRef(worker_id="worker-001", generation=1)
+    intent_digest = _digest("cancellation-intent")
+    cancelled = TrustedExitFacts(
+        source_event_id="event-cancelled-001",
+        pid=731,
+        exit_class=PlatformExitClass.CANCELLED,
+        exit_code=None,
+        signal=15,
+        oom=False,
+        timeout=False,
+    )
+    stop = TrustedCancellationStop(
+        run_id="run-001",
+        attempt_id="attempt-001",
+        fence=1,
+        worker=worker,
+        cancellation_intent_digest=intent_digest,
+        source_event_id=cancelled.source_event_id,
+        process_stopped_at=datetime(2026, 7, 14, 0, 2, tzinfo=UTC),
+        sut_access_stopped_at=datetime(2026, 7, 14, 0, 2, 30, tzinfo=UTC),
+        recorded_at=datetime(2026, 7, 14, 0, 3, tzinfo=UTC),
+    )
+    changed_stop = replace(
+        stop,
+        sut_access_stopped_at=stop.sut_access_stopped_at + timedelta(seconds=1),
+    )
+
     manifest = _build_manifest(
         artifacts=(),
         case_summary=None,
         trusted_exit=cancelled,
+        cancellation_stop=stop,
+    )
+    changed_manifest = _build_manifest(
+        artifacts=(),
+        case_summary=None,
+        trusted_exit=cancelled,
+        cancellation_stop=changed_stop,
     )
 
+    assert manifest.schema_version == "qep.m0-attempt-evidence.v2"
+    assert manifest.classification_version == "qep.attempt-classification.v1"
     assert manifest.outcome.value == "cancelled"
-    assert manifest.case_summary is None
+    assert manifest.cancellation_stop is stop
+    assert manifest.root_digest != changed_manifest.root_digest
+
+
+def test_manifest_rejects_contradictory_cancellation_stop_binding() -> None:
+    worker = WorkerRef(worker_id="worker-001", generation=1)
+    cancelled = TrustedExitFacts(
+        source_event_id="event-cancelled-001",
+        pid=731,
+        exit_class=PlatformExitClass.CANCELLED,
+        exit_code=None,
+        signal=15,
+        oom=False,
+        timeout=False,
+    )
+    stop = TrustedCancellationStop(
+        run_id="run-001",
+        attempt_id="attempt-001",
+        fence=1,
+        worker=worker,
+        cancellation_intent_digest=_digest("cancellation-intent"),
+        source_event_id=cancelled.source_event_id,
+        process_stopped_at=datetime(2026, 7, 14, 0, 2, tzinfo=UTC),
+        sut_access_stopped_at=datetime(2026, 7, 14, 0, 2, 30, tzinfo=UTC),
+        recorded_at=datetime(2026, 7, 14, 0, 3, tzinfo=UTC),
+    )
+    completed = replace(
+        cancelled,
+        source_event_id="event-completed-001",
+        exit_class=PlatformExitClass.COMPLETED,
+        exit_code=0,
+        signal=None,
+    )
+    cases = (
+        (completed, stop, "trusted cancellation stop proof requires a cancelled exit"),
+        (
+            cancelled,
+            replace(stop, source_event_id="event-other-001"),
+            "cancellation stop source event does not match exit facts",
+        ),
+        (
+            cancelled,
+            replace(stop, attempt_id="attempt-other"),
+            "cancellation stop proof does not match the attempt",
+        ),
+    )
+
+    for trusted_exit, cancellation_stop, reason in cases:
+        with pytest.raises(EvidenceNotReady) as caught:
+            _build_manifest(
+                artifacts=(),
+                case_summary=None,
+                trusted_exit=trusted_exit,
+                cancellation_stop=cancellation_stop,
+            )
+        assert caught.value.reason == reason
 
 
 def test_manifest_classifies_completed_failed_cases_as_test_failed() -> None:

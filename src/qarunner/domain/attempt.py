@@ -6,6 +6,7 @@ import enum
 from dataclasses import dataclass, replace
 
 from qarunner.domain.authority import AttemptAuthority
+from qarunner.domain.cancellation import TrustedCancellationStop
 from qarunner.domain.digest import Digest
 from qarunner.domain.errors import (
     AdjudicationConflict,
@@ -72,6 +73,7 @@ _TERMINAL_STATES = frozenset(
         AttemptState.ATTEMPT_UNKNOWN,
     }
 )
+_EVIDENCE_TERMINAL_STATES = _TERMINAL_STATES - {AttemptState.ATTEMPT_UNKNOWN}
 _ALLOWED_TRANSITIONS: dict[AttemptState, frozenset[AttemptState]] = {
     AttemptState.START_COMMITTED: frozenset({AttemptState.PROVISIONING}),
     AttemptState.PROVISIONING: frozenset({AttemptState.RUNNING, AttemptState.UPLOADING}),
@@ -134,6 +136,17 @@ class Attempt:
                 field="state",
                 reason="unknown_state",
             )
+        if self.state in _EVIDENCE_TERMINAL_STATES and self.evidence is None:
+            _invalid_attempt("evidence", "required_for_terminal")
+        if self.evidence is not None:
+            if self.state not in _EVIDENCE_TERMINAL_STATES:
+                _invalid_attempt("evidence", "forbidden_for_state")
+            try:
+                evidence_state = AttemptState(self.evidence.outcome.value)
+            except (AttributeError, TypeError, ValueError):
+                _invalid_attempt("evidence", "outcome_invalid")
+            if self.state is not evidence_state:
+                _invalid_attempt("evidence", "outcome_mismatch")
         if self.unknown_observation is not None and not isinstance(
             self.unknown_observation, UnknownObservation
         ):
@@ -375,8 +388,66 @@ class Attempt:
         worker: WorkerRef,
         fence: int,
         expected_version: int,
+        cancellation_stop: TrustedCancellationStop | None = None,
     ) -> FinalizeEvidenceResult:
         """Finalize trusted Evidence only for the current Worker/fence."""
+        if cancellation_stop is not None:
+            raise EvidenceNotReady(reason="cancelled evidence requires Run-owned finalization")
+        return self._finalize_evidence(
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            case_summary=case_summary,
+            artifacts=artifacts,
+            requirements=requirements,
+            authority=authority,
+            worker=worker,
+            fence=fence,
+            expected_version=expected_version,
+            cancellation_stop=None,
+        )
+
+    def _finalize_cancellation_evidence(
+        self,
+        *,
+        proposal: EvidenceProposal,
+        trusted_exit: TrustedExitFacts | None,
+        case_summary: ValidatedCaseSummary | None,
+        artifacts: tuple[VerifiedArtifact, ...],
+        requirements: EvidenceRequirements,
+        authority: AttemptAuthority,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+        cancellation_stop: TrustedCancellationStop,
+    ) -> FinalizeEvidenceResult:
+        """Finalize cancellation Evidence only through the owning Run aggregate."""
+        return self._finalize_evidence(
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            case_summary=case_summary,
+            artifacts=artifacts,
+            requirements=requirements,
+            authority=authority,
+            worker=worker,
+            fence=fence,
+            expected_version=expected_version,
+            cancellation_stop=cancellation_stop,
+        )
+
+    def _finalize_evidence(
+        self,
+        *,
+        proposal: EvidenceProposal,
+        trusted_exit: TrustedExitFacts | None,
+        case_summary: ValidatedCaseSummary | None,
+        artifacts: tuple[VerifiedArtifact, ...],
+        requirements: EvidenceRequirements,
+        authority: AttemptAuthority,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+        cancellation_stop: TrustedCancellationStop | None,
+    ) -> FinalizeEvidenceResult:
         self._ensure_authority(authority=authority, worker=worker, fence=fence)
         candidate = build_evidence_manifest(
             attempt_id=self.id,
@@ -389,6 +460,7 @@ class Attempt:
             trusted_exit=trusted_exit,
             case_summary=case_summary,
             artifacts=artifacts,
+            cancellation_stop=cancellation_stop,
         )
         if self.evidence is not None:
             if self.evidence == candidate and proposal.root_digest == candidate.root_digest:

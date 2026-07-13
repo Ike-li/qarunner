@@ -5,11 +5,13 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 
+from qarunner.domain.cancellation import TrustedCancellationStop
 from qarunner.domain.digest import Digest
 from qarunner.domain.errors import ArtifactValidationError, EvidenceNotReady
 from qarunner.domain.worker import WorkerRef
 
 EVIDENCE_SCHEMA_VERSION = "qep.m0-attempt-evidence.v1"
+CANCELLATION_EVIDENCE_SCHEMA_VERSION = "qep.m0-attempt-evidence.v2"
 CLASSIFICATION_SCHEMA_VERSION = "qep.attempt-classification.v1"
 
 
@@ -155,6 +157,7 @@ class EvidenceManifest:
     classification_version: str
     outcome: EvidenceOutcome
     root_digest: Digest
+    cancellation_stop: TrustedCancellationStop | None = None
 
 
 def build_evidence_manifest(
@@ -169,16 +172,29 @@ def build_evidence_manifest(
     trusted_exit: TrustedExitFacts | None,
     case_summary: ValidatedCaseSummary | None,
     artifacts: tuple[VerifiedArtifact, ...],
+    cancellation_stop: TrustedCancellationStop | None = None,
 ) -> EvidenceManifest:
     """Rebuild canonical M0 Evidence exclusively from control-plane facts."""
     if trusted_exit is None:
         raise EvidenceNotReady(reason="trusted platform exit facts are missing")
+    _ensure_cancellation_stop_binding(
+        run_id=run_id,
+        attempt_id=attempt_id,
+        fence=fence,
+        worker=worker,
+        trusted_exit=trusted_exit,
+        cancellation_stop=cancellation_stop,
+    )
     ordered_artifacts = tuple(sorted(artifacts, key=lambda item: item.path.value.encode()))
     paths = tuple(artifact.path for artifact in ordered_artifacts)
     if len(set(paths)) != len(paths):
         raise ArtifactValidationError(field="path", reason="must be unique within an Attempt")
     _ensure_case_summary_source(case_summary=case_summary, artifacts=ordered_artifacts)
-    outcome = _classify_outcome(trusted_exit=trusted_exit, case_summary=case_summary)
+    outcome = _classify_outcome(
+        trusted_exit=trusted_exit,
+        case_summary=case_summary,
+        cancellation_stop=cancellation_stop,
+    )
     payload = {
         "attempt": {
             "assignment_id": assignment_id,
@@ -213,11 +229,26 @@ def build_evidence_manifest(
             "outcome": outcome.value,
         },
     }
+    schema_version = EVIDENCE_SCHEMA_VERSION
+    if cancellation_stop is not None:
+        schema_version = CANCELLATION_EVIDENCE_SCHEMA_VERSION
+        payload["cancellation_stop"] = {
+            "proof_digest": cancellation_stop.digest.value,
+            "cancellation_intent_digest": (cancellation_stop.cancellation_intent_digest.value),
+            "source_event_id": cancellation_stop.source_event_id,
+            "process_stopped_at": cancellation_stop.process_stopped_at.isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "sut_access_stopped_at": (
+                cancellation_stop.sut_access_stopped_at.isoformat().replace("+00:00", "Z")
+            ),
+            "recorded_at": cancellation_stop.recorded_at.isoformat().replace("+00:00", "Z"),
+        }
     from qarunner.domain.digest import canonical_digest
 
-    root_digest = canonical_digest(schema_version=EVIDENCE_SCHEMA_VERSION, payload=payload)
+    root_digest = canonical_digest(schema_version=schema_version, payload=payload)
     return EvidenceManifest(
-        schema_version=EVIDENCE_SCHEMA_VERSION,
+        schema_version=schema_version,
         attempt_id=attempt_id,
         run_id=run_id,
         attempt_no=attempt_no,
@@ -226,12 +257,39 @@ def build_evidence_manifest(
         worker=worker,
         execution_spec_digest=execution_spec_digest,
         platform_exit=trusted_exit,
+        cancellation_stop=cancellation_stop,
         case_summary=case_summary,
         artifacts=ordered_artifacts,
         classification_version=CLASSIFICATION_SCHEMA_VERSION,
         outcome=outcome,
         root_digest=root_digest,
     )
+
+
+def _ensure_cancellation_stop_binding(
+    *,
+    run_id: str,
+    attempt_id: str,
+    fence: int,
+    worker: WorkerRef,
+    trusted_exit: TrustedExitFacts,
+    cancellation_stop: TrustedCancellationStop | None,
+) -> None:
+    if cancellation_stop is None:
+        return
+    if not isinstance(cancellation_stop, TrustedCancellationStop):
+        raise EvidenceNotReady(reason="trusted cancellation stop proof is invalid")
+    if trusted_exit.exit_class is not PlatformExitClass.CANCELLED:
+        raise EvidenceNotReady(reason="trusted cancellation stop proof requires a cancelled exit")
+    if cancellation_stop.source_event_id != trusted_exit.source_event_id:
+        raise EvidenceNotReady(reason="cancellation stop source event does not match exit facts")
+    if (
+        cancellation_stop.run_id != run_id
+        or cancellation_stop.attempt_id != attempt_id
+        or cancellation_stop.fence != fence
+        or cancellation_stop.worker != worker
+    ):
+        raise EvidenceNotReady(reason="cancellation stop proof does not match the attempt")
 
 
 def _ensure_case_summary_source(
@@ -254,11 +312,16 @@ def _ensure_case_summary_source(
 
 
 def _classify_outcome(
-    *, trusted_exit: TrustedExitFacts, case_summary: ValidatedCaseSummary | None
+    *,
+    trusted_exit: TrustedExitFacts,
+    case_summary: ValidatedCaseSummary | None,
+    cancellation_stop: TrustedCancellationStop | None,
 ) -> EvidenceOutcome:
     if trusted_exit.exit_class is PlatformExitClass.INFRA_FAILED:
         return EvidenceOutcome.INFRA_FAILED
     if trusted_exit.exit_class is PlatformExitClass.CANCELLED:
+        if cancellation_stop is None:
+            raise EvidenceNotReady(reason="trusted cancellation stop proof is missing")
         return EvidenceOutcome.CANCELLED
     if trusted_exit.pid is None or trusted_exit.pid <= 0:
         raise EvidenceNotReady(reason="completed process facts require a positive pid")

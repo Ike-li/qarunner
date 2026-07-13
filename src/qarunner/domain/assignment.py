@@ -19,6 +19,7 @@ class AssignmentState(enum.StrEnum):
     COMMITTED = "committed"
     EXPIRED_PRESTART = "expired_prestart"
     RELEASED_PRESTART = "released_prestart"
+    CANCELLED_PRESTART = "cancelled_prestart"
 
 
 class AssignmentClosureKind(enum.StrEnum):
@@ -26,6 +27,7 @@ class AssignmentClosureKind(enum.StrEnum):
 
     EXPIRED_PRESTART = "expired_prestart"
     RELEASED_PRESTART = "released_prestart"
+    CANCELLED_PRESTART = "cancelled_prestart"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,7 @@ class AssignmentClosure:
     effective_at: datetime
     recorded_at: datetime
     worker: WorkerRef | None
+    cancellation_intent_digest: Digest | None = None
 
     def __post_init__(self) -> None:
         _require_nonempty_string("assignment_closure", "assignment_id", self.assignment_id)
@@ -58,6 +61,14 @@ class AssignmentClosure:
             )
         if self.worker is not None and not isinstance(self.worker, WorkerRef):
             _invalid_entity("assignment_closure", "worker", "invalid_type")
+        if self.cancellation_intent_digest is not None and not isinstance(
+            self.cancellation_intent_digest, Digest
+        ):
+            _invalid_entity(
+                "assignment_closure",
+                "cancellation_intent_digest",
+                "not_digest",
+            )
         if self.kind is AssignmentClosureKind.EXPIRED_PRESTART:
             if self.worker is not None:
                 _invalid_entity(
@@ -65,43 +76,73 @@ class AssignmentClosure:
                     "worker",
                     "forbidden_for_kind",
                 )
-        elif self.worker is None:
-            _invalid_entity(
-                "assignment_closure",
-                "worker",
-                "required_for_kind",
-            )
+            if self.cancellation_intent_digest is not None:
+                _invalid_entity(
+                    "assignment_closure",
+                    "cancellation_intent_digest",
+                    "forbidden_for_kind",
+                )
+        elif self.kind is AssignmentClosureKind.RELEASED_PRESTART:
+            if self.worker is None:
+                _invalid_entity(
+                    "assignment_closure",
+                    "worker",
+                    "required_for_kind",
+                )
+            if self.cancellation_intent_digest is not None:
+                _invalid_entity(
+                    "assignment_closure",
+                    "cancellation_intent_digest",
+                    "forbidden_for_kind",
+                )
+        else:
+            if self.worker is not None:
+                _invalid_entity(
+                    "assignment_closure",
+                    "worker",
+                    "forbidden_for_kind",
+                )
+            if self.cancellation_intent_digest is None:
+                _invalid_entity(
+                    "assignment_closure",
+                    "cancellation_intent_digest",
+                    "required_for_kind",
+                )
 
     @property
     def request_digest(self) -> Digest:
         """Bind idempotency to caller-controlled content, excluding server time."""
+        payload = {
+            "assignment_id": self.assignment_id,
+            "idempotency_key": self.idempotency_key,
+            "kind": self.kind.value,
+            "worker": (
+                None
+                if self.worker is None
+                else {
+                    "worker_id": self.worker.worker_id,
+                    "generation": self.worker.generation,
+                }
+            ),
+        }
         return canonical_digest(
             schema_version="qep.assignment-closure-request.v1",
-            payload={
-                "assignment_id": self.assignment_id,
-                "idempotency_key": self.idempotency_key,
-                "kind": self.kind.value,
-                "worker": (
-                    None
-                    if self.worker is None
-                    else {
-                        "worker_id": self.worker.worker_id,
-                        "generation": self.worker.generation,
-                    }
-                ),
-            },
+            payload=payload,
         )
 
     @property
     def digest(self) -> Digest:
         """Digest the complete immutable closure fact for audit and rehydration."""
+        payload = {
+            "request_digest": self.request_digest.value,
+            "effective_at": self.effective_at.isoformat().replace("+00:00", "Z"),
+            "recorded_at": self.recorded_at.isoformat().replace("+00:00", "Z"),
+        }
+        if self.cancellation_intent_digest is not None:
+            payload["cancellation_intent_digest"] = self.cancellation_intent_digest.value
         return canonical_digest(
             schema_version="qep.assignment-closure.v1",
-            payload={
-                "request_digest": self.request_digest.value,
-                "effective_at": self.effective_at.isoformat().replace("+00:00", "Z"),
-                "recorded_at": self.recorded_at.isoformat().replace("+00:00", "Z"),
-            },
+            payload=payload,
         )
 
 
@@ -156,6 +197,7 @@ class Assignment:
         terminal_kind = {
             AssignmentState.EXPIRED_PRESTART: AssignmentClosureKind.EXPIRED_PRESTART,
             AssignmentState.RELEASED_PRESTART: AssignmentClosureKind.RELEASED_PRESTART,
+            AssignmentState.CANCELLED_PRESTART: AssignmentClosureKind.CANCELLED_PRESTART,
         }.get(self.state)
         if terminal_kind is None:
             if self.closure is not None:
@@ -182,9 +224,12 @@ class Assignment:
         if self.closure.kind is AssignmentClosureKind.EXPIRED_PRESTART:
             if self.closure.effective_at != self.expires_at:
                 _invalid("closure", "expiry_effective_at_mismatch")
-        else:
-            if self.closure.worker != self.worker:
-                _invalid("closure", "worker_mismatch")
+        elif (
+            self.closure.kind is AssignmentClosureKind.RELEASED_PRESTART
+            and self.closure.worker != self.worker
+        ):
+            _invalid("closure", "worker_mismatch")
+        if self.closure.kind is not AssignmentClosureKind.EXPIRED_PRESTART:
             if self.claimed_at is not None and self.closure.effective_at < self.claimed_at:
                 _invalid("closure", "before_claimed_at")
             if self.closure.effective_at < self.offered_at:
@@ -233,6 +278,7 @@ class Assignment:
         state = {
             AssignmentClosureKind.EXPIRED_PRESTART: AssignmentState.EXPIRED_PRESTART,
             AssignmentClosureKind.RELEASED_PRESTART: AssignmentState.RELEASED_PRESTART,
+            AssignmentClosureKind.CANCELLED_PRESTART: AssignmentState.CANCELLED_PRESTART,
         }[closure.kind]
         return replace(self, state=state, closure=closure)
 

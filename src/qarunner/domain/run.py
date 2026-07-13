@@ -14,20 +14,42 @@ from qarunner.domain.assignment import (
 )
 from qarunner.domain.attempt import Attempt, AttemptState
 from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
+from qarunner.domain.cancellation import (
+    CancellationIntent,
+    CancellationSource,
+    TrustedCancellationStop,
+)
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     AssignmentConflict,
     AttemptConflict,
     AttemptUnknownReviewRequired,
+    CancellationConflict,
     DomainValidationError,
+    EvidenceNotReady,
     IdempotencyConflict,
     InvalidTransition,
     RetryNotAllowed,
     StaleFence,
     ensure_expected_version,
 )
+from qarunner.domain.evidence import (
+    EvidenceManifest,
+    EvidenceOutcome,
+    EvidenceProposal,
+    EvidenceRequirements,
+    TrustedExitFacts,
+    ValidatedCaseSummary,
+    VerifiedArtifact,
+    build_evidence_manifest,
+)
 from qarunner.domain.retry import RetryIntent, RetryProvenance
-from qarunner.domain.unknown import UnknownAdjudication, UnknownObservation
+from qarunner.domain.unknown import (
+    UnknownAdjudication,
+    UnknownObservation,
+    UnknownReason,
+    UnknownSource,
+)
 from qarunner.domain.worker import WorkerGeneration, WorkerRef
 
 
@@ -39,6 +61,7 @@ class RunState(enum.StrEnum):
     ASSIGNED = "assigned"
     RUNNING = "running"
     RETRY_QUEUED = "retry_queued"
+    CANCELLED = "cancelled"
 
 
 _ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
@@ -47,6 +70,7 @@ _ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     RunState.ASSIGNED: frozenset(),
     RunState.RUNNING: frozenset(),
     RunState.RETRY_QUEUED: frozenset(),
+    RunState.CANCELLED: frozenset(),
 }
 
 
@@ -57,6 +81,16 @@ class CommitStartResult:
     run: Run
     attempt: Attempt
     fence: int
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeCancellationEvidenceResult:
+    """Atomic Run/Attempt cancellation convergence or an exact replay."""
+
+    run: Run
+    attempt: Attempt
+    evidence: EvidenceManifest
     replayed: bool
 
 
@@ -73,6 +107,8 @@ class Run:
     attempts: tuple[Attempt, ...]
     retry_intents: tuple[RetryIntent, ...]
     pending_retry_intent_id: str | None
+    cancel_intent: CancellationIntent | None = None
+    cancellation_stop: TrustedCancellationStop | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -91,7 +127,19 @@ class Run:
             value = getattr(self, field)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 _invalid_run(field, "invalid")
+        if self.cancel_intent is not None and not isinstance(
+            self.cancel_intent, CancellationIntent
+        ):
+            _invalid_run("cancel_intent", "invalid_type")
+        if self.cancel_intent is not None and self.cancel_intent.run_id != self.id:
+            _invalid_run("cancel_intent", "run_mismatch")
+        if self.cancellation_stop is not None and not isinstance(
+            self.cancellation_stop, TrustedCancellationStop
+        ):
+            _invalid_run("cancellation_stop", "invalid_type")
         self._validate_normalized_history()
+        self._validate_cancel_intent_causality()
+        self._validate_cancellation_history()
         self._validate_state_pointers()
         self._validate_assignment_epoch_tails()
         self._validate_retry_intent_consumption()
@@ -109,6 +157,8 @@ class Run:
             attempts=(),
             retry_intents=(),
             pending_retry_intent_id=None,
+            cancel_intent=None,
+            cancellation_stop=None,
         )
 
     @property
@@ -294,6 +344,7 @@ class Run:
             elif assignment.state in {
                 AssignmentState.EXPIRED_PRESTART,
                 AssignmentState.RELEASED_PRESTART,
+                AssignmentState.CANCELLED_PRESTART,
             }:
                 if is_current:
                     _invalid_run("assignments", "closed_reservation_current")
@@ -362,6 +413,60 @@ class Run:
                     )
                 if current.retry_intent_id != pending.id:
                     _invalid_run("current_assignment_id", "retry_intent_mismatch")
+        elif self.state is RunState.CANCELLED:
+            if current is not None:
+                _invalid_run("current_assignment_id", "must_be_clear_for_cancelled")
+            if self.cancel_intent is None:
+                _invalid_run("cancel_intent", "required_for_cancelled")
+            if self.attempts and pending is None:
+                if self.cancellation_stop is None:
+                    _invalid_run(
+                        "cancellation_stop",
+                        "required_for_postcommit_cancelled",
+                    )
+                latest = self.attempts[-1]
+                if (
+                    latest.state is not AttemptState.CANCELLED
+                    or latest.evidence is None
+                    or latest.evidence.outcome is not EvidenceOutcome.CANCELLED
+                    or latest.evidence.cancellation_stop != self.cancellation_stop
+                ):
+                    _invalid_run("cancellation_stop", "attempt_evidence_mismatch")
+                if (
+                    self.cancellation_stop.run_id != self.id
+                    or self.cancellation_stop.attempt_id != latest.id
+                    or self.cancellation_stop.fence != latest.fence
+                    or self.cancellation_stop.fence != self.current_fence
+                    or self.cancellation_stop.worker != latest.worker
+                    or self.cancellation_stop.cancellation_intent_digest
+                    != self.cancel_intent.digest
+                    or min(
+                        self.cancellation_stop.process_stopped_at,
+                        self.cancellation_stop.sut_access_stopped_at,
+                    )
+                    < self.cancel_intent.recorded_at
+                ):
+                    _invalid_run("cancellation_stop", "binding_mismatch")
+                try:
+                    rebuilt_evidence = build_evidence_manifest(
+                        attempt_id=latest.id,
+                        run_id=latest.run_id,
+                        attempt_no=latest.attempt_no,
+                        assignment_id=latest.assignment_id,
+                        fence=latest.fence,
+                        worker=latest.worker,
+                        execution_spec_digest=latest.spec_digest,
+                        trusted_exit=latest.evidence.platform_exit,
+                        case_summary=latest.evidence.case_summary,
+                        artifacts=latest.evidence.artifacts,
+                        cancellation_stop=self.cancellation_stop,
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    _invalid_run("cancellation_stop", "evidence_root_mismatch")
+                if rebuilt_evidence != latest.evidence:
+                    _invalid_run("cancellation_stop", "evidence_root_mismatch")
+            elif self.cancellation_stop is not None:
+                _invalid_run("cancellation_stop", "forbidden_without_cancelled_attempt")
         else:
             if current is None or current.state is not AssignmentState.COMMITTED:
                 _invalid_run("current_assignment_id", "committed_assignment_required")
@@ -370,6 +475,112 @@ class Run:
                     "pending_retry_intent_id",
                     "must_be_consumed_for_running",
                 )
+        self._validate_attempt_evidence_snapshots()
+        if self.attempts:
+            latest = self.attempts[-1]
+            has_cancelled_outcome = latest.state is AttemptState.CANCELLED or (
+                latest.evidence is not None
+                and latest.evidence.outcome is EvidenceOutcome.CANCELLED
+            )
+            if has_cancelled_outcome and not (
+                self.state is RunState.CANCELLED
+                and pending is None
+                and self.cancellation_stop is not None
+            ):
+                _invalid_run("attempts", "cancelled_attempt_requires_converged_run")
+        if self.state is not RunState.CANCELLED and self.cancellation_stop is not None:
+            _invalid_run("cancellation_stop", "only_allowed_for_cancelled")
+        if self.cancel_intent is not None and self.state not in {
+            RunState.RUNNING,
+            RunState.CANCELLED,
+        }:
+            _invalid_run("cancel_intent", "not_allowed_for_state")
+
+    def _validate_cancellation_history(self) -> None:
+        cancelled_positions = tuple(
+            index
+            for index, assignment in enumerate(self.assignments)
+            if assignment.state is AssignmentState.CANCELLED_PRESTART
+        )
+        if not cancelled_positions:
+            return
+        if (
+            len(cancelled_positions) != 1
+            or cancelled_positions[0] != len(self.assignments) - 1
+            or self.state is not RunState.CANCELLED
+            or self.cancel_intent is None
+        ):
+            _invalid_run("assignments", "cancelled_prestart_not_terminal")
+        closure = self.assignments[-1].closure
+        if closure is None:
+            _invalid_run("assignments", "cancellation_closure_missing")
+        if (
+            closure.cancellation_intent_digest != self.cancel_intent.digest
+            or closure.idempotency_key != self.cancel_intent.idempotency_key
+            or closure.effective_at != self.cancel_intent.recorded_at
+            or closure.recorded_at != self.cancel_intent.recorded_at
+        ):
+            _invalid_run("assignments", "cancellation_intent_mismatch")
+
+    def _validate_cancel_intent_causality(self) -> None:
+        if self.cancel_intent is None:
+            return
+        latest_committed = next(
+            (
+                assignment
+                for assignment in reversed(self.assignments)
+                if assignment.committed_at is not None
+            ),
+            None,
+        )
+        if (
+            latest_committed is not None
+            and self.cancel_intent.recorded_at < latest_committed.committed_at
+        ):
+            _invalid_run("cancel_intent", "before_current_attempt_commit")
+        latest_closure = next(
+            (
+                assignment.closure
+                for assignment in reversed(self.assignments)
+                if assignment.closure is not None
+            ),
+            None,
+        )
+        if (
+            latest_closure is not None
+            and self.cancel_intent.recorded_at < latest_closure.recorded_at
+        ):
+            _invalid_run("cancel_intent", "before_latest_assignment_closure")
+        pending_retry = self.pending_retry_intent
+        if pending_retry is not None and self.cancel_intent.recorded_at < pending_retry.created_at:
+            _invalid_run("cancel_intent", "before_pending_retry_intent")
+
+    def _validate_attempt_evidence_snapshots(self) -> None:
+        for attempt in self.attempts:
+            evidence = attempt.evidence
+            if evidence is None:
+                continue
+            try:
+                rebuilt = build_evidence_manifest(
+                    attempt_id=attempt.id,
+                    run_id=attempt.run_id,
+                    attempt_no=attempt.attempt_no,
+                    assignment_id=attempt.assignment_id,
+                    fence=attempt.fence,
+                    worker=attempt.worker,
+                    execution_spec_digest=attempt.spec_digest,
+                    trusted_exit=evidence.platform_exit,
+                    case_summary=evidence.case_summary,
+                    artifacts=evidence.artifacts,
+                    cancellation_stop=evidence.cancellation_stop,
+                )
+                expected_state = AttemptState(evidence.outcome.value)
+            except (AttributeError, TypeError, ValueError):
+                _invalid_run("attempts", "evidence_root_mismatch")
+            if rebuilt != evidence:
+                _invalid_run("attempts", "evidence_root_mismatch")
+            if attempt.state is not expected_state:
+                _invalid_run("attempts", "evidence_state_mismatch")
 
     def _validate_retry_intent_consumption(self) -> None:
         consumed_intent_ids = tuple(
@@ -422,6 +633,123 @@ class Run:
                 expected_version=expected_version,
             )
         return replace(self, state=target, version=self.version + 1)
+
+    def request_cancel(
+        self,
+        *,
+        cancel_key: str,
+        source: CancellationSource,
+        actor_id: str,
+        reason: str,
+        observed_at: datetime,
+        expected_version: int,
+    ) -> Run:
+        """Record cancellation intent without inventing a post-commit outcome."""
+        intent = CancellationIntent(
+            run_id=self.id,
+            idempotency_key=cancel_key,
+            source=source,
+            actor_id=actor_id,
+            reason=reason,
+            recorded_at=observed_at,
+        )
+        if self.cancel_intent is not None:
+            if self.cancel_intent.idempotency_key == cancel_key:
+                if self.cancel_intent.request_digest != intent.request_digest:
+                    raise IdempotencyConflict(
+                        scope=f"run:{self.id}:cancel",
+                        key=cancel_key,
+                        stored_digest=self.cancel_intent.request_digest,
+                        received_digest=intent.request_digest,
+                    )
+                return self
+            raise CancellationConflict(
+                run_id=self.id,
+                stored_key=self.cancel_intent.idempotency_key,
+                received_key=cancel_key,
+            )
+        if self.state not in {
+            RunState.QUEUED,
+            RunState.ASSIGNED,
+            RunState.RUNNING,
+            RunState.RETRY_QUEUED,
+        }:
+            raise InvalidTransition(
+                entity_type="run",
+                entity_id=self.id,
+                current_state=self.state,
+                requested_state=RunState.CANCELLED,
+                current_version=self.version,
+                expected_version=expected_version,
+            )
+        if (
+            self.state is RunState.RUNNING
+            and self.assignment is not None
+            and self.assignment.committed_at is not None
+            and observed_at < self.assignment.committed_at
+        ):
+            _invalid_run("observed_at", "before_current_attempt_commit")
+        latest_closure = next(
+            (
+                assignment.closure
+                for assignment in reversed(self.assignments)
+                if assignment.closure is not None
+            ),
+            None,
+        )
+        if latest_closure is not None and observed_at < latest_closure.recorded_at:
+            _invalid_run("observed_at", "before_latest_assignment_closure")
+        pending_retry = self.pending_retry_intent
+        if pending_retry is not None and observed_at < pending_retry.created_at:
+            _invalid_run("observed_at", "before_pending_retry_intent")
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        if self.state is RunState.ASSIGNED:
+            current = self.assignment
+            if current is None:
+                raise AssignmentConflict(
+                    run_id=self.id,
+                    assignment_id="",
+                    reason="current_assignment_missing",
+                )
+            expired = observed_at >= current.expires_at
+            closed = current.close_prestart(
+                AssignmentClosure(
+                    assignment_id=current.id,
+                    idempotency_key=cancel_key,
+                    kind=(
+                        AssignmentClosureKind.EXPIRED_PRESTART
+                        if expired
+                        else AssignmentClosureKind.CANCELLED_PRESTART
+                    ),
+                    effective_at=current.expires_at if expired else observed_at,
+                    recorded_at=observed_at,
+                    worker=None,
+                    cancellation_intent_digest=None if expired else intent.digest,
+                )
+            )
+            return replace(
+                self,
+                state=RunState.CANCELLED,
+                version=self.version + 1,
+                assignments=self._replace_current_assignment(closed),
+                current_assignment_id=None,
+                cancel_intent=intent,
+            )
+        return replace(
+            self,
+            state=(
+                RunState.CANCELLED
+                if self.state in {RunState.QUEUED, RunState.RETRY_QUEUED}
+                else RunState.RUNNING
+            ),
+            version=self.version + 1,
+            cancel_intent=intent,
+        )
 
     def offer_assignment(
         self,
@@ -886,6 +1214,122 @@ class Run:
             version=self.version + 1,
         )
 
+    def mark_cancel_stop_unproven(
+        self,
+        *,
+        attempt_id: str,
+        observation_id: str,
+        recorded_at: datetime,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> Run:
+        """Converge an unproven postcommit cancellation to intent-bound unknown."""
+        if self.cancel_intent is None:
+            _invalid_run("cancel_intent", "required_for_cancel_convergence")
+        _require_utc_command_time("recorded_at", recorded_at)
+        if recorded_at < self.cancel_intent.recorded_at:
+            _invalid_run("recorded_at", "before_cancel_intent")
+        observation = UnknownObservation(
+            id=observation_id,
+            reason=UnknownReason.CANCEL_STOP_UNPROVEN,
+            source=UnknownSource.CANCEL_CONVERGENCE,
+            review_basis_digest=self.cancel_intent.digest,
+            recorded_at=recorded_at,
+        )
+        return self.mark_current_attempt_unknown(
+            attempt_id=attempt_id,
+            observation=observation,
+            expected_version=expected_version,
+            expected_attempt_version=expected_attempt_version,
+        )
+
+    def finalize_cancelled_attempt_evidence(
+        self,
+        *,
+        attempt_id: str,
+        proposal: EvidenceProposal,
+        trusted_exit: TrustedExitFacts | None,
+        cancellation_stop: TrustedCancellationStop,
+        case_summary: ValidatedCaseSummary | None,
+        artifacts: tuple[VerifiedArtifact, ...],
+        requirements: EvidenceRequirements,
+        authority: AttemptAuthority,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> FinalizeCancellationEvidenceResult:
+        """Finalize a cancelled Attempt and its Run from one intent-bound stop proof."""
+        if self.cancel_intent is None:
+            raise EvidenceNotReady(reason="cancellation intent is missing")
+        if not isinstance(cancellation_stop, TrustedCancellationStop):
+            raise EvidenceNotReady(reason="trusted cancellation stop proof is invalid")
+        if cancellation_stop.cancellation_intent_digest != self.cancel_intent.digest:
+            raise EvidenceNotReady(reason="cancellation stop proof does not match intent")
+        if (
+            min(
+                cancellation_stop.process_stopped_at,
+                cancellation_stop.sut_access_stopped_at,
+            )
+            < self.cancel_intent.recorded_at
+        ):
+            raise EvidenceNotReady(reason="cancellation stop proof predates the intent")
+        current = self._current_attempt(attempt_id)
+        finalized = current._finalize_cancellation_evidence(
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            case_summary=case_summary,
+            artifacts=artifacts,
+            requirements=requirements,
+            authority=authority,
+            worker=worker,
+            fence=fence,
+            expected_version=expected_attempt_version,
+            cancellation_stop=cancellation_stop,
+        )
+        if self.cancellation_stop is not None:
+            if (
+                self.state is RunState.CANCELLED
+                and self.cancellation_stop == cancellation_stop
+                and finalized.replayed
+            ):
+                return FinalizeCancellationEvidenceResult(
+                    run=self,
+                    attempt=current,
+                    evidence=finalized.evidence,
+                    replayed=True,
+                )
+            raise EvidenceNotReady(reason="run cancellation is already converged")
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        if self.state is not RunState.RUNNING:
+            raise InvalidTransition(
+                entity_type="run",
+                entity_id=self.id,
+                current_state=self.state,
+                requested_state=RunState.CANCELLED,
+                current_version=self.version,
+                expected_version=expected_version,
+            )
+        converged = replace(
+            self,
+            state=RunState.CANCELLED,
+            version=self.version + 1,
+            current_assignment_id=None,
+            attempts=(*self.attempts[:-1], finalized.attempt),
+            cancellation_stop=cancellation_stop,
+        )
+        return FinalizeCancellationEvidenceResult(
+            run=converged,
+            attempt=finalized.attempt,
+            evidence=finalized.evidence,
+            replayed=False,
+        )
+
     def queue_adjudicated_retry(
         self,
         *,
@@ -911,6 +1355,13 @@ class Run:
             retry_intent=retry_intent,
             source=source,
         )
+        if self.cancel_intent is not None:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="cancel_requested",
+            )
         if self.state is not RunState.RUNNING or self.pending_retry_intent is not None:
             raise RetryNotAllowed(
                 run_id=self.id,

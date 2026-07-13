@@ -176,6 +176,20 @@ class RetryNotAllowed(ValueError):
         )
 
 
+class CancellationConflict(ValueError):
+    """Raised when a Run already owns a different immutable cancellation intent."""
+
+    code = "cancellation_conflict"
+
+    def __init__(self, *, run_id: str, stored_key: str, received_key: str) -> None:
+        self.run_id = run_id
+        self.stored_key = stored_key
+        self.received_key = received_key
+        super().__init__(
+            f"run {run_id} already owns cancellation {stored_key}; received {received_key}"
+        )
+
+
 class AttemptConflict(ValueError):
     """Raised when a new commit reuses an existing Attempt identity."""
 

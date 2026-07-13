@@ -9,6 +9,11 @@ from qarunner.domain.assignment import (
 from qarunner.domain.attempt import Attempt, AttemptState, FinalizeEvidenceResult
 from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.batch import Batch, BatchState
+from qarunner.domain.cancellation import (
+    CancellationIntent,
+    CancellationSource,
+    TrustedCancellationStop,
+)
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     AdjudicationConflict,
@@ -17,6 +22,7 @@ from qarunner.domain.errors import (
     AttemptConflict,
     AttemptEventRejected,
     AttemptUnknownReviewRequired,
+    CancellationConflict,
     CanonicalizationError,
     DomainValidationError,
     EventConflict,
@@ -62,7 +68,7 @@ from qarunner.domain.manifest import (
     WorkEstimate,
 )
 from qarunner.domain.retry import RetryIntent, RetryProvenance
-from qarunner.domain.run import Run, RunState
+from qarunner.domain.run import FinalizeCancellationEvidenceResult, Run, RunState
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownAdjudicationDecision,
@@ -101,6 +107,9 @@ __all__ = [
     "BoundShardPlan",
     "CanonicalizationError",
     "CaseManifest",
+    "CancellationIntent",
+    "CancellationSource",
+    "CancellationConflict",
     "Digest",
     "DomainValidationError",
     "EventConflict",
@@ -112,6 +121,7 @@ __all__ = [
     "EvidenceRequirements",
     "EstimateConfidence",
     "FinalizeEvidenceResult",
+    "FinalizeCancellationEvidenceResult",
     "FrameworkLocator",
     "IdempotencyConflict",
     "InvalidTransition",
@@ -135,6 +145,7 @@ __all__ = [
     "ShardRequirements",
     "VersionConflict",
     "TrustedExitFacts",
+    "TrustedCancellationStop",
     "UnknownObservation",
     "UnknownObservationConflict",
     "UnknownReason",

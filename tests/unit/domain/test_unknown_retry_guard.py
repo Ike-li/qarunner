@@ -1,6 +1,6 @@
 """T-M0-UNKNOWN-001A: unknown is explicit and never auto-retried."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -9,6 +9,18 @@ OFFERED_AT = datetime(2026, 7, 12, 12, 1, tzinfo=UTC)
 CLAIMED_AT = OFFERED_AT + timedelta(minutes=1)
 COMMITTED_AT = CLAIMED_AT + timedelta(minutes=1)
 EXPIRES_AT = OFFERED_AT + timedelta(hours=1)
+
+
+def _unsafe_attempt_replace(attempt, **changes):
+    """Bypass rehydration guards to exercise terminal command rejection itself."""
+    unsafe = object.__new__(type(attempt))
+    for field in fields(attempt):
+        object.__setattr__(
+            unsafe,
+            field.name,
+            changes.get(field.name, getattr(attempt, field.name)),
+        )
+    return unsafe
 
 
 def _committed_run():
@@ -157,7 +169,10 @@ def test_completed_terminal_attempt_cannot_be_reclassified_unknown(
     from qarunner.domain import AttemptAuthority, AttemptState, InvalidTransition
 
     running = _attempt_in_state(AttemptState.RUNNING)
-    terminal = replace(running, state=AttemptState[terminal_state_name])
+    terminal = _unsafe_attempt_replace(
+        running,
+        state=AttemptState[terminal_state_name],
+    )
     authority = AttemptAuthority(
         current_fence=terminal.fence,
         current_worker=terminal.worker,
