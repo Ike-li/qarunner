@@ -2,13 +2,14 @@
 
 from qarunner.domain.assignment import Assignment, AssignmentState
 from qarunner.domain.attempt import Attempt, AttemptState, FinalizeEvidenceResult
-from qarunner.domain.authority import AttemptAuthority
+from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.batch import Batch, BatchState
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     ArtifactValidationError,
     AssignmentConflict,
     CanonicalizationError,
+    DomainValidationError,
     EventConflict,
     EvidenceConflict,
     EvidenceDigestMismatch,
@@ -18,6 +19,8 @@ from qarunner.domain.errors import (
     StaleFence,
     StaleGeneration,
     VersionConflict,
+    WorkerGenerationConflict,
+    WorkerNotClaimable,
 )
 from qarunner.domain.event import AttemptEvent
 from qarunner.domain.evidence import (
@@ -34,7 +37,14 @@ from qarunner.domain.evidence import (
 )
 from qarunner.domain.idempotency import IdempotencyRecord, IdempotencyResolution
 from qarunner.domain.run import Run, RunState
-from qarunner.domain.worker import WorkerRef
+from qarunner.domain.worker import (
+    WORKER_TERMINAL_STATES,
+    WORKER_TRANSITIONS,
+    ReconcileWorkerFacts,
+    WorkerGeneration,
+    WorkerRef,
+    WorkerState,
+)
 
 __all__ = [
     "Attempt",
@@ -51,6 +61,7 @@ __all__ = [
     "BatchState",
     "CanonicalizationError",
     "Digest",
+    "DomainValidationError",
     "EventConflict",
     "EvidenceConflict",
     "EvidenceDigestMismatch",
@@ -65,6 +76,7 @@ __all__ = [
     "IdempotencyResolution",
     "Run",
     "RunState",
+    "ReconcileWorkerFacts",
     "PlatformExitClass",
     "StaleFence",
     "StaleGeneration",
@@ -72,7 +84,14 @@ __all__ = [
     "TrustedExitFacts",
     "ValidatedCaseSummary",
     "VerifiedArtifact",
+    "WORKER_TERMINAL_STATES",
+    "WORKER_TRANSITIONS",
+    "WorkerGeneration",
+    "WorkerGenerationConflict",
+    "WorkerNotClaimable",
     "WorkerRef",
+    "WorkerState",
+    "WorkerAuthority",
     "canonical_digest",
     "build_evidence_manifest",
 ]

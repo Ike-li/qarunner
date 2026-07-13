@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 
 from qarunner.domain.assignment import Assignment, AssignmentState
 from qarunner.domain.attempt import Attempt
+from qarunner.domain.authority import WorkerAuthority
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     AssignmentConflict,
@@ -14,7 +15,7 @@ from qarunner.domain.errors import (
     InvalidTransition,
     ensure_expected_version,
 )
-from qarunner.domain.worker import WorkerRef
+from qarunner.domain.worker import WorkerGeneration, WorkerRef
 
 
 class RunState(enum.StrEnum):
@@ -90,7 +91,8 @@ class Run:
         self,
         *,
         assignment_id: str,
-        worker: WorkerRef,
+        worker: WorkerGeneration,
+        worker_authority: WorkerAuthority,
         spec_digest: Digest,
         expected_version: int,
     ) -> Run:
@@ -107,9 +109,10 @@ class Run:
                 assignment_id=assignment_id,
                 reason="run_not_queued",
             )
+        worker_ref = worker.claimable_ref(authority=worker_authority)
         assignment = Assignment.offer(
             assignment_id=assignment_id,
-            worker=worker,
+            worker=worker_ref,
             spec_digest=spec_digest,
         )
         return replace(

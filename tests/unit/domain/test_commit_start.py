@@ -1,30 +1,65 @@
 """T-M0-COMMIT-001: commit-start creates one durable Attempt and fence."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 
+def _ready_worker():
+    from qarunner.domain import (
+        WorkerAuthority,
+        WorkerGeneration,
+        WorkerRef,
+        WorkerState,
+        canonical_digest,
+    )
+
+    registered_at = datetime(2026, 7, 12, 12, tzinfo=UTC)
+    worker = WorkerGeneration.register(
+        ref=WorkerRef(worker_id="worker-001", generation=3),
+        host_id="host-001",
+        pool_id="pool-default",
+        cert_serial="cert-001",
+        agent_version="1.0.0",
+        capabilities_digest=canonical_digest(
+            schema_version="qep.worker-capabilities.v1",
+            payload={"executor": "docker"},
+        ),
+        registered_at=registered_at,
+    )
+    authority = WorkerAuthority(current_ref=worker.ref)
+    ready = worker.transition(
+        WorkerState.READY,
+        authority=authority,
+        expected_version=0,
+        occurred_at=registered_at + timedelta(seconds=1),
+    )
+    return ready, authority
+
+
 def _claimed_run():
-    from qarunner.domain import Run, RunState, WorkerRef, canonical_digest
+    from qarunner.domain import Run, RunState, canonical_digest
 
     spec_digest = canonical_digest(
         schema_version="qep.execution-spec.v1",
         payload={"run_id": "run-001", "profile_id": "profile-001"},
     )
-    worker = WorkerRef(worker_id="worker-001", generation=3)
+    worker, worker_authority = _ready_worker()
     planned = Run.create(run_id="run-001")
     queued = planned.transition(RunState.QUEUED, expected_version=0)
     offered = queued.offer_assignment(
         assignment_id="assignment-001",
         worker=worker,
+        worker_authority=worker_authority,
         spec_digest=spec_digest,
         expected_version=1,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-001",
-        worker=worker,
+        worker=worker.ref,
         expected_version=2,
     )
-    return claimed, worker, spec_digest
+    return claimed, worker.ref, spec_digest
 
 
 def test_claimed_assignment_commit_creates_first_attempt_and_fence() -> None:
@@ -127,10 +162,10 @@ def test_commit_key_reuse_with_changed_spec_is_rejected() -> None:
 
 def test_assignment_offer_requires_a_queued_run() -> None:
     """Assignment creation cannot skip the Run queue transition."""
-    from qarunner.domain import AssignmentConflict, Run, WorkerRef, canonical_digest
+    from qarunner.domain import AssignmentConflict, Run, canonical_digest
 
     planned = Run.create(run_id="run-001")
-    worker = WorkerRef(worker_id="worker-001", generation=3)
+    worker, worker_authority = _ready_worker()
     spec_digest = canonical_digest(
         schema_version="qep.execution-spec.v1",
         payload={"run_id": "run-001"},
@@ -140,6 +175,7 @@ def test_assignment_offer_requires_a_queued_run() -> None:
         planned.offer_assignment(
             assignment_id="assignment-001",
             worker=worker,
+            worker_authority=worker_authority,
             spec_digest=spec_digest,
             expected_version=0,
         )
@@ -162,7 +198,8 @@ def test_assignment_claim_rejects_a_different_worker_generation() -> None:
         canonical_digest,
     )
 
-    bound_worker = WorkerRef(worker_id="worker-001", generation=3)
+    worker, worker_authority = _ready_worker()
+    bound_worker = worker.ref
     wrong_generation = WorkerRef(worker_id="worker-001", generation=4)
     spec_digest = canonical_digest(
         schema_version="qep.execution-spec.v1",
@@ -171,7 +208,8 @@ def test_assignment_claim_rejects_a_different_worker_generation() -> None:
     queued = Run.create(run_id="run-001").transition(RunState.QUEUED, expected_version=0)
     offered = queued.offer_assignment(
         assignment_id="assignment-001",
-        worker=bound_worker,
+        worker=worker,
+        worker_authority=worker_authority,
         spec_digest=spec_digest,
         expected_version=1,
     )
@@ -195,11 +233,10 @@ def test_commit_start_requires_the_exact_claimed_assignment() -> None:
         AssignmentConflict,
         Run,
         RunState,
-        WorkerRef,
         canonical_digest,
     )
 
-    worker = WorkerRef(worker_id="worker-001", generation=3)
+    worker, worker_authority = _ready_worker()
     spec_digest = canonical_digest(
         schema_version="qep.execution-spec.v1",
         payload={"run_id": "run-001"},
@@ -208,6 +245,7 @@ def test_commit_start_requires_the_exact_claimed_assignment() -> None:
     offered = queued.offer_assignment(
         assignment_id="assignment-001",
         worker=worker,
+        worker_authority=worker_authority,
         spec_digest=spec_digest,
         expected_version=1,
     )
@@ -215,7 +253,7 @@ def test_commit_start_requires_the_exact_claimed_assignment() -> None:
     with pytest.raises(AssignmentConflict) as caught:
         offered.commit_start(
             assignment_id="assignment-001",
-            worker=worker,
+            worker=worker.ref,
             start_commit_key="commit-001",
             spec_digest=spec_digest,
             new_attempt_id="attempt-001",

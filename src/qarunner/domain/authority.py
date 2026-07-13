@@ -11,3 +11,10 @@ class AttemptAuthority:
 
     current_fence: int
     current_worker: WorkerRef
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAuthority:
+    """Registry-owned current generation for one logical Worker."""
+
+    current_ref: WorkerRef

@@ -22,6 +22,55 @@ class ArtifactValidationError(ValueError):
         super().__init__(f"invalid artifact {field}: {reason}")
 
 
+class DomainValidationError(ValueError):
+    """Raised when a domain value cannot enter a trusted aggregate."""
+
+    code = "domain_validation_error"
+
+    def __init__(self, *, entity_type: str, field: str, reason: str) -> None:
+        self.entity_type = entity_type
+        self.field = field
+        self.reason = reason
+        super().__init__(f"invalid {entity_type}.{field}: {reason}")
+
+
+class WorkerGenerationConflict(ValueError):
+    """Raised when a Worker command does not use the current generation."""
+
+    code = "worker_generation_conflict"
+
+    def __init__(
+        self,
+        *,
+        current_worker_id: str,
+        current_generation: int,
+        received_worker_id: str,
+        received_generation: int,
+        reason: str,
+    ) -> None:
+        self.current_worker_id = current_worker_id
+        self.current_generation = current_generation
+        self.received_worker_id = received_worker_id
+        self.received_generation = received_generation
+        self.reason = reason
+        super().__init__(
+            f"worker generation conflict for {current_worker_id}: {reason}; "
+            f"current={current_generation}, received={received_generation}"
+        )
+
+
+class WorkerNotClaimable(ValueError):
+    """Raised when scheduling targets a generation that cannot accept work."""
+
+    code = "worker_not_claimable"
+
+    def __init__(self, *, worker_id: str, generation: int, reason: str) -> None:
+        self.worker_id = worker_id
+        self.generation = generation
+        self.reason = reason
+        super().__init__(f"worker {worker_id}/{generation} cannot claim: {reason}")
+
+
 class EvidenceNotReady(ValueError):
     """Raised when trusted facts are incomplete or contradictory."""
 
