@@ -5,15 +5,28 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, replace
 
+from qarunner.domain.authority import AttemptAuthority
 from qarunner.domain.digest import Digest
 from qarunner.domain.errors import (
     EventConflict,
+    EvidenceConflict,
+    EvidenceDigestMismatch,
+    EvidenceNotReady,
     InvalidTransition,
     StaleFence,
     StaleGeneration,
     ensure_expected_version,
 )
 from qarunner.domain.event import AttemptEvent
+from qarunner.domain.evidence import (
+    EvidenceManifest,
+    EvidenceProposal,
+    EvidenceRequirements,
+    TrustedExitFacts,
+    ValidatedCaseSummary,
+    VerifiedArtifact,
+    build_evidence_manifest,
+)
 from qarunner.domain.worker import WorkerRef
 
 
@@ -29,6 +42,15 @@ class AttemptState(enum.StrEnum):
     INFRA_FAILED = "infra_failed"
     CANCELLED = "cancelled"
     ATTEMPT_UNKNOWN = "attempt_unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeEvidenceResult:
+    """Result of first Evidence finalize or an exact replay."""
+
+    attempt: Attempt
+    evidence: EvidenceManifest
+    replayed: bool
 
 
 _TERMINAL_STATES = frozenset(
@@ -68,6 +90,7 @@ class Attempt:
     spec_digest: Digest
     start_commit_key: str
     events: tuple[AttemptEvent, ...]
+    evidence: EvidenceManifest | None
     state: AttemptState
     version: int
 
@@ -95,6 +118,7 @@ class Attempt:
             spec_digest=spec_digest,
             start_commit_key=start_commit_key,
             events=(),
+            evidence=None,
             state=AttemptState.START_COMMITTED,
             version=0,
         )
@@ -122,23 +146,13 @@ class Attempt:
         self,
         event: AttemptEvent,
         *,
+        authority: AttemptAuthority,
         worker: WorkerRef,
         fence: int,
         expected_version: int,
     ) -> Attempt:
         """Append a Worker event only for the Attempt's current fence."""
-        if worker != self.worker:
-            raise StaleGeneration(
-                attempt_id=self.id,
-                current_worker=self.worker,
-                received_worker=worker,
-            )
-        if fence != self.fence:
-            raise StaleFence(
-                attempt_id=self.id,
-                current_fence=self.fence,
-                received_fence=fence,
-            )
+        self._ensure_authority(authority=authority, worker=worker, fence=fence)
         existing = next(
             (
                 candidate
@@ -162,3 +176,111 @@ class Attempt:
             expected_version=expected_version,
         )
         return replace(self, events=(*self.events, event), version=self.version + 1)
+
+    def finalize_evidence(
+        self,
+        *,
+        proposal: EvidenceProposal,
+        trusted_exit: TrustedExitFacts | None,
+        case_summary: ValidatedCaseSummary | None,
+        artifacts: tuple[VerifiedArtifact, ...],
+        requirements: EvidenceRequirements,
+        authority: AttemptAuthority,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+    ) -> FinalizeEvidenceResult:
+        """Finalize trusted Evidence only for the current Worker/fence."""
+        self._ensure_authority(authority=authority, worker=worker, fence=fence)
+        candidate = build_evidence_manifest(
+            attempt_id=self.id,
+            run_id=self.run_id,
+            attempt_no=self.attempt_no,
+            assignment_id=self.assignment_id,
+            fence=self.fence,
+            worker=self.worker,
+            execution_spec_digest=self.spec_digest,
+            trusted_exit=trusted_exit,
+            case_summary=case_summary,
+            artifacts=artifacts,
+        )
+        if self.evidence is not None:
+            if self.evidence == candidate and proposal.root_digest == candidate.root_digest:
+                return FinalizeEvidenceResult(
+                    attempt=self,
+                    evidence=self.evidence,
+                    replayed=True,
+                )
+            received_root = (
+                proposal.root_digest if self.evidence == candidate else candidate.root_digest
+            )
+            raise EvidenceConflict(
+                stored_root=self.evidence.root_digest,
+                received_root=received_root,
+            )
+        ensure_expected_version(
+            entity_type="attempt",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        target_state = AttemptState(candidate.outcome.value)
+        if self.state is not AttemptState.UPLOADING:
+            raise InvalidTransition(
+                entity_type="attempt",
+                entity_id=self.id,
+                current_state=self.state,
+                requested_state=target_state,
+                current_version=self.version,
+                expected_version=expected_version,
+            )
+        available_paths = frozenset(artifact.path for artifact in candidate.artifacts)
+        missing_paths = requirements.required_artifact_paths - available_paths
+        if missing_paths:
+            missing = ", ".join(sorted(path.value for path in missing_paths))
+            raise EvidenceNotReady(reason=f"required artifacts are missing: {missing}")
+        if proposal.root_digest != candidate.root_digest:
+            raise EvidenceDigestMismatch(
+                claimed=proposal.root_digest,
+                computed=candidate.root_digest,
+            )
+        finalized = replace(
+            self,
+            evidence=candidate,
+            state=target_state,
+            version=self.version + 1,
+        )
+        return FinalizeEvidenceResult(
+            attempt=finalized,
+            evidence=candidate,
+            replayed=False,
+        )
+
+    def _ensure_authority(
+        self, *, authority: AttemptAuthority, worker: WorkerRef, fence: int
+    ) -> None:
+        """Reject stale Attempt identity using control-plane authoritative state."""
+        if self.fence != authority.current_fence:
+            raise StaleFence(
+                attempt_id=self.id,
+                current_fence=authority.current_fence,
+                received_fence=self.fence,
+            )
+        if fence != authority.current_fence:
+            raise StaleFence(
+                attempt_id=self.id,
+                current_fence=authority.current_fence,
+                received_fence=fence,
+            )
+        if self.worker != authority.current_worker:
+            raise StaleGeneration(
+                attempt_id=self.id,
+                current_worker=authority.current_worker,
+                received_worker=self.worker,
+            )
+        if worker != authority.current_worker:
+            raise StaleGeneration(
+                attempt_id=self.id,
+                current_worker=authority.current_worker,
+                received_worker=worker,
+            )

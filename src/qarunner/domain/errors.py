@@ -11,6 +11,52 @@ if TYPE_CHECKING:
     from qarunner.domain.worker import WorkerRef
 
 
+class ArtifactValidationError(ValueError):
+    """Raised when verified Artifact metadata is outside the frozen domain."""
+
+    code = "artifact_invalid"
+
+    def __init__(self, *, field: str, reason: str) -> None:
+        self.field = field
+        self.reason = reason
+        super().__init__(f"invalid artifact {field}: {reason}")
+
+
+class EvidenceNotReady(ValueError):
+    """Raised when trusted facts are incomplete or contradictory."""
+
+    code = "evidence_not_ready"
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"evidence is not ready: {reason}")
+
+
+class EvidenceDigestMismatch(ValueError):
+    """Raised when a Worker proposal differs from the rebuilt manifest."""
+
+    code = "evidence_digest_mismatch"
+
+    def __init__(self, *, claimed: Digest, computed: Digest) -> None:
+        self.claimed = claimed
+        self.computed = computed
+        super().__init__(f"claimed evidence root {claimed.value} differs from {computed.value}")
+
+
+class EvidenceConflict(ValueError):
+    """Raised when finalized Evidence is resubmitted with different content."""
+
+    code = "evidence_conflict"
+
+    def __init__(self, *, stored_root: Digest, received_root: Digest) -> None:
+        self.stored_root = stored_root
+        self.received_root = received_root
+        super().__init__(
+            f"evidence root {stored_root.value} is already finalized; "
+            f"received {received_root.value}"
+        )
+
+
 class CanonicalizationError(ValueError):
     """Raised when a value is outside the frozen canonical JSON domain."""
 

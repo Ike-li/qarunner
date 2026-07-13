@@ -21,6 +21,15 @@ def _attempt_at_fence_two():
     )
 
 
+def _authority():
+    from qarunner.domain import AttemptAuthority, WorkerRef
+
+    return AttemptAuthority(
+        current_fence=2,
+        current_worker=WorkerRef(worker_id="worker-001", generation=3),
+    )
+
+
 def test_old_fence_event_is_rejected_without_mutation() -> None:
     """Late facts from a prior Attempt cannot advance the current Attempt."""
     from qarunner.domain import AttemptEvent, StaleFence, WorkerRef, canonical_digest
@@ -39,6 +48,7 @@ def test_old_fence_event_is_rejected_without_mutation() -> None:
     with pytest.raises(StaleFence) as caught:
         attempt.record_event(
             event,
+            authority=_authority(),
             worker=WorkerRef(worker_id="worker-001", generation=3),
             fence=1,
             expected_version=0,
@@ -50,6 +60,43 @@ def test_old_fence_event_is_rejected_without_mutation() -> None:
     assert caught.value.received_fence == 1
     assert attempt.events == ()
     assert attempt.version == 0
+
+
+def test_superseded_attempt_cannot_self_validate_its_old_fence() -> None:
+    """Authority comes from the Run, not the stale Attempt's own stored fence."""
+    from qarunner.domain import (
+        AttemptAuthority,
+        AttemptEvent,
+        StaleFence,
+        WorkerRef,
+        canonical_digest,
+    )
+
+    stale_attempt = _attempt_at_fence_two()
+    worker = WorkerRef(worker_id="worker-001", generation=3)
+    authority = AttemptAuthority(current_fence=3, current_worker=worker)
+    event = AttemptEvent(
+        event_id="event-001",
+        event_seq=1,
+        event_type="sandbox_create_started",
+        payload_digest=canonical_digest(
+            schema_version="qep.attempt-event-payload.v1",
+            payload={"runtime": "rootless-docker"},
+        ),
+    )
+
+    with pytest.raises(StaleFence) as caught:
+        stale_attempt.record_event(
+            event,
+            authority=authority,
+            worker=worker,
+            fence=2,
+            expected_version=0,
+        )
+
+    assert caught.value.current_fence == 3
+    assert caught.value.received_fence == 2
+    assert stale_attempt.events == ()
 
 
 def test_old_worker_generation_event_is_rejected_without_mutation() -> None:
@@ -70,6 +117,7 @@ def test_old_worker_generation_event_is_rejected_without_mutation() -> None:
     with pytest.raises(StaleGeneration) as caught:
         attempt.record_event(
             event,
+            authority=_authority(),
             worker=WorkerRef(worker_id="worker-001", generation=2),
             fence=2,
             expected_version=0,
@@ -81,6 +129,47 @@ def test_old_worker_generation_event_is_rejected_without_mutation() -> None:
     assert caught.value.received_worker == WorkerRef(worker_id="worker-001", generation=2)
     assert attempt.events == ()
     assert attempt.version == 0
+
+
+def test_retired_attempt_generation_cannot_self_validate_its_event() -> None:
+    """Registry generation is authoritative even when request and Attempt agree."""
+    from qarunner.domain import (
+        AttemptAuthority,
+        AttemptEvent,
+        StaleGeneration,
+        WorkerRef,
+        canonical_digest,
+    )
+
+    stale_attempt = _attempt_at_fence_two()
+    retired_worker = WorkerRef(worker_id="worker-001", generation=3)
+    authority = AttemptAuthority(
+        current_fence=2,
+        current_worker=WorkerRef(worker_id="worker-001", generation=4),
+    )
+    event = AttemptEvent(
+        event_id="event-001",
+        event_seq=1,
+        event_type="sandbox_create_started",
+        payload_digest=canonical_digest(
+            schema_version="qep.attempt-event-payload.v1",
+            payload={"runtime": "rootless-docker"},
+        ),
+    )
+
+    with pytest.raises(StaleGeneration) as caught:
+        stale_attempt.record_event(
+            event,
+            authority=authority,
+            worker=retired_worker,
+            fence=2,
+            expected_version=0,
+        )
+
+    assert caught.value.current_worker == WorkerRef(worker_id="worker-001", generation=4)
+    assert caught.value.received_worker == retired_worker
+    assert stale_attempt.events == ()
+    assert stale_attempt.version == 0
 
 
 def test_current_worker_and_fence_append_an_immutable_event() -> None:
@@ -100,6 +189,7 @@ def test_current_worker_and_fence_append_an_immutable_event() -> None:
 
     updated = attempt.record_event(
         event,
+        authority=_authority(),
         worker=WorkerRef(worker_id="worker-001", generation=3),
         fence=2,
         expected_version=0,
@@ -126,9 +216,21 @@ def test_exact_event_replay_wins_before_cas_without_duplication() -> None:
             payload={"runtime": "rootless-docker"},
         ),
     )
-    updated = attempt.record_event(event, worker=worker, fence=2, expected_version=0)
+    updated = attempt.record_event(
+        event,
+        authority=_authority(),
+        worker=worker,
+        fence=2,
+        expected_version=0,
+    )
 
-    replay = updated.record_event(event, worker=worker, fence=2, expected_version=0)
+    replay = updated.record_event(
+        event,
+        authority=_authority(),
+        worker=worker,
+        fence=2,
+        expected_version=0,
+    )
 
     assert replay == updated
     assert replay.events == (event,)
@@ -150,7 +252,13 @@ def test_event_id_or_sequence_reuse_with_different_content_is_rejected() -> None
             payload={"runtime": "rootless-docker"},
         ),
     )
-    updated = attempt.record_event(original, worker=worker, fence=2, expected_version=0)
+    updated = attempt.record_event(
+        original,
+        authority=_authority(),
+        worker=worker,
+        fence=2,
+        expected_version=0,
+    )
     conflict = AttemptEvent(
         event_id="event-002",
         event_seq=1,
@@ -162,7 +270,13 @@ def test_event_id_or_sequence_reuse_with_different_content_is_rejected() -> None
     )
 
     with pytest.raises(EventConflict) as caught:
-        updated.record_event(conflict, worker=worker, fence=2, expected_version=1)
+        updated.record_event(
+            conflict,
+            authority=_authority(),
+            worker=worker,
+            fence=2,
+            expected_version=1,
+        )
 
     assert caught.value.code == "event_conflict"
     assert caught.value.attempt_id == "attempt-002"
