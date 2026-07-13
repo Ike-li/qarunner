@@ -11,12 +11,16 @@ from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
     AssignmentConflict,
+    AttemptConflict,
     AttemptUnknownReviewRequired,
+    DomainValidationError,
     IdempotencyConflict,
     InvalidTransition,
+    RetryNotAllowed,
     StaleFence,
     ensure_expected_version,
 )
+from qarunner.domain.retry import RetryIntent, RetryProvenance
 from qarunner.domain.unknown import UnknownAdjudication, UnknownObservation
 from qarunner.domain.worker import WorkerGeneration, WorkerRef
 
@@ -28,6 +32,7 @@ class RunState(enum.StrEnum):
     QUEUED = "queued"
     ASSIGNED = "assigned"
     RUNNING = "running"
+    RETRY_QUEUED = "retry_queued"
 
 
 _ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
@@ -35,6 +40,7 @@ _ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     RunState.QUEUED: frozenset(),
     RunState.ASSIGNED: frozenset(),
     RunState.RUNNING: frozenset(),
+    RunState.RETRY_QUEUED: frozenset(),
 }
 
 
@@ -56,8 +62,32 @@ class Run:
     state: RunState
     version: int
     current_fence: int
-    assignment: Assignment | None
+    assignments: tuple[Assignment, ...]
+    current_assignment_id: str | None
     attempts: tuple[Attempt, ...]
+    retry_intents: tuple[RetryIntent, ...]
+    pending_retry_intent_id: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip():
+            _invalid_run("id", "invalid")
+        if not isinstance(self.state, RunState):
+            _invalid_run("state", "unknown")
+        if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 0:
+            _invalid_run("version", "invalid")
+        if (
+            isinstance(self.current_fence, bool)
+            or not isinstance(self.current_fence, int)
+            or self.current_fence < 0
+        ):
+            _invalid_run("current_fence", "invalid")
+        for field in ("current_assignment_id", "pending_retry_intent_id"):
+            value = getattr(self, field)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                _invalid_run(field, "invalid")
+        self._validate_normalized_history()
+        self._validate_state_pointers()
+        self._validate_retry_intent_consumption()
 
     @classmethod
     def create(cls, *, run_id: str) -> Run:
@@ -67,9 +97,250 @@ class Run:
             state=RunState.PLANNED,
             version=0,
             current_fence=0,
-            assignment=None,
+            assignments=(),
+            current_assignment_id=None,
             attempts=(),
+            retry_intents=(),
+            pending_retry_intent_id=None,
         )
+
+    @property
+    def assignment(self) -> Assignment | None:
+        """Return the current reservation while retaining historical Assignments."""
+        if self.current_assignment_id is None:
+            return None
+        return next(
+            (
+                assignment
+                for assignment in reversed(self.assignments)
+                if assignment.id == self.current_assignment_id
+            ),
+            None,
+        )
+
+    @property
+    def pending_retry_intent(self) -> RetryIntent | None:
+        """Return the unconsumed adjudicated retry intent, if any."""
+        if self.pending_retry_intent_id is None:
+            return None
+        return next(
+            (
+                intent
+                for intent in reversed(self.retry_intents)
+                if intent.id == self.pending_retry_intent_id
+            ),
+            None,
+        )
+
+    def _validate_normalized_history(self) -> None:
+        if not isinstance(self.assignments, tuple):
+            _invalid_run("assignments", "not_tuple")
+        if any(not isinstance(assignment, Assignment) for assignment in self.assignments):
+            _invalid_run("assignments", "invalid_type")
+        assignment_ids = tuple(assignment.id for assignment in self.assignments)
+        if len(assignment_ids) != len(set(assignment_ids)):
+            _invalid_run("assignments", "duplicate_id")
+        assignments_by_id = {assignment.id: assignment for assignment in self.assignments}
+        if self.current_assignment_id is not None:
+            if self.current_assignment_id not in assignments_by_id:
+                _invalid_run("current_assignment_id", "not_found")
+            if not self.assignments or self.assignments[-1].id != self.current_assignment_id:
+                _invalid_run("current_assignment_id", "not_latest")
+
+        if not isinstance(self.retry_intents, tuple):
+            _invalid_run("retry_intents", "not_tuple")
+        if any(not isinstance(intent, RetryIntent) for intent in self.retry_intents):
+            _invalid_run("retry_intents", "invalid_type")
+        retry_intent_ids = tuple(intent.id for intent in self.retry_intents)
+        if len(retry_intent_ids) != len(set(retry_intent_ids)):
+            _invalid_run("retry_intents", "duplicate_id")
+        retry_intents_by_id = {intent.id: intent for intent in self.retry_intents}
+        if self.pending_retry_intent_id is not None:
+            if self.pending_retry_intent_id not in retry_intents_by_id:
+                _invalid_run("pending_retry_intent_id", "not_found")
+            if not self.retry_intents or self.retry_intents[-1].id != self.pending_retry_intent_id:
+                _invalid_run("pending_retry_intent_id", "not_latest")
+
+        if not isinstance(self.attempts, tuple):
+            _invalid_run("attempts", "not_tuple")
+        if any(not isinstance(attempt, Attempt) for attempt in self.attempts):
+            _invalid_run("attempts", "invalid_type")
+        attempt_ids = tuple(attempt.id for attempt in self.attempts)
+        if len(attempt_ids) != len(set(attempt_ids)):
+            _invalid_run("attempts", "duplicate_id")
+        start_commit_keys = tuple(attempt.start_commit_key for attempt in self.attempts)
+        if len(start_commit_keys) != len(set(start_commit_keys)):
+            _invalid_run("attempts", "duplicate_start_commit_key")
+        attempts_by_id = {attempt.id: attempt for attempt in self.attempts}
+
+        for index, attempt in enumerate(self.attempts, start=1):
+            if attempt.run_id != self.id:
+                _invalid_run("attempts", "run_mismatch")
+            if (
+                isinstance(attempt.attempt_no, bool)
+                or not isinstance(attempt.attempt_no, int)
+                or attempt.attempt_no != index
+            ):
+                _invalid_run("attempts", "attempt_no_not_contiguous")
+            if (
+                isinstance(attempt.fence, bool)
+                or not isinstance(attempt.fence, int)
+                or attempt.fence != index
+            ):
+                _invalid_run("attempts", "attempt_fence_not_contiguous")
+            assignment = assignments_by_id.get(attempt.assignment_id)
+            if assignment is None:
+                _invalid_run("attempts", "assignment_missing")
+            if (
+                assignment.state is not AssignmentState.COMMITTED
+                or assignment.worker != attempt.worker
+                or assignment.spec_digest != attempt.spec_digest
+            ):
+                _invalid_run("attempts", "assignment_mismatch")
+            if index == 1:
+                if assignment.retry_intent_id is not None:
+                    _invalid_run("assignments", "retry_intent_mismatch")
+                continue
+            provenance = attempt.retry_provenance
+            if provenance is None:
+                _invalid_run("attempts", "retry_provenance_missing")
+            intent = retry_intents_by_id.get(provenance.retry_intent_id)
+            source = attempts_by_id.get(provenance.source_attempt_id)
+            previous = self.attempts[index - 2]
+            if (
+                intent is None
+                or source is None
+                or source.id != previous.id
+                or assignment.retry_intent_id != intent.id
+                or attempt.spec_digest != intent.execution_spec_digest
+                or intent.source_attempt_no != source.attempt_no
+                or intent.source_fence != source.fence
+                or provenance.retry_intent_digest != intent.digest
+                or provenance.source_attempt_no != intent.source_attempt_no
+                or provenance.source_fence != intent.source_fence
+                or provenance.adjudication_id != intent.adjudication_id
+                or provenance.adjudication_digest != intent.adjudication_digest
+                or provenance.decision is not intent.decision
+            ):
+                _invalid_run("attempts", "retry_provenance_mismatch")
+
+        expected_fence = self.attempts[-1].fence if self.attempts else 0
+        if self.current_fence != expected_fence:
+            _invalid_run("current_fence", "attempt_fence_mismatch")
+        pending = self.pending_retry_intent
+        if pending is not None and (
+            not self.attempts or pending.source_attempt_id != self.attempts[-1].id
+        ):
+            _invalid_run("pending_retry_intent_id", "source_attempt_not_current")
+        retry_authorities = tuple(
+            (intent.source_attempt_id, intent.adjudication_id) for intent in self.retry_intents
+        )
+        if len(retry_authorities) != len(set(retry_authorities)):
+            _invalid_run("retry_intents", "duplicate_authority")
+
+        for intent in self.retry_intents:
+            source = attempts_by_id.get(intent.source_attempt_id)
+            if source is None or intent.run_id != self.id:
+                _invalid_run("retry_intents", "source_mismatch")
+            if (
+                intent.source_attempt_no != source.attempt_no
+                or intent.source_fence != source.fence
+                or intent.execution_spec_digest != source.spec_digest
+            ):
+                _invalid_run("retry_intents", "source_mismatch")
+            adjudication = source.adjudications[-1] if source.adjudications else None
+            if (
+                adjudication is None
+                or intent.adjudication_id != adjudication.id
+                or intent.adjudication_digest != adjudication.digest
+                or intent.decision is not adjudication.decision
+                or not adjudication.decision.permits_retry
+                or intent.created_at < adjudication.occurred_at
+            ):
+                _invalid_run("retry_intents", "adjudication_not_authoritative")
+
+        attempt_assignment_ids = {attempt.assignment_id for attempt in self.attempts}
+        for assignment in self.assignments:
+            if assignment.retry_intent_id is not None:
+                intent = retry_intents_by_id.get(assignment.retry_intent_id)
+                if intent is None or assignment.spec_digest != intent.execution_spec_digest:
+                    _invalid_run("assignments", "retry_intent_mismatch")
+            is_current = assignment.id == self.current_assignment_id
+            if assignment.state is AssignmentState.COMMITTED:
+                if assignment.id not in attempt_assignment_ids:
+                    _invalid_run("assignments", "committed_without_attempt")
+            elif not is_current:
+                _invalid_run("assignments", "historical_reservation_not_committed")
+        committed_assignment_ids = tuple(
+            assignment.id
+            for assignment in self.assignments
+            if assignment.state is AssignmentState.COMMITTED
+        )
+        attempt_assignment_order = tuple(attempt.assignment_id for attempt in self.attempts)
+        if committed_assignment_ids != attempt_assignment_order:
+            _invalid_run("assignments", "attempt_order_mismatch")
+
+    def _validate_state_pointers(self) -> None:
+        current = self.assignment
+        pending = self.pending_retry_intent
+        if self.state is RunState.PLANNED:
+            if self.assignments or self.attempts or self.retry_intents:
+                _invalid_run("state", "planned_has_history")
+        elif self.state is RunState.QUEUED:
+            if current is not None:
+                _invalid_run("current_assignment_id", "must_be_clear_for_queued")
+            if pending is not None:
+                _invalid_run("pending_retry_intent_id", "must_be_clear_for_queued")
+            if self.attempts or self.retry_intents:
+                _invalid_run("state", "queued_has_attempt_history")
+        elif self.state is RunState.RETRY_QUEUED:
+            if current is not None:
+                _invalid_run(
+                    "current_assignment_id",
+                    "must_be_clear_for_retry_queued",
+                )
+            if pending is None:
+                _invalid_run(
+                    "pending_retry_intent_id",
+                    "required_for_retry_queued",
+                )
+        elif self.state is RunState.ASSIGNED:
+            if current is None or current.state not in {
+                AssignmentState.OFFERED,
+                AssignmentState.CLAIMED,
+            }:
+                _invalid_run("current_assignment_id", "active_assignment_required")
+            if self.attempts:
+                if pending is None:
+                    _invalid_run(
+                        "pending_retry_intent_id",
+                        "required_for_retry_assignment",
+                    )
+                if current.retry_intent_id != pending.id:
+                    _invalid_run("current_assignment_id", "retry_intent_mismatch")
+        else:
+            if current is None or current.state is not AssignmentState.COMMITTED:
+                _invalid_run("current_assignment_id", "committed_assignment_required")
+            if pending is not None:
+                _invalid_run(
+                    "pending_retry_intent_id",
+                    "must_be_consumed_for_running",
+                )
+
+    def _validate_retry_intent_consumption(self) -> None:
+        consumed_intent_ids = tuple(
+            attempt.retry_provenance.retry_intent_id
+            for attempt in self.attempts
+            if attempt.retry_provenance is not None
+        )
+        expected_intent_ids = (
+            consumed_intent_ids
+            if self.pending_retry_intent_id is None
+            else (*consumed_intent_ids, self.pending_retry_intent_id)
+        )
+        actual_intent_ids = tuple(intent.id for intent in self.retry_intents)
+        if actual_intent_ids != expected_intent_ids:
+            _invalid_run("retry_intents", "order_mismatch")
 
     def transition(self, target: RunState, *, expected_version: int) -> Run:
         """Reject stale commands or state edges that skip scheduling phases."""
@@ -106,22 +377,55 @@ class Run:
             current_version=self.version,
             expected_version=expected_version,
         )
-        if self.state != RunState.QUEUED or self.assignment is not None:
+        if (
+            self.state not in {RunState.QUEUED, RunState.RETRY_QUEUED}
+            or self.assignment is not None
+        ):
             raise AssignmentConflict(
                 run_id=self.id,
                 assignment_id=assignment_id,
                 reason="run_not_queued",
+            )
+        if any(assignment.id == assignment_id for assignment in self.assignments):
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=assignment_id,
+                reason="assignment_id_reused",
+            )
+        retry_intent = self.pending_retry_intent
+        if self.state is RunState.RETRY_QUEUED and retry_intent is None:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=self.attempts[-1].id if self.attempts else "",
+                adjudication_id="",
+                reason="retry_intent_not_pending",
+            )
+        if self.state is RunState.QUEUED and retry_intent is not None:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=retry_intent.source_attempt_id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="retry_intent_not_pending",
+            )
+        if retry_intent is not None and spec_digest != retry_intent.execution_spec_digest:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=retry_intent.source_attempt_id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="retry_spec_mismatch",
             )
         worker_ref = worker.claimable_ref(authority=worker_authority)
         assignment = Assignment.offer(
             assignment_id=assignment_id,
             worker=worker_ref,
             spec_digest=spec_digest,
+            retry_intent_id=retry_intent.id if retry_intent is not None else None,
         )
         return replace(
             self,
             state=RunState.ASSIGNED,
-            assignment=assignment,
+            assignments=(*self.assignments, assignment),
+            current_assignment_id=assignment.id,
             version=self.version + 1,
         )
 
@@ -153,7 +457,7 @@ class Run:
             )
         return replace(
             self,
-            assignment=self.assignment.claim(),
+            assignments=self._replace_current_assignment(self.assignment.claim()),
             version=self.version + 1,
         )
 
@@ -190,6 +494,31 @@ class Run:
                     stored_digest=stored_digest,
                     received_digest=received_digest,
                 )
+            if existing.fence != self.current_fence:
+                raise StaleFence(
+                    attempt_id=existing.id,
+                    current_fence=self.current_fence,
+                    received_fence=existing.fence,
+                )
+            if (
+                self.state is not RunState.RUNNING
+                or self.assignment is None
+                or self.assignment.id != existing.assignment_id
+                or self.assignment.state is not AssignmentState.COMMITTED
+                or self.attempts[-1].id != existing.id
+                or existing.state
+                not in {
+                    AttemptState.START_COMMITTED,
+                    AttemptState.PROVISIONING,
+                    AttemptState.RUNNING,
+                    AttemptState.UPLOADING,
+                }
+            ):
+                raise AssignmentConflict(
+                    run_id=self.id,
+                    assignment_id=existing.assignment_id,
+                    reason="start_commit_superseded",
+                )
             return CommitStartResult(
                 run=self,
                 attempt=existing,
@@ -215,6 +544,49 @@ class Run:
                 assignment_id=assignment_id,
                 reason="assignment_not_claimed",
             )
+        if any(attempt.id == new_attempt_id for attempt in self.attempts):
+            raise AttemptConflict(
+                run_id=self.id,
+                attempt_id=new_attempt_id,
+                reason="attempt_id_reused",
+            )
+        retry_provenance = None
+        pending_retry = self.pending_retry_intent
+        if self.attempts:
+            if pending_retry is None or self.assignment.retry_intent_id != pending_retry.id:
+                raise RetryNotAllowed(
+                    run_id=self.id,
+                    attempt_id=self.attempts[-1].id,
+                    adjudication_id=(
+                        pending_retry.adjudication_id if pending_retry is not None else ""
+                    ),
+                    reason="retry_intent_not_pending",
+                )
+            if (
+                spec_digest != pending_retry.execution_spec_digest
+                or self.assignment.spec_digest != pending_retry.execution_spec_digest
+            ):
+                raise RetryNotAllowed(
+                    run_id=self.id,
+                    attempt_id=pending_retry.source_attempt_id,
+                    adjudication_id=pending_retry.adjudication_id,
+                    reason="retry_spec_mismatch",
+                )
+            source = self._current_attempt(pending_retry.source_attempt_id)
+            self._ensure_retry_intent_authoritative(
+                retry_intent=pending_retry,
+                source=source,
+            )
+            retry_provenance = RetryProvenance.from_intent(pending_retry)
+        elif pending_retry is not None or self.assignment.retry_intent_id is not None:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=pending_retry.source_attempt_id if pending_retry is not None else "",
+                adjudication_id=(
+                    pending_retry.adjudication_id if pending_retry is not None else ""
+                ),
+                reason="retry_intent_not_pending",
+            )
         fence = self.current_fence + 1
         attempt = Attempt.create(
             attempt_id=new_attempt_id,
@@ -225,14 +597,17 @@ class Run:
             worker=worker,
             spec_digest=spec_digest,
             start_commit_key=start_commit_key,
+            retry_provenance=retry_provenance,
         )
+        committed_assignment = self.assignment.commit()
         committed_run = replace(
             self,
             state=RunState.RUNNING,
             version=self.version + 1,
             current_fence=fence,
-            assignment=self.assignment.commit(),
+            assignments=self._replace_current_assignment(committed_assignment),
             attempts=(*self.attempts, attempt),
+            pending_retry_intent_id=None,
         )
         return CommitStartResult(
             run=committed_run,
@@ -274,6 +649,60 @@ class Run:
             version=self.version + 1,
         )
 
+    def queue_adjudicated_retry(
+        self,
+        *,
+        retry_intent: RetryIntent,
+        expected_version: int,
+    ) -> Run:
+        """Persist one chain-tail adjudication as a non-executing retry intent."""
+        existing = next(
+            (intent for intent in self.retry_intents if intent.id == retry_intent.id),
+            None,
+        )
+        if existing is not None:
+            if existing.digest != retry_intent.digest:
+                raise IdempotencyConflict(
+                    scope=f"run:{self.id}:retry-intent",
+                    key=retry_intent.id,
+                    stored_digest=existing.digest,
+                    received_digest=retry_intent.digest,
+                )
+            return self
+        source = self._current_attempt(retry_intent.source_attempt_id)
+        self._ensure_retry_intent_authoritative(
+            retry_intent=retry_intent,
+            source=source,
+        )
+        if self.state is not RunState.RUNNING or self.pending_retry_intent is not None:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="retry_already_queued",
+            )
+        if self.assignment is None or self.assignment.state is not AssignmentState.COMMITTED:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="source_assignment_not_committed",
+            )
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            state=RunState.RETRY_QUEUED,
+            version=self.version + 1,
+            current_assignment_id=None,
+            retry_intents=(*self.retry_intents, retry_intent),
+            pending_retry_intent_id=retry_intent.id,
+        )
+
     def ensure_automatic_retry_source_is_not_unknown(
         self, *, attempt_id: str, expected_version: int
     ) -> None:
@@ -309,6 +738,13 @@ class Run:
         )
         if adjudicated is current:
             return self
+        if self.pending_retry_intent is not None or self.state is not RunState.RUNNING:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=attempt_id,
+                adjudication_id=adjudication.id,
+                reason="retry_already_queued",
+            )
         ensure_expected_version(
             entity_type="run",
             entity_id=self.id,
@@ -320,6 +756,76 @@ class Run:
             attempts=(*self.attempts[:-1], adjudicated),
             version=self.version + 1,
         )
+
+    def _replace_current_assignment(self, updated: Assignment) -> tuple[Assignment, ...]:
+        if self.current_assignment_id is None or updated.id != self.current_assignment_id:
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=updated.id,
+                reason="current_assignment_missing",
+            )
+        replaced = tuple(
+            updated if assignment.id == self.current_assignment_id else assignment
+            for assignment in self.assignments
+        )
+        if replaced == self.assignments:
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=updated.id,
+                reason="current_assignment_missing",
+            )
+        return replaced
+
+    def _ensure_retry_intent_authoritative(
+        self,
+        *,
+        retry_intent: RetryIntent,
+        source: Attempt,
+    ) -> None:
+        if source.state is not AttemptState.ATTEMPT_UNKNOWN:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="source_attempt_not_unknown",
+            )
+        if not source.adjudications:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="adjudication_missing",
+            )
+        current_adjudication = source.adjudications[-1]
+        if current_adjudication.id != retry_intent.adjudication_id:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=retry_intent.adjudication_id,
+                reason="adjudication_not_current",
+            )
+        if not current_adjudication.decision.permits_retry:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=current_adjudication.id,
+                reason="decision_does_not_permit_retry",
+            )
+        if (
+            retry_intent.run_id != self.id
+            or retry_intent.source_attempt_no != source.attempt_no
+            or retry_intent.source_fence != source.fence
+            or retry_intent.adjudication_digest != current_adjudication.digest
+            or retry_intent.decision is not current_adjudication.decision
+            or retry_intent.execution_spec_digest != source.spec_digest
+            or retry_intent.created_at < current_adjudication.occurred_at
+        ):
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id=current_adjudication.id,
+                reason="retry_intent_mismatch",
+            )
 
     def _current_attempt(self, attempt_id: str) -> Attempt:
         if (
@@ -353,4 +859,12 @@ def _start_commit_digest(*, assignment_id: str, worker: WorkerRef, spec_digest: 
             "worker_generation": worker.generation,
             "spec_digest": spec_digest.value,
         },
+    )
+
+
+def _invalid_run(field: str, reason: str) -> None:
+    raise DomainValidationError(
+        entity_type="run",
+        field=field,
+        reason=reason,
     )

@@ -3,6 +3,31 @@
 import pytest
 
 
+def _retry_provenance():
+    from qarunner.domain import (
+        RetryProvenance,
+        UnknownAdjudicationDecision,
+        canonical_digest,
+    )
+
+    def digest(label: str):
+        return canonical_digest(
+            schema_version="qep.test-retry-provenance.v1",
+            payload={"label": label},
+        )
+
+    return RetryProvenance(
+        retry_intent_id="retry-001",
+        retry_intent_digest=digest("intent"),
+        source_attempt_id="attempt-001",
+        source_attempt_no=1,
+        source_fence=1,
+        adjudication_id="adjudication-001",
+        adjudication_digest=digest("adjudication"),
+        decision=UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY,
+    )
+
+
 def _uploading_attempt():
     from qarunner.domain import Attempt, AttemptState, WorkerRef, canonical_digest
 
@@ -18,6 +43,7 @@ def _uploading_attempt():
             payload={"run_id": "run-001"},
         ),
         start_commit_key="commit-002",
+        retry_provenance=_retry_provenance(),
     )
     provisioning = committed.transition(AttemptState.PROVISIONING, expected_version=0)
     running = provisioning.transition(AttemptState.RUNNING, expected_version=1)

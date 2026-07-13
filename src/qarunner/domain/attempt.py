@@ -9,6 +9,7 @@ from qarunner.domain.authority import AttemptAuthority
 from qarunner.domain.digest import Digest
 from qarunner.domain.errors import (
     AdjudicationConflict,
+    AttemptEventRejected,
     DomainValidationError,
     EventConflict,
     EvidenceConflict,
@@ -30,6 +31,7 @@ from qarunner.domain.evidence import (
     VerifiedArtifact,
     build_evidence_manifest,
 )
+from qarunner.domain.retry import RetryProvenance
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownAdjudicationDecision,
@@ -99,8 +101,33 @@ class Attempt:
     adjudications: tuple[UnknownAdjudication, ...]
     state: AttemptState
     version: int
+    retry_provenance: RetryProvenance | None = None
 
     def __post_init__(self) -> None:
+        for field in ("id", "run_id", "assignment_id", "start_commit_key"):
+            value = getattr(self, field)
+            if not isinstance(value, str):
+                _invalid_attempt(field, "not_string")
+            if not value.strip():
+                _invalid_attempt(field, "empty")
+        for field in ("attempt_no", "fence"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                _invalid_attempt(field, "not_integer")
+            if value < 1:
+                _invalid_attempt(field, "not_positive")
+        if not isinstance(self.worker, WorkerRef):
+            _invalid_attempt("worker", "invalid_type")
+        if not isinstance(self.spec_digest, Digest):
+            _invalid_attempt("spec_digest", "not_digest")
+        if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 0:
+            _invalid_attempt("version", "invalid")
+        if not isinstance(self.events, tuple):
+            _invalid_attempt("events", "not_tuple")
+        if any(not isinstance(event, AttemptEvent) for event in self.events):
+            _invalid_attempt("events", "invalid_type")
+        if self.evidence is not None and not isinstance(self.evidence, EvidenceManifest):
+            _invalid_attempt("evidence", "invalid_type")
         if not isinstance(self.state, AttemptState):
             raise DomainValidationError(
                 entity_type="attempt",
@@ -129,6 +156,31 @@ class Attempt:
                 field="unknown_observation",
                 reason="only_allowed_for_unknown",
             )
+        if self.attempt_no > 1 and self.retry_provenance is None:
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="retry_provenance",
+                reason="required_for_retry_attempt",
+            )
+        if self.retry_provenance is not None:
+            if not isinstance(self.retry_provenance, RetryProvenance):
+                raise DomainValidationError(
+                    entity_type="attempt",
+                    field="retry_provenance",
+                    reason="invalid_type",
+                )
+            if self.attempt_no < 2:
+                raise DomainValidationError(
+                    entity_type="attempt",
+                    field="retry_provenance",
+                    reason="not_allowed_for_first_attempt",
+                )
+            if self.retry_provenance.source_attempt_id == self.id:
+                raise DomainValidationError(
+                    entity_type="attempt",
+                    field="retry_provenance",
+                    reason="source_is_self",
+                )
         self._validate_adjudication_history()
 
     @classmethod
@@ -143,6 +195,7 @@ class Attempt:
         worker: WorkerRef,
         spec_digest: Digest,
         start_commit_key: str,
+        retry_provenance: RetryProvenance | None = None,
     ) -> Attempt:
         """Create the Attempt only after start commit is durable."""
         return cls(
@@ -160,6 +213,7 @@ class Attempt:
             adjudications=(),
             state=AttemptState.START_COMMITTED,
             version=0,
+            retry_provenance=retry_provenance,
         )
 
     def transition(self, target: AttemptState, *, expected_version: int) -> Attempt:
@@ -302,6 +356,11 @@ class Attempt:
             current_version=self.version,
             expected_version=expected_version,
         )
+        if self.state in _TERMINAL_STATES:
+            raise AttemptEventRejected(
+                attempt_id=self.id,
+                reason="attempt_terminal",
+            )
         return replace(self, events=(*self.events, event), version=self.version + 1)
 
     def finalize_evidence(
@@ -492,3 +551,11 @@ class Attempt:
                 field="adjudications",
                 reason="verified_evidence_adjudication_not_supported",
             )
+
+
+def _invalid_attempt(field: str, reason: str) -> None:
+    raise DomainValidationError(
+        entity_type="attempt",
+        field=field,
+        reason=reason,
+    )

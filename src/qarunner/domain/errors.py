@@ -154,6 +154,40 @@ class AdjudicationConflict(ValueError):
         )
 
 
+class RetryNotAllowed(ValueError):
+    """Raised when no current adjudication authorizes a requested retry."""
+
+    code = "retry_not_allowed"
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        adjudication_id: str,
+        reason: str,
+    ) -> None:
+        self.run_id = run_id
+        self.attempt_id = attempt_id
+        self.adjudication_id = adjudication_id
+        self.reason = reason
+        super().__init__(
+            f"retry for attempt {attempt_id} on run {run_id} is not allowed: {reason}"
+        )
+
+
+class AttemptConflict(ValueError):
+    """Raised when a new commit reuses an existing Attempt identity."""
+
+    code = "attempt_conflict"
+
+    def __init__(self, *, run_id: str, attempt_id: str, reason: str) -> None:
+        self.run_id = run_id
+        self.attempt_id = attempt_id
+        self.reason = reason
+        super().__init__(f"attempt {attempt_id} conflicts with run {run_id}: {reason}")
+
+
 class CanonicalizationError(ValueError):
     """Raised when a value is outside the frozen canonical JSON domain."""
 
@@ -240,6 +274,17 @@ class EventConflict(ValueError):
         self.stored_event = stored_event
         self.received_event = received_event
         super().__init__(f"attempt {attempt_id} received conflicting event identity")
+
+
+class AttemptEventRejected(ValueError):
+    """Raised when a terminal Attempt receives a new event fact."""
+
+    code = "attempt_event_rejected"
+
+    def __init__(self, *, attempt_id: str, reason: str) -> None:
+        self.attempt_id = attempt_id
+        self.reason = reason
+        super().__init__(f"attempt {attempt_id} rejected a new event: {reason}")
 
 
 class StaleFence(ValueError):

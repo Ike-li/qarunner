@@ -1,9 +1,21 @@
 """T-M0-UNKNOWN-001B: adjudication appends without rewriting unknown facts."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
+
+def _unsafe_run_replace(run, **changes):
+    """Exercise command defenses against a store object that bypassed rehydration."""
+    unsafe = object.__new__(type(run))
+    for field in fields(run):
+        object.__setattr__(
+            unsafe,
+            field.name,
+            changes.get(field.name, getattr(run, field.name)),
+        )
+    return unsafe
 
 
 def _digest(label: str):
@@ -586,7 +598,7 @@ def test_run_rejects_adjudication_for_latest_attempt_on_a_stale_fence() -> None:
         expected_version=committed.run.version,
         expected_attempt_version=committed.attempt.version,
     )
-    superseded = replace(unknown_run, current_fence=2)
+    superseded = _unsafe_run_replace(unknown_run, current_fence=2)
 
     with pytest.raises(StaleFence):
         superseded.append_current_unknown_adjudication(
@@ -609,7 +621,7 @@ def test_run_rejects_adjudication_for_an_attempt_owned_by_another_run() -> None:
         expected_version=committed.run.version,
         expected_attempt_version=committed.attempt.version,
     )
-    wrong_owner = replace(unknown_run, id="run-999")
+    wrong_owner = _unsafe_run_replace(unknown_run, id="run-999")
 
     with pytest.raises(AttemptUnknownReviewRequired) as caught:
         wrong_owner.append_current_unknown_adjudication(

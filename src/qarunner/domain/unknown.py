@@ -181,6 +181,37 @@ class UnknownAdjudication:
                 "risk_acceptance_digest",
             )
 
+    @property
+    def digest(self) -> Digest:
+        """Bind retry authorization to the complete append-only decision fact."""
+        return canonical_digest(
+            schema_version="qep.unknown-adjudication.v1",
+            payload={
+                "id": self.id,
+                "attempt_id": self.attempt_id,
+                "unknown_observation_digest": self.unknown_observation_digest.value,
+                "decision": self.decision.value,
+                "actor_id": self.actor_id,
+                "reason": self.reason,
+                "occurred_at": self.occurred_at.isoformat().replace("+00:00", "Z"),
+                "proof_digest": (
+                    self.proof_digest.value if self.proof_digest is not None else None
+                ),
+                "risk_approver_id": self.risk_approver_id,
+                "risk_acceptance_digest": (
+                    self.risk_acceptance_digest.value
+                    if self.risk_acceptance_digest is not None
+                    else None
+                ),
+                "evidence_root_digest": (
+                    self.evidence_root_digest.value
+                    if self.evidence_root_digest is not None
+                    else None
+                ),
+                "supersedes_adjudication_id": self.supersedes_adjudication_id,
+            },
+        )
+
 
 def _forbid_authority_basis(record: UnknownAdjudication, *fields: str) -> None:
     for field in fields:
