@@ -6,6 +6,7 @@ from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.batch import Batch, BatchState
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import (
+    AdjudicationConflict,
     ArtifactValidationError,
     AssignmentConflict,
     AttemptUnknownReviewRequired,
@@ -53,7 +54,13 @@ from qarunner.domain.manifest import (
     WorkEstimate,
 )
 from qarunner.domain.run import Run, RunState
-from qarunner.domain.unknown import UnknownObservation, UnknownReason, UnknownSource
+from qarunner.domain.unknown import (
+    UnknownAdjudication,
+    UnknownAdjudicationDecision,
+    UnknownObservation,
+    UnknownReason,
+    UnknownSource,
+)
 from qarunner.domain.worker import (
     WORKER_TERMINAL_STATES,
     WORKER_TRANSITIONS,
@@ -64,6 +71,7 @@ from qarunner.domain.worker import (
 )
 
 __all__ = [
+    "AdjudicationConflict",
     "Attempt",
     "AttemptEvent",
     "AttemptAuthority",
@@ -115,6 +123,8 @@ __all__ = [
     "UnknownObservationConflict",
     "UnknownReason",
     "UnknownSource",
+    "UnknownAdjudication",
+    "UnknownAdjudicationDecision",
     "ValidatedCaseSummary",
     "VerifiedArtifact",
     "WORKER_TERMINAL_STATES",

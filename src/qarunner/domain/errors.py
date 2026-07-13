@@ -141,6 +141,19 @@ class AttemptUnknownReviewRequired(ValueError):
         )
 
 
+class AdjudicationConflict(ValueError):
+    """Raised when one adjudication ID is reused with changed content."""
+
+    code = "adjudication_conflict"
+
+    def __init__(self, *, attempt_id: str, adjudication_id: str) -> None:
+        self.attempt_id = attempt_id
+        self.adjudication_id = adjudication_id
+        super().__init__(
+            f"attempt {attempt_id} received conflicting adjudication {adjudication_id}"
+        )
+
+
 class CanonicalizationError(ValueError):
     """Raised when a value is outside the frozen canonical JSON domain."""
 

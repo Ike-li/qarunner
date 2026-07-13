@@ -14,9 +14,10 @@ from qarunner.domain.errors import (
     AttemptUnknownReviewRequired,
     IdempotencyConflict,
     InvalidTransition,
+    StaleFence,
     ensure_expected_version,
 )
-from qarunner.domain.unknown import UnknownObservation
+from qarunner.domain.unknown import UnknownAdjudication, UnknownObservation
 from qarunner.domain.worker import WorkerGeneration, WorkerRef
 
 
@@ -249,14 +250,7 @@ class Run:
         expected_attempt_version: int,
     ) -> Run:
         """Record unknown on the Run-owned latest Attempt snapshot."""
-        if not self.attempts or self.attempts[-1].id != attempt_id:
-            raise AttemptUnknownReviewRequired(
-                run_id=self.id,
-                attempt_id=attempt_id,
-                fence=self.current_fence,
-                reason="source_attempt_not_current",
-            )
-        current = self.attempts[-1]
+        current = self._current_attempt(attempt_id)
         authority = AttemptAuthority(
             current_fence=self.current_fence,
             current_worker=current.worker,
@@ -284,11 +278,8 @@ class Run:
         self, *, attempt_id: str, expected_version: int
     ) -> None:
         """Let later retry policy proceed only when its source is not unknown."""
-        if (
-            self.attempts
-            and self.attempts[-1].id == attempt_id
-            and self.attempts[-1].state is AttemptState.ATTEMPT_UNKNOWN
-        ):
+        current = self._current_attempt(attempt_id)
+        if current.state is AttemptState.ATTEMPT_UNKNOWN:
             raise AttemptUnknownReviewRequired(
                 run_id=self.id,
                 attempt_id=attempt_id,
@@ -301,13 +292,55 @@ class Run:
             current_version=self.version,
             expected_version=expected_version,
         )
-        if not self.attempts or self.attempts[-1].id != attempt_id:
+
+    def append_current_unknown_adjudication(
+        self,
+        *,
+        attempt_id: str,
+        adjudication: UnknownAdjudication,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> Run:
+        """Append adjudication to the Run-owned latest unknown snapshot."""
+        current = self._current_attempt(attempt_id)
+        adjudicated = current.append_unknown_adjudication(
+            adjudication=adjudication,
+            expected_version=expected_attempt_version,
+        )
+        if adjudicated is current:
+            return self
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            attempts=(*self.attempts[:-1], adjudicated),
+            version=self.version + 1,
+        )
+
+    def _current_attempt(self, attempt_id: str) -> Attempt:
+        if (
+            not self.attempts
+            or self.attempts[-1].id != attempt_id
+            or self.attempts[-1].run_id != self.id
+        ):
             raise AttemptUnknownReviewRequired(
                 run_id=self.id,
                 attempt_id=attempt_id,
                 fence=self.current_fence,
                 reason="source_attempt_not_current",
             )
+        current = self.attempts[-1]
+        if current.fence != self.current_fence:
+            raise StaleFence(
+                attempt_id=current.id,
+                current_fence=self.current_fence,
+                received_fence=current.fence,
+            )
+        return current
 
 
 def _start_commit_digest(*, assignment_id: str, worker: WorkerRef, spec_digest: Digest) -> Digest:

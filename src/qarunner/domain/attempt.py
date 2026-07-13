@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from qarunner.domain.authority import AttemptAuthority
 from qarunner.domain.digest import Digest
 from qarunner.domain.errors import (
+    AdjudicationConflict,
     DomainValidationError,
     EventConflict,
     EvidenceConflict,
@@ -29,7 +30,11 @@ from qarunner.domain.evidence import (
     VerifiedArtifact,
     build_evidence_manifest,
 )
-from qarunner.domain.unknown import UnknownObservation
+from qarunner.domain.unknown import (
+    UnknownAdjudication,
+    UnknownAdjudicationDecision,
+    UnknownObservation,
+)
 from qarunner.domain.worker import WorkerRef
 
 
@@ -91,6 +96,7 @@ class Attempt:
     events: tuple[AttemptEvent, ...]
     evidence: EvidenceManifest | None
     unknown_observation: UnknownObservation | None
+    adjudications: tuple[UnknownAdjudication, ...]
     state: AttemptState
     version: int
 
@@ -123,6 +129,7 @@ class Attempt:
                 field="unknown_observation",
                 reason="only_allowed_for_unknown",
             )
+        self._validate_adjudication_history()
 
     @classmethod
     def create(
@@ -150,6 +157,7 @@ class Attempt:
             events=(),
             evidence=None,
             unknown_observation=None,
+            adjudications=(),
             state=AttemptState.START_COMMITTED,
             version=0,
         )
@@ -222,6 +230,42 @@ class Attempt:
             self,
             state=AttemptState.ATTEMPT_UNKNOWN,
             unknown_observation=observation,
+            version=self.version + 1,
+        )
+
+    def append_unknown_adjudication(
+        self,
+        *,
+        adjudication: UnknownAdjudication,
+        expected_version: int,
+    ) -> Attempt:
+        """Append a handling decision without rewriting the unknown Attempt."""
+        if not isinstance(adjudication, UnknownAdjudication):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="invalid_type",
+            )
+        existing = next(
+            (record for record in self.adjudications if record.id == adjudication.id),
+            None,
+        )
+        if existing is not None:
+            if existing == adjudication:
+                return self
+            raise AdjudicationConflict(
+                attempt_id=self.id,
+                adjudication_id=adjudication.id,
+            )
+        ensure_expected_version(
+            entity_type="attempt",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            adjudications=(*self.adjudications, adjudication),
             version=self.version + 1,
         )
 
@@ -366,4 +410,85 @@ class Attempt:
                 attempt_id=self.id,
                 current_worker=authority.current_worker,
                 received_worker=worker,
+            )
+
+    def _validate_adjudication_history(self) -> None:
+        if not isinstance(self.adjudications, tuple):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="not_tuple",
+            )
+        if any(not isinstance(record, UnknownAdjudication) for record in self.adjudications):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="invalid_type",
+            )
+        if self.adjudications and self.state is not AttemptState.ATTEMPT_UNKNOWN:
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="only_allowed_for_unknown",
+            )
+        if any(record.attempt_id != self.id for record in self.adjudications):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="attempt_mismatch",
+            )
+        observation_digest = (
+            self.unknown_observation.digest if self.unknown_observation is not None else None
+        )
+        if any(
+            record.unknown_observation_digest != observation_digest
+            for record in self.adjudications
+        ):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="observation_mismatch",
+            )
+        if self.unknown_observation is not None and any(
+            record.occurred_at < self.unknown_observation.recorded_at
+            for record in self.adjudications
+        ):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="before_unknown",
+            )
+        ids = tuple(record.id for record in self.adjudications)
+        if len(ids) != len(set(ids)):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="duplicate_id",
+            )
+        expected_superseded_id: str | None = None
+        for record in self.adjudications:
+            if record.supersedes_adjudication_id != expected_superseded_id:
+                raise DomainValidationError(
+                    entity_type="attempt",
+                    field="adjudications",
+                    reason="supersession_mismatch",
+                )
+            expected_superseded_id = record.id
+        if any(
+            self.adjudications[index].occurred_at < self.adjudications[index - 1].occurred_at
+            for index in range(1, len(self.adjudications))
+        ):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="occurred_at_not_monotonic",
+            )
+        if any(
+            record.decision is UnknownAdjudicationDecision.MARK_COMPLETED_FROM_VERIFIED_EVIDENCE
+            for record in self.adjudications
+        ):
+            raise DomainValidationError(
+                entity_type="attempt",
+                field="adjudications",
+                reason="verified_evidence_adjudication_not_supported",
             )
