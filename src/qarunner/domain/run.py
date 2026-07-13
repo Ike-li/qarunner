@@ -33,6 +33,7 @@ from qarunner.domain.errors import (
     StaleFence,
     ensure_expected_version,
 )
+from qarunner.domain.event import AttemptEvent
 from qarunner.domain.evidence import (
     EvidenceManifest,
     EvidenceOutcome,
@@ -81,6 +82,16 @@ class CommitStartResult:
     run: Run
     attempt: Attempt
     fence: int
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeAttemptEvidenceResult:
+    """Run-owned result for normal Attempt Evidence finalization."""
+
+    run: Run
+    attempt: Attempt
+    evidence: EvidenceManifest
     replayed: bool
 
 
@@ -1212,6 +1223,119 @@ class Run:
             self,
             attempts=(*self.attempts[:-1], unknown),
             version=self.version + 1,
+        )
+
+    def transition_current_attempt(
+        self,
+        *,
+        attempt_id: str,
+        target: AttemptState,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> Run:
+        """Advance the Run-owned current Attempt through one execution phase."""
+        current = self._current_attempt(attempt_id)
+        updated = current.transition(
+            target,
+            expected_version=expected_attempt_version,
+        )
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            attempts=(*self.attempts[:-1], updated),
+            version=self.version + 1,
+        )
+
+    def record_current_attempt_event(
+        self,
+        *,
+        attempt_id: str,
+        event: AttemptEvent,
+        authority: AttemptAuthority,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> Run:
+        """Append an event to the Run-owned current Attempt snapshot."""
+        current = self._current_attempt(attempt_id)
+        updated = current.record_event(
+            event,
+            authority=authority,
+            worker=worker,
+            fence=fence,
+            expected_version=expected_attempt_version,
+        )
+        if updated is current:
+            return self
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            attempts=(*self.attempts[:-1], updated),
+            version=self.version + 1,
+        )
+
+    def finalize_current_attempt_evidence(
+        self,
+        *,
+        attempt_id: str,
+        proposal: EvidenceProposal,
+        trusted_exit: TrustedExitFacts | None,
+        case_summary: ValidatedCaseSummary | None,
+        artifacts: tuple[VerifiedArtifact, ...],
+        requirements: EvidenceRequirements,
+        authority: AttemptAuthority,
+        worker: WorkerRef,
+        fence: int,
+        expected_version: int,
+        expected_attempt_version: int,
+    ) -> FinalizeAttemptEvidenceResult:
+        """Finalize normal Evidence on the Run-owned current Attempt snapshot."""
+        current = self._current_attempt(attempt_id)
+        finalized = current.finalize_evidence(
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            case_summary=case_summary,
+            artifacts=artifacts,
+            requirements=requirements,
+            authority=authority,
+            worker=worker,
+            fence=fence,
+            expected_version=expected_attempt_version,
+        )
+        if finalized.replayed:
+            return FinalizeAttemptEvidenceResult(
+                run=self,
+                attempt=current,
+                evidence=finalized.evidence,
+                replayed=True,
+            )
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        updated = replace(
+            self,
+            attempts=(*self.attempts[:-1], finalized.attempt),
+            version=self.version + 1,
+        )
+        return FinalizeAttemptEvidenceResult(
+            run=updated,
+            attempt=finalized.attempt,
+            evidence=finalized.evidence,
+            replayed=False,
         )
 
     def mark_cancel_stop_unproven(

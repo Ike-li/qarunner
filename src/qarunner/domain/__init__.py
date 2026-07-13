@@ -68,7 +68,12 @@ from qarunner.domain.manifest import (
     WorkEstimate,
 )
 from qarunner.domain.retry import RetryIntent, RetryProvenance
-from qarunner.domain.run import FinalizeCancellationEvidenceResult, Run, RunState
+from qarunner.domain.run import (
+    FinalizeAttemptEvidenceResult,
+    FinalizeCancellationEvidenceResult,
+    Run,
+    RunState,
+)
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownAdjudicationDecision,
@@ -121,6 +126,7 @@ __all__ = [
     "EvidenceRequirements",
     "EstimateConfidence",
     "FinalizeEvidenceResult",
+    "FinalizeAttemptEvidenceResult",
     "FinalizeCancellationEvidenceResult",
     "FrameworkLocator",
     "IdempotencyConflict",
