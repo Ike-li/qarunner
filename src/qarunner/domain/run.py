@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 
-from qarunner.domain.assignment import Assignment, AssignmentState
+from qarunner.domain.assignment import (
+    Assignment,
+    AssignmentClosure,
+    AssignmentClosureKind,
+    AssignmentState,
+)
 from qarunner.domain.attempt import Attempt, AttemptState
 from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.digest import Digest, canonical_digest
@@ -87,6 +93,7 @@ class Run:
                 _invalid_run(field, "invalid")
         self._validate_normalized_history()
         self._validate_state_pointers()
+        self._validate_assignment_epoch_tails()
         self._validate_retry_intent_consumption()
 
     @classmethod
@@ -197,6 +204,12 @@ class Run:
                 or assignment.spec_digest != attempt.spec_digest
             ):
                 _invalid_run("attempts", "assignment_mismatch")
+            if (
+                attempt.unknown_observation is not None
+                and assignment.committed_at is not None
+                and attempt.unknown_observation.recorded_at < assignment.committed_at
+            ):
+                _invalid_run("attempts", "unknown_before_assignment_commit")
             if index == 1:
                 if assignment.retry_intent_id is not None:
                     _invalid_run("assignments", "retry_intent_mismatch")
@@ -260,17 +273,37 @@ class Run:
                 _invalid_run("retry_intents", "adjudication_not_authoritative")
 
         attempt_assignment_ids = {attempt.assignment_id for attempt in self.attempts}
+        retry_intent_epochs = {
+            intent.id: index for index, intent in enumerate(self.retry_intents, start=1)
+        }
+        assignment_epochs: list[int] = []
         for assignment in self.assignments:
             if assignment.retry_intent_id is not None:
                 intent = retry_intents_by_id.get(assignment.retry_intent_id)
                 if intent is None or assignment.spec_digest != intent.execution_spec_digest:
                     _invalid_run("assignments", "retry_intent_mismatch")
+                if assignment.offered_at < intent.created_at:
+                    _invalid_run("assignments", "offered_before_retry_intent")
+                assignment_epochs.append(retry_intent_epochs[intent.id])
+            else:
+                assignment_epochs.append(0)
             is_current = assignment.id == self.current_assignment_id
             if assignment.state is AssignmentState.COMMITTED:
                 if assignment.id not in attempt_assignment_ids:
                     _invalid_run("assignments", "committed_without_attempt")
+            elif assignment.state in {
+                AssignmentState.EXPIRED_PRESTART,
+                AssignmentState.RELEASED_PRESTART,
+            }:
+                if is_current:
+                    _invalid_run("assignments", "closed_reservation_current")
             elif not is_current:
                 _invalid_run("assignments", "historical_reservation_not_committed")
+        if self.assignments and any(
+            assignment.spec_digest != self.assignments[0].spec_digest
+            for assignment in self.assignments[1:]
+        ):
+            _invalid_run("assignments", "spec_digest_mismatch")
         committed_assignment_ids = tuple(
             assignment.id
             for assignment in self.assignments
@@ -279,6 +312,17 @@ class Run:
         attempt_assignment_order = tuple(attempt.assignment_id for attempt in self.attempts)
         if committed_assignment_ids != attempt_assignment_order:
             _invalid_run("assignments", "attempt_order_mismatch")
+        if assignment_epochs != sorted(assignment_epochs):
+            _invalid_run("assignments", "retry_intent_order_mismatch")
+        previous_closed_at: datetime | None = None
+        for assignment in self.assignments:
+            if previous_closed_at is not None and assignment.offered_at < previous_closed_at:
+                _invalid_run("assignments", "timeline_not_monotonic")
+            previous_closed_at = (
+                assignment.closure.recorded_at
+                if assignment.closure is not None
+                else assignment.committed_at
+            )
 
     def _validate_state_pointers(self) -> None:
         current = self.assignment
@@ -342,6 +386,24 @@ class Run:
         if actual_intent_ids != expected_intent_ids:
             _invalid_run("retry_intents", "order_mismatch")
 
+    def _validate_assignment_epoch_tails(self) -> None:
+        for attempt_index, attempt in enumerate(self.attempts):
+            retry_intent_id = (
+                None if attempt_index == 0 else self.retry_intents[attempt_index - 1].id
+            )
+            group_positions = tuple(
+                index
+                for index, assignment in enumerate(self.assignments)
+                if assignment.retry_intent_id == retry_intent_id
+            )
+            committed_position = next(
+                index
+                for index, assignment in enumerate(self.assignments)
+                if assignment.id == attempt.assignment_id
+            )
+            if not group_positions or committed_position != group_positions[-1]:
+                _invalid_run("assignments", "committed_assignment_not_epoch_tail")
+
     def transition(self, target: RunState, *, expected_version: int) -> Run:
         """Reject stale commands or state edges that skip scheduling phases."""
         ensure_expected_version(
@@ -368,6 +430,8 @@ class Run:
         worker: WorkerGeneration,
         worker_authority: WorkerAuthority,
         spec_digest: Digest,
+        offered_at: datetime,
+        expires_at: datetime,
         expected_version: int,
     ) -> Run:
         """Reserve a queued Run for one Worker generation."""
@@ -391,6 +455,16 @@ class Run:
                 run_id=self.id,
                 assignment_id=assignment_id,
                 reason="assignment_id_reused",
+            )
+        if (
+            self.state is RunState.QUEUED
+            and self.assignments
+            and spec_digest != self.assignments[0].spec_digest
+        ):
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=assignment_id,
+                reason="spec_digest_mismatch",
             )
         retry_intent = self.pending_retry_intent
         if self.state is RunState.RETRY_QUEUED and retry_intent is None:
@@ -419,6 +493,8 @@ class Run:
             assignment_id=assignment_id,
             worker=worker_ref,
             spec_digest=spec_digest,
+            offered_at=offered_at,
+            expires_at=expires_at,
             retry_intent_id=retry_intent.id if retry_intent is not None else None,
         )
         return replace(
@@ -434,6 +510,7 @@ class Run:
         *,
         assignment_id: str,
         worker: WorkerRef,
+        observed_at: datetime,
         expected_version: int,
     ) -> Run:
         """Record that the bound Worker generation accepted its offer."""
@@ -443,6 +520,7 @@ class Run:
             current_version=self.version,
             expected_version=expected_version,
         )
+        _require_utc_command_time("observed_at", observed_at)
         if (
             self.state != RunState.ASSIGNED
             or self.assignment is None
@@ -455,9 +533,21 @@ class Run:
                 assignment_id=assignment_id,
                 reason="offer_mismatch",
             )
+        if not (self.assignment.offered_at <= observed_at < self.assignment.expires_at):
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=assignment_id,
+                reason=(
+                    "assignment_expired"
+                    if observed_at >= self.assignment.expires_at
+                    else "assignment_not_effective"
+                ),
+            )
         return replace(
             self,
-            assignments=self._replace_current_assignment(self.assignment.claim()),
+            assignments=self._replace_current_assignment(
+                self.assignment.claim(claimed_at=observed_at)
+            ),
             version=self.version + 1,
         )
 
@@ -469,6 +559,7 @@ class Run:
         start_commit_key: str,
         spec_digest: Digest,
         new_attempt_id: str,
+        observed_at: datetime,
         expected_version: int,
     ) -> CommitStartResult:
         """Create the first durable Attempt/fence for a claimed Assignment."""
@@ -531,6 +622,7 @@ class Run:
             current_version=self.version,
             expected_version=expected_version,
         )
+        _require_utc_command_time("observed_at", observed_at)
         if (
             self.state != RunState.ASSIGNED
             or self.assignment is None
@@ -543,6 +635,16 @@ class Run:
                 run_id=self.id,
                 assignment_id=assignment_id,
                 reason="assignment_not_claimed",
+            )
+        if not (self.assignment.claimed_at <= observed_at < self.assignment.expires_at):
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=assignment_id,
+                reason=(
+                    "assignment_expired"
+                    if observed_at >= self.assignment.expires_at
+                    else "commit_before_claim"
+                ),
             )
         if any(attempt.id == new_attempt_id for attempt in self.attempts):
             raise AttemptConflict(
@@ -599,7 +701,7 @@ class Run:
             start_commit_key=start_commit_key,
             retry_provenance=retry_provenance,
         )
-        committed_assignment = self.assignment.commit()
+        committed_assignment = self.assignment.commit(committed_at=observed_at)
         committed_run = replace(
             self,
             state=RunState.RUNNING,
@@ -614,6 +716,141 @@ class Run:
             attempt=attempt,
             fence=fence,
             replayed=False,
+        )
+
+    def expire_precommit_assignment(
+        self,
+        *,
+        assignment_id: str,
+        expiry_key: str,
+        observed_at: datetime,
+        expected_version: int,
+    ) -> Run:
+        """Close an uncommitted reservation after its frozen TTL boundary."""
+        _require_utc_command_time("observed_at", observed_at)
+        existing = self._assignment_by_id(assignment_id)
+        closure = AssignmentClosure(
+            assignment_id=assignment_id,
+            idempotency_key=expiry_key,
+            kind=AssignmentClosureKind.EXPIRED_PRESTART,
+            effective_at=(
+                min(observed_at, existing.expires_at) if existing is not None else observed_at
+            ),
+            recorded_at=observed_at,
+            worker=None,
+        )
+        return self._close_precommit_assignment(
+            closure=closure,
+            expected_version=expected_version,
+        )
+
+    def release_precommit_assignment(
+        self,
+        *,
+        assignment_id: str,
+        worker: WorkerRef,
+        release_key: str,
+        observed_at: datetime,
+        expected_version: int,
+    ) -> Run:
+        """Let the bound Worker release an offer before its TTL boundary."""
+        _require_utc_command_time("observed_at", observed_at)
+        closure = AssignmentClosure(
+            assignment_id=assignment_id,
+            idempotency_key=release_key,
+            kind=AssignmentClosureKind.RELEASED_PRESTART,
+            effective_at=observed_at,
+            recorded_at=observed_at,
+            worker=worker,
+        )
+        return self._close_precommit_assignment(
+            closure=closure,
+            expected_version=expected_version,
+        )
+
+    def _close_precommit_assignment(
+        self,
+        *,
+        closure: AssignmentClosure,
+        expected_version: int,
+    ) -> Run:
+        existing = self._assignment_by_id(closure.assignment_id)
+        if existing is not None and existing.closure is not None:
+            if existing.closure.idempotency_key == closure.idempotency_key:
+                if existing.closure.request_digest != closure.request_digest:
+                    raise IdempotencyConflict(
+                        scope=(
+                            f"run:{self.id}:assignment:{closure.assignment_id}:precommit-closure"
+                        ),
+                        key=closure.idempotency_key,
+                        stored_digest=existing.closure.request_digest,
+                        received_digest=closure.request_digest,
+                    )
+                return self
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=closure.assignment_id,
+                reason="assignment_already_closed",
+            )
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        current = self.assignment
+        if (
+            self.state is not RunState.ASSIGNED
+            or current is None
+            or current.id != closure.assignment_id
+            or current.state not in {AssignmentState.OFFERED, AssignmentState.CLAIMED}
+        ):
+            raise AssignmentConflict(
+                run_id=self.id,
+                assignment_id=closure.assignment_id,
+                reason="assignment_not_precommit",
+            )
+        if closure.kind is AssignmentClosureKind.EXPIRED_PRESTART:
+            if closure.recorded_at < current.expires_at:
+                raise AssignmentConflict(
+                    run_id=self.id,
+                    assignment_id=closure.assignment_id,
+                    reason="assignment_not_expired",
+                )
+        else:
+            if closure.worker != current.worker:
+                raise AssignmentConflict(
+                    run_id=self.id,
+                    assignment_id=closure.assignment_id,
+                    reason="worker_mismatch",
+                )
+            release_floor = current.claimed_at or current.offered_at
+            if closure.recorded_at < release_floor:
+                raise AssignmentConflict(
+                    run_id=self.id,
+                    assignment_id=closure.assignment_id,
+                    reason=(
+                        "release_before_claim"
+                        if current.claimed_at is not None
+                        else "assignment_not_effective"
+                    ),
+                )
+            if closure.recorded_at >= current.expires_at:
+                raise AssignmentConflict(
+                    run_id=self.id,
+                    assignment_id=closure.assignment_id,
+                    reason="assignment_expired",
+                )
+        closed = current.close_prestart(closure)
+        resume_state = (
+            RunState.RETRY_QUEUED if current.retry_intent_id is not None else RunState.QUEUED
+        )
+        return replace(
+            self,
+            state=resume_state,
+            assignments=self._replace_current_assignment(closed),
+            current_assignment_id=None,
+            version=self.version + 1,
         )
 
     def mark_current_attempt_unknown(
@@ -776,6 +1013,12 @@ class Run:
             )
         return replaced
 
+    def _assignment_by_id(self, assignment_id: str) -> Assignment | None:
+        return next(
+            (assignment for assignment in self.assignments if assignment.id == assignment_id),
+            None,
+        )
+
     def _ensure_retry_intent_authoritative(
         self,
         *,
@@ -868,3 +1111,10 @@ def _invalid_run(field: str, reason: str) -> None:
         field=field,
         reason=reason,
     )
+
+
+def _require_utc_command_time(field: str, value: object) -> None:
+    if not isinstance(value, datetime):
+        _invalid_run(field, "not_datetime")
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        _invalid_run(field, "not_utc")

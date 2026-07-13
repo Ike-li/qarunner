@@ -5,6 +5,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+INITIAL_OFFERED_AT = datetime(2026, 7, 12, 18, tzinfo=UTC)
+INITIAL_CLAIMED_AT = INITIAL_OFFERED_AT + timedelta(minutes=1)
+INITIAL_COMMITTED_AT = INITIAL_CLAIMED_AT + timedelta(minutes=1)
+INITIAL_EXPIRES_AT = INITIAL_OFFERED_AT + timedelta(hours=1)
+RETRY_OFFERED_AT = datetime(2026, 7, 12, 22, 1, tzinfo=UTC)
+RETRY_CLAIMED_AT = RETRY_OFFERED_AT + timedelta(minutes=1)
+RETRY_COMMITTED_AT = RETRY_CLAIMED_AT + timedelta(minutes=1)
+RETRY_EXPIRES_AT = RETRY_OFFERED_AT + timedelta(hours=1)
+
 
 def _unsafe_run_replace(run, **changes):
     """Simulate a corrupt store object that bypassed dataclass rehydration guards."""
@@ -112,11 +121,14 @@ def _committed_run():
         worker=worker,
         worker_authority=authority,
         spec_digest=spec_digest,
+        offered_at=INITIAL_OFFERED_AT,
+        expires_at=INITIAL_EXPIRES_AT,
         expected_version=queued.version,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-001",
         worker=worker.ref,
+        observed_at=INITIAL_CLAIMED_AT,
         expected_version=offered.version,
     )
     committed = claimed.commit_start(
@@ -125,6 +137,7 @@ def _committed_run():
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="attempt-001",
+        observed_at=INITIAL_COMMITTED_AT,
         expected_version=claimed.version,
     )
     return committed.run, worker, spec_digest
@@ -194,11 +207,14 @@ def _committed_retry():
         worker=worker2,
         worker_authority=authority2,
         spec_digest=spec_digest,
+        offered_at=RETRY_OFFERED_AT,
+        expires_at=RETRY_EXPIRES_AT,
         expected_version=retry_queued.version,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-002",
         worker=worker2.ref,
+        observed_at=RETRY_CLAIMED_AT,
         expected_version=offered.version,
     )
     committed = claimed.commit_start(
@@ -207,6 +223,7 @@ def _committed_retry():
         start_commit_key="commit-002",
         spec_digest=spec_digest,
         new_attempt_id="attempt-002",
+        observed_at=RETRY_COMMITTED_AT,
         expected_version=claimed.version,
     )
     return committed, worker2, spec_digest, intent
@@ -480,6 +497,8 @@ def test_retry_assignment_offer_preserves_history_and_rejects_reused_identity() 
         worker=worker2,
         worker_authority=authority2,
         spec_digest=spec_digest,
+        offered_at=RETRY_OFFERED_AT,
+        expires_at=RETRY_EXPIRES_AT,
         expected_version=retry_queued.version,
     )
 
@@ -500,6 +519,8 @@ def test_retry_assignment_offer_preserves_history_and_rejects_reused_identity() 
             worker=worker2,
             worker_authority=authority2,
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=retry_queued.version,
         )
     assert caught.value.reason == "assignment_id_reused"
@@ -517,6 +538,8 @@ def test_retry_assignment_offer_cannot_change_the_adjudicated_execution_spec() -
             worker=worker2,
             worker_authority=authority2,
             spec_digest=_digest("unauthorized-spec"),
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=retry_queued.version,
         )
 
@@ -574,6 +597,7 @@ def test_retry_commit_exact_replay_does_not_allocate_attempt3() -> None:
         start_commit_key="commit-002",
         spec_digest=spec_digest,
         new_attempt_id="must-not-be-used",
+        observed_at=RETRY_COMMITTED_AT,
         expected_version=committed.run.version - 1,
     )
 
@@ -596,6 +620,7 @@ def test_superseded_commit_replay_cannot_reissue_old_fence_authority() -> None:
             start_commit_key="commit-001",
             spec_digest=spec_digest,
             new_attempt_id="ignored",
+            observed_at=RETRY_COMMITTED_AT,
             expected_version=committed.run.version,
         )
 
@@ -617,12 +642,15 @@ def test_revoked_commit_replay_is_rejected_before_attempt2_advances_fence(stage:
             worker=worker2,
             worker_authority=authority2,
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=retry_queued.version,
         )
         if stage == "claimed":
             candidate = candidate.claim_assignment(
                 assignment_id="assignment-002",
                 worker=worker2.ref,
+                observed_at=RETRY_CLAIMED_AT,
                 expected_version=candidate.version,
             )
 
@@ -633,6 +661,7 @@ def test_revoked_commit_replay_is_rejected_before_attempt2_advances_fence(stage:
             start_commit_key="commit-001",
             spec_digest=spec_digest,
             new_attempt_id="ignored",
+            observed_at=RETRY_COMMITTED_AT,
             expected_version=candidate.version,
         )
 
@@ -671,6 +700,7 @@ def test_current_nonterminal_attempt_commit_replay_remains_idempotent(state_name
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="ignored",
+        observed_at=INITIAL_COMMITTED_AT,
         expected_version=0,
     )
 
@@ -690,11 +720,14 @@ def test_new_commit_rejects_a_historical_attempt_identity() -> None:
         worker=worker2,
         worker_authority=authority2,
         spec_digest=spec_digest,
+        offered_at=RETRY_OFFERED_AT,
+        expires_at=RETRY_EXPIRES_AT,
         expected_version=retry_queued.version,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-002",
         worker=worker2.ref,
+        observed_at=RETRY_CLAIMED_AT,
         expected_version=offered.version,
     )
 
@@ -705,6 +738,7 @@ def test_new_commit_rejects_a_historical_attempt_identity() -> None:
             start_commit_key="commit-002",
             spec_digest=spec_digest,
             new_attempt_id="attempt-001",
+            observed_at=RETRY_COMMITTED_AT,
             expected_version=claimed.version,
         )
 
@@ -723,11 +757,14 @@ def test_retry_commit_requires_the_pending_retry_intent() -> None:
         worker=worker2,
         worker_authority=authority2,
         spec_digest=spec_digest,
+        offered_at=RETRY_OFFERED_AT,
+        expires_at=RETRY_EXPIRES_AT,
         expected_version=retry_queued.version,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-002",
         worker=worker2.ref,
+        observed_at=RETRY_CLAIMED_AT,
         expected_version=offered.version,
     )
     corrupted = _unsafe_run_replace(claimed, pending_retry_intent_id=None)
@@ -739,6 +776,7 @@ def test_retry_commit_requires_the_pending_retry_intent() -> None:
             start_commit_key="commit-002",
             spec_digest=spec_digest,
             new_attempt_id="attempt-002",
+            observed_at=RETRY_COMMITTED_AT,
             expected_version=corrupted.version,
         )
 
@@ -757,11 +795,14 @@ def test_retry_commit_defensively_rejects_assignment_spec_tampering() -> None:
         worker=worker2,
         worker_authority=authority2,
         spec_digest=spec_digest,
+        offered_at=RETRY_OFFERED_AT,
+        expires_at=RETRY_EXPIRES_AT,
         expected_version=retry_queued.version,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-002",
         worker=worker2.ref,
+        observed_at=RETRY_CLAIMED_AT,
         expected_version=offered.version,
     )
     assignment2 = claimed.assignment
@@ -780,6 +821,7 @@ def test_retry_commit_defensively_rejects_assignment_spec_tampering() -> None:
             start_commit_key="commit-002",
             spec_digest=tampered_spec,
             new_attempt_id="attempt-002",
+            observed_at=RETRY_COMMITTED_AT,
             expected_version=tampered.version,
         )
 
@@ -851,12 +893,15 @@ def test_revoked_unknown_attempt_rejects_new_events_before_fence2(stage: str) ->
             worker=worker2,
             worker_authority=authority2,
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=retry_queued.version,
         )
         if stage == "claimed":
             candidate = candidate.claim_assignment(
                 assignment_id="assignment-002",
                 worker=worker2.ref,
+                observed_at=RETRY_CLAIMED_AT,
                 expected_version=candidate.version,
             )
     attempt1 = candidate.attempts[0]
@@ -1057,6 +1102,8 @@ def test_retry_queue_rejects_second_pending_intent_and_corrupt_queue_states() ->
             worker=worker2,
             worker_authority=authority2,
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=missing_pending.version,
         )
     assert missing.value.reason == "retry_intent_not_pending"
@@ -1068,6 +1115,8 @@ def test_retry_queue_rejects_second_pending_intent_and_corrupt_queue_states() ->
             worker=worker2,
             worker_authority=authority2,
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=wrong_state.version,
         )
     assert queued.value.reason == "retry_intent_not_pending"
@@ -1083,6 +1132,7 @@ def test_first_commit_rejects_a_forged_retry_binding() -> None:
     forged_assignment = replace(
         assignment,
         state=AssignmentState.CLAIMED,
+        committed_at=None,
         retry_intent_id=intent.id,
     )
     forged = _unsafe_run_replace(
@@ -1102,6 +1152,7 @@ def test_first_commit_rejects_a_forged_retry_binding() -> None:
             start_commit_key="forged-commit",
             spec_digest=spec_digest,
             new_attempt_id="attempt-forged",
+            observed_at=INITIAL_COMMITTED_AT,
             expected_version=forged.version,
         )
 
@@ -1330,6 +1381,8 @@ def test_run_rehydration_rejects_invalid_retry_state_pointers(
             worker=worker2,
             worker_authority=authority2,
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=retry_queued.version,
         )
         changes = {"pending_retry_intent_id": None}
@@ -1486,6 +1539,8 @@ def test_run_rehydration_rejects_forged_retry_authority_and_orphan_history(
             assignment_id="assignment-phantom",
             worker=worker2.ref,
             spec_digest=attempt2.spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
         )
         changes = {"assignments": (assignment1, phantom, assignment2)}
     else:
@@ -1646,7 +1701,11 @@ def test_run_rehydration_rejects_additional_cross_history_corruption(
         source = run
         changes = {
             "assignments": (
-                replace(assignment1, state=AssignmentState.CLAIMED),
+                replace(
+                    assignment1,
+                    state=AssignmentState.CLAIMED,
+                    committed_at=None,
+                ),
                 assignment2,
             )
         }
@@ -1689,6 +1748,8 @@ def test_run_rehydration_rejects_additional_cross_history_corruption(
             worker=worker2,
             worker_authority=_ready_worker(generation=4)[1],
             spec_digest=spec_digest,
+            offered_at=RETRY_OFFERED_AT,
+            expires_at=RETRY_EXPIRES_AT,
             expected_version=retry_queued.version,
         )
         current = offered.assignment
@@ -1701,13 +1762,16 @@ def test_run_rehydration_rejects_additional_cross_history_corruption(
             )
         }
     elif case == "committed-orphan":
-        orphan = replace(
+        orphan = (
             Assignment.offer(
                 assignment_id="assignment-orphan",
                 worker=worker2.ref,
                 spec_digest=spec_digest,
-            ),
-            state=AssignmentState.COMMITTED,
+                offered_at=RETRY_OFFERED_AT,
+                expires_at=RETRY_EXPIRES_AT,
+            )
+            .claim(claimed_at=RETRY_CLAIMED_AT)
+            .commit(committed_at=RETRY_COMMITTED_AT)
         )
         source = run
         changes = {"assignments": (assignment1, orphan, assignment2)}
@@ -1722,6 +1786,8 @@ def test_run_rehydration_rejects_additional_cross_history_corruption(
             worker=worker,
             worker_authority=authority,
             spec_digest=_digest("queued-spec"),
+            offered_at=INITIAL_OFFERED_AT,
+            expires_at=INITIAL_EXPIRES_AT,
             expected_version=queued.version,
         )
         changes = {"state": RunState.QUEUED}
@@ -1759,6 +1825,8 @@ def test_assigned_state_requires_current_reservation_and_matching_retry_intent()
         worker=worker2,
         worker_authority=authority2,
         spec_digest=spec_digest,
+        offered_at=RETRY_OFFERED_AT,
+        expires_at=RETRY_EXPIRES_AT,
         expected_version=retry_queued.version,
     )
     current = offered.assignment
@@ -1807,6 +1875,8 @@ def test_run_rehydration_rejects_reauthorizing_old_adjudication_as_pending() -> 
         assignment_id="assignment-003",
         worker=worker2.ref,
         spec_digest=duplicate.execution_spec_digest,
+        offered_at=datetime(2026, 7, 13, 0, 1, tzinfo=UTC),
+        expires_at=datetime(2026, 7, 13, 1, 1, tzinfo=UTC),
         retry_intent_id=duplicate.id,
     )
 

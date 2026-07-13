@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 REGISTERED_AT = datetime(2026, 7, 12, 12, tzinfo=UTC)
+ASSIGNMENT_OFFERED_AT = REGISTERED_AT + timedelta(minutes=1)
+ASSIGNMENT_EXPIRES_AT = ASSIGNMENT_OFFERED_AT + timedelta(hours=1)
 
 
 def _registered_worker():
@@ -581,6 +583,8 @@ def test_run_offer_rejects_a_ready_but_superseded_generation() -> None:
                 schema_version="qep.execution-spec.v1",
                 payload={"run_id": "run-001"},
             ),
+            offered_at=ASSIGNMENT_OFFERED_AT,
+            expires_at=ASSIGNMENT_EXPIRES_AT,
             expected_version=1,
         )
 
@@ -602,6 +606,8 @@ def test_run_offer_accepts_only_a_current_claimable_generation(state_name: str) 
             schema_version="qep.execution-spec.v1",
             payload={"run_id": "run-001"},
         ),
+        offered_at=ASSIGNMENT_OFFERED_AT,
+        expires_at=ASSIGNMENT_EXPIRES_AT,
         expected_version=1,
     )
 
@@ -654,6 +660,8 @@ def test_run_offer_rejects_a_worker_that_cannot_claim(state_name: str) -> None:
                 schema_version="qep.execution-spec.v1",
                 payload={"run_id": "run-001"},
             ),
+            offered_at=ASSIGNMENT_OFFERED_AT,
+            expires_at=ASSIGNMENT_EXPIRES_AT,
             expected_version=1,
         )
 

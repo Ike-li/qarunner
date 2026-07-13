@@ -1,6 +1,11 @@
 """Public API for the greenfield execution domain."""
 
-from qarunner.domain.assignment import Assignment, AssignmentState
+from qarunner.domain.assignment import (
+    Assignment,
+    AssignmentClosure,
+    AssignmentClosureKind,
+    AssignmentState,
+)
 from qarunner.domain.attempt import Attempt, AttemptState, FinalizeEvidenceResult
 from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
 from qarunner.domain.batch import Batch, BatchState
@@ -82,6 +87,8 @@ __all__ = [
     "AttemptAuthority",
     "AttemptState",
     "Assignment",
+    "AssignmentClosure",
+    "AssignmentClosureKind",
     "AssignmentConflict",
     "AssignmentState",
     "AttemptUnknownReviewRequired",

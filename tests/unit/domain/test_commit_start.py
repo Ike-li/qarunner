@@ -4,6 +4,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+OFFERED_AT = datetime(2026, 7, 12, 12, 1, tzinfo=UTC)
+CLAIMED_AT = OFFERED_AT + timedelta(minutes=1)
+COMMITTED_AT = CLAIMED_AT + timedelta(minutes=1)
+EXPIRES_AT = OFFERED_AT + timedelta(hours=1)
+
 
 def _ready_worker():
     from qarunner.domain import (
@@ -52,11 +57,14 @@ def _claimed_run():
         worker=worker,
         worker_authority=worker_authority,
         spec_digest=spec_digest,
+        offered_at=OFFERED_AT,
+        expires_at=EXPIRES_AT,
         expected_version=1,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-001",
         worker=worker.ref,
+        observed_at=CLAIMED_AT,
         expected_version=2,
     )
     return claimed, worker.ref, spec_digest
@@ -74,6 +82,7 @@ def test_claimed_assignment_commit_creates_first_attempt_and_fence() -> None:
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="attempt-001",
+        observed_at=COMMITTED_AT,
         expected_version=3,
     )
 
@@ -104,6 +113,7 @@ def test_commit_response_loss_replays_the_same_attempt_and_fence() -> None:
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="attempt-001",
+        observed_at=COMMITTED_AT,
         expected_version=3,
     )
 
@@ -113,6 +123,7 @@ def test_commit_response_loss_replays_the_same_attempt_and_fence() -> None:
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="must-not-be-used",
+        observed_at=COMMITTED_AT,
         expected_version=3,
     )
 
@@ -135,6 +146,7 @@ def test_commit_key_reuse_with_changed_spec_is_rejected() -> None:
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="attempt-001",
+        observed_at=COMMITTED_AT,
         expected_version=3,
     )
     changed_spec = canonical_digest(
@@ -149,6 +161,7 @@ def test_commit_key_reuse_with_changed_spec_is_rejected() -> None:
             start_commit_key="commit-001",
             spec_digest=changed_spec,
             new_attempt_id="attempt-002",
+            observed_at=COMMITTED_AT,
             expected_version=4,
         )
 
@@ -177,6 +190,8 @@ def test_assignment_offer_requires_a_queued_run() -> None:
             worker=worker,
             worker_authority=worker_authority,
             spec_digest=spec_digest,
+            offered_at=OFFERED_AT,
+            expires_at=EXPIRES_AT,
             expected_version=0,
         )
 
@@ -211,6 +226,8 @@ def test_assignment_claim_rejects_a_different_worker_generation() -> None:
         worker=worker,
         worker_authority=worker_authority,
         spec_digest=spec_digest,
+        offered_at=OFFERED_AT,
+        expires_at=EXPIRES_AT,
         expected_version=1,
     )
 
@@ -218,6 +235,7 @@ def test_assignment_claim_rejects_a_different_worker_generation() -> None:
         offered.claim_assignment(
             assignment_id="assignment-001",
             worker=wrong_generation,
+            observed_at=CLAIMED_AT,
             expected_version=2,
         )
 
@@ -247,6 +265,8 @@ def test_commit_start_requires_the_exact_claimed_assignment() -> None:
         worker=worker,
         worker_authority=worker_authority,
         spec_digest=spec_digest,
+        offered_at=OFFERED_AT,
+        expires_at=EXPIRES_AT,
         expected_version=1,
     )
 
@@ -257,6 +277,7 @@ def test_commit_start_requires_the_exact_claimed_assignment() -> None:
             start_commit_key="commit-001",
             spec_digest=spec_digest,
             new_attempt_id="attempt-001",
+            observed_at=COMMITTED_AT,
             expected_version=2,
         )
 

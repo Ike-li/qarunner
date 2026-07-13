@@ -5,6 +5,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+OFFERED_AT = datetime(2026, 7, 12, 12, 1, tzinfo=UTC)
+CLAIMED_AT = OFFERED_AT + timedelta(minutes=1)
+COMMITTED_AT = CLAIMED_AT + timedelta(minutes=1)
+EXPIRES_AT = OFFERED_AT + timedelta(hours=1)
+
 
 def _unsafe_run_replace(run, **changes):
     """Exercise command defenses against a store object that bypassed rehydration."""
@@ -134,11 +139,14 @@ def _committed_run():
         worker=ready,
         worker_authority=authority,
         spec_digest=spec_digest,
+        offered_at=OFFERED_AT,
+        expires_at=EXPIRES_AT,
         expected_version=1,
     )
     claimed = offered.claim_assignment(
         assignment_id="assignment-001",
         worker=ready.ref,
+        observed_at=CLAIMED_AT,
         expected_version=2,
     )
     return claimed.commit_start(
@@ -147,6 +155,7 @@ def _committed_run():
         start_commit_key="commit-001",
         spec_digest=spec_digest,
         new_attempt_id="attempt-001",
+        observed_at=COMMITTED_AT,
         expected_version=3,
     )
 
