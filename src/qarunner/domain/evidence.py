@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import enum
-import re
 from dataclasses import dataclass
 
 from qarunner.domain.digest import Digest
@@ -12,7 +11,6 @@ from qarunner.domain.worker import WorkerRef
 
 EVIDENCE_SCHEMA_VERSION = "qep.m0-attempt-evidence.v1"
 CLASSIFICATION_SCHEMA_VERSION = "qep.attempt-classification.v1"
-_SHA256_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 class ArtifactClass(enum.StrEnum):
@@ -70,10 +68,8 @@ class VerifiedArtifact:
     def __post_init__(self) -> None:
         if self.size_bytes < 0:
             raise ArtifactValidationError(field="size_bytes", reason="must be non-negative")
-        if _SHA256_PATTERN.fullmatch(self.digest.value) is None:
-            raise ArtifactValidationError(
-                field="digest", reason="must be a lowercase sha256 digest"
-            )
+        if not isinstance(self.digest, Digest):
+            raise ArtifactValidationError(field="digest", reason="must be a Digest value object")
 
 
 @dataclass(frozen=True, slots=True)

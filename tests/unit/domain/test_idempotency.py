@@ -3,6 +3,38 @@
 import pytest
 
 
+def test_digest_accepts_only_canonical_lowercase_sha256() -> None:
+    from qarunner.domain import Digest
+
+    value = f"sha256:{'a' * 64}"
+
+    assert Digest(value).value == value
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        pytest.param(123, "not_string", id="not-string"),
+        pytest.param("", "invalid_sha256", id="empty"),
+        pytest.param("a" * 64, "invalid_sha256", id="missing-algorithm"),
+        pytest.param(f"sha256:{'a' * 63}", "invalid_sha256", id="too-short"),
+        pytest.param(f"sha256:{'a' * 65}", "invalid_sha256", id="too-long"),
+        pytest.param(f"sha256:{'A' * 64}", "invalid_sha256", id="uppercase"),
+        pytest.param(f"sha256:{'g' * 64}", "invalid_sha256", id="non-hex"),
+        pytest.param(f"sha512:{'a' * 64}", "invalid_sha256", id="wrong-algorithm"),
+    ],
+)
+def test_digest_rejects_noncanonical_values(value: object, reason: str) -> None:
+    from qarunner.domain import Digest, DomainValidationError
+
+    with pytest.raises(DomainValidationError) as caught:
+        Digest(value)  # type: ignore[arg-type]
+
+    assert caught.value.entity_type == "digest"
+    assert caught.value.field == "value"
+    assert caught.value.reason == reason
+
+
 def test_canonical_digest_is_independent_of_object_insertion_order() -> None:
     """Semantically identical request objects produce the same digest."""
     from qarunner.domain import canonical_digest
@@ -59,6 +91,41 @@ def test_canonical_digest_rejects_values_outside_frozen_json_domain(
 
     assert caught.value.code == "canonicalization_error"
     assert caught.value.path == expected_path
+
+
+def test_canonical_digest_rejects_invalid_unicode_object_keys() -> None:
+    from qarunner.domain import CanonicalizationError, canonical_digest
+
+    with pytest.raises(CanonicalizationError) as caught:
+        canonical_digest(
+            schema_version="qep.batch-request.v1",
+            payload={"nested": {"\ud800": "invalid-key"}},
+        )
+
+    assert caught.value.path == "$.payload.nested.<key>"
+    assert caught.value.reason == "string is not valid Unicode"
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "reason"),
+    [
+        pytest.param(1, "schema version must be a string", id="not-string"),
+        pytest.param("\ud800", "string is not valid Unicode", id="invalid-unicode"),
+    ],
+)
+def test_canonical_digest_rejects_invalid_schema_versions(
+    schema_version: object, reason: str
+) -> None:
+    from qarunner.domain import CanonicalizationError, canonical_digest
+
+    with pytest.raises(CanonicalizationError) as caught:
+        canonical_digest(
+            schema_version=schema_version,  # type: ignore[arg-type]
+            payload={},
+        )
+
+    assert caught.value.path == "$.schema_version"
+    assert caught.value.reason == reason
 
 
 def test_canonical_digest_preserves_array_order_and_includes_schema_version() -> None:

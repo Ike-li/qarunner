@@ -132,24 +132,13 @@ def test_verified_artifact_rejects_negative_size() -> None:
     assert caught.value.field == "size_bytes"
 
 
-@pytest.mark.parametrize(
-    "invalid_digest",
-    [
-        pytest.param("", id="empty"),
-        pytest.param("a" * 64, id="missing-algorithm"),
-        pytest.param(f"sha256:{'a' * 63}", id="too-short"),
-        pytest.param(f"sha256:{'a' * 65}", id="too-long"),
-        pytest.param(f"sha256:{'A' * 64}", id="uppercase"),
-        pytest.param(f"sha256:{'g' * 64}", id="non-hex"),
-        pytest.param(f"sha512:{'a' * 64}", id="wrong-algorithm"),
-    ],
-)
-def test_verified_artifact_rejects_noncanonical_digest(invalid_digest: str) -> None:
+def test_verified_artifact_requires_a_digest_value_object() -> None:
     with pytest.raises(ArtifactValidationError) as caught:
-        _artifact(
-            "logs/output.txt",
+        VerifiedArtifact(
+            path=ArtifactPath("logs/output.txt"),
             content_class=ArtifactClass.LOG,
-            digest=Digest(invalid_digest),
+            size_bytes=10,
+            digest="sha256:not-a-value-object",  # type: ignore[arg-type]
         )
 
     assert caught.value.code == "artifact_invalid"
