@@ -419,7 +419,7 @@ def test_retired_worker_records_retirement_and_is_absorbing() -> None:
         pytest.param({"pool_id": ""}, "pool_id", "empty_value", id="pool-id"),
         pytest.param({"cert_serial": ""}, "cert_serial", "empty_value", id="cert"),
         pytest.param({"agent_version": ""}, "agent_version", "empty_value", id="agent-version"),
-        pytest.param({"state": "ready"}, "state", "unknown_state", id="state"),
+        pytest.param({"state": "ready"}, "state", "unknown", id="state"),
         pytest.param({"version": -1}, "version", "negative", id="version"),
         pytest.param(
             {"state_changed_at": REGISTERED_AT - timedelta(seconds=1)},

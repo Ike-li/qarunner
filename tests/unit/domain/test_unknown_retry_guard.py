@@ -329,7 +329,7 @@ def test_attempt_rehydration_rejects_raw_state_or_fake_unknown_observation() -> 
         )
 
     assert raw_state.value.field == "state"
-    assert raw_state.value.reason == "unknown_state"
+    assert raw_state.value.reason == "unknown"
     assert fake_observation.value.field == "unknown_observation"
     assert fake_observation.value.reason == "invalid_type"
 

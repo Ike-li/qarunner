@@ -134,7 +134,7 @@ class Attempt:
             raise DomainValidationError(
                 entity_type="attempt",
                 field="state",
-                reason="unknown_state",
+                reason="unknown",
             )
         if self.state in _EVIDENCE_TERMINAL_STATES and self.evidence is None:
             _invalid_attempt("evidence", "required_for_terminal")

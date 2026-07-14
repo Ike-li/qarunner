@@ -172,7 +172,7 @@ class WorkerGeneration:
             raise DomainValidationError(
                 entity_type="worker_generation",
                 field="state",
-                reason="unknown_state",
+                reason="unknown",
             )
         if self.version < 0:
             raise DomainValidationError(
