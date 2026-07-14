@@ -190,6 +190,20 @@ class CancellationConflict(ValueError):
         )
 
 
+class BatchCancellationConflict(ValueError):
+    """Raised when a Batch already owns a different cancellation intent."""
+
+    code = "batch_cancellation_conflict"
+
+    def __init__(self, *, batch_id: str, stored_key: str, received_key: str) -> None:
+        self.batch_id = batch_id
+        self.stored_key = stored_key
+        self.received_key = received_key
+        super().__init__(
+            f"batch {batch_id} already owns cancellation {stored_key}; received {received_key}"
+        )
+
+
 class AttemptConflict(ValueError):
     """Raised when a new commit reuses an existing Attempt identity."""
 

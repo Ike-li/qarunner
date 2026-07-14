@@ -19,6 +19,138 @@ class CancellationSource(enum.StrEnum):
     POLICY_ENFORCEMENT = "policy_enforcement"
 
 
+class BatchCancellationScopeKind(enum.StrEnum):
+    """Authoritative Batch scope frozen when cancellation intent is accepted."""
+
+    PRE_PLAN = "pre_plan"
+    FROZEN_PLAN = "frozen_plan"
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCancellationScope:
+    """Server-derived pre-plan or frozen-plan cancellation scope."""
+
+    kind: BatchCancellationScopeKind
+    preplan_scope_digest: Digest | None
+    manifest_digest: Digest | None
+    shard_plan_version: int | None
+    shard_plan_digest: Digest | None
+    canonical_run_set_digest: Digest | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, BatchCancellationScopeKind):
+            _invalid("batch_cancellation_scope", "kind", "unknown")
+        if self.kind is BatchCancellationScopeKind.PRE_PLAN:
+            if not isinstance(self.preplan_scope_digest, Digest):
+                _invalid(
+                    "batch_cancellation_scope",
+                    "preplan_scope_digest",
+                    "required_for_kind",
+                )
+            for field in (
+                "manifest_digest",
+                "shard_plan_version",
+                "shard_plan_digest",
+                "canonical_run_set_digest",
+            ):
+                if getattr(self, field) is not None:
+                    _invalid("batch_cancellation_scope", field, "forbidden_for_kind")
+            return
+        if self.preplan_scope_digest is not None:
+            _invalid(
+                "batch_cancellation_scope",
+                "preplan_scope_digest",
+                "forbidden_for_kind",
+            )
+        for field in ("manifest_digest", "shard_plan_digest", "canonical_run_set_digest"):
+            if not isinstance(getattr(self, field), Digest):
+                _invalid("batch_cancellation_scope", field, "required_for_kind")
+        _require_nonnegative_version(
+            "batch_cancellation_scope",
+            "shard_plan_version",
+            self.shard_plan_version,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCancellationIntent:
+    """Immutable `qep.batch-cancellation-intent.v1` fact."""
+
+    batch_id: str
+    project_id: str
+    suite_revision_id: str
+    source_batch_version: int
+    idempotency_key: str
+    source: CancellationSource
+    actor_id: str
+    reason: str
+    authorization_digest: Digest
+    scope: BatchCancellationScope
+    recorded_at: datetime
+
+    def __post_init__(self) -> None:
+        for field in (
+            "batch_id",
+            "project_id",
+            "suite_revision_id",
+            "idempotency_key",
+            "actor_id",
+            "reason",
+        ):
+            _require_nonempty_string("batch_cancellation_intent", field, getattr(self, field))
+        _require_nonnegative_version(
+            "batch_cancellation_intent",
+            "source_batch_version",
+            self.source_batch_version,
+        )
+        if not isinstance(self.source, CancellationSource):
+            _invalid("batch_cancellation_intent", "source", "unknown")
+        if not isinstance(self.authorization_digest, Digest):
+            _invalid("batch_cancellation_intent", "authorization_digest", "not_digest")
+        if not isinstance(self.scope, BatchCancellationScope):
+            _invalid("batch_cancellation_intent", "scope", "invalid_type")
+        _require_utc("batch_cancellation_intent", "recorded_at", self.recorded_at)
+
+    @property
+    def request_digest(self) -> Digest:
+        """Bind caller-controlled identity while excluding server-derived metadata."""
+        return canonical_digest(
+            schema_version="qep.batch-cancellation-request.v1",
+            payload={
+                "batch_id": self.batch_id,
+                "source_batch_version": self.source_batch_version,
+                "idempotency_key": self.idempotency_key,
+                "source": self.source.value,
+                "actor_id": self.actor_id,
+                "reason": self.reason,
+            },
+        )
+
+    @property
+    def digest(self) -> Digest:
+        """Bind request, authority, authoritative scope, and server record time."""
+        return canonical_digest(
+            schema_version="qep.batch-cancellation-intent.v1",
+            payload={
+                "batch_id": self.batch_id,
+                "project_id": self.project_id,
+                "suite_revision_id": self.suite_revision_id,
+                "source_batch_version": self.source_batch_version,
+                "request_digest": self.request_digest.value,
+                "authorization_digest": self.authorization_digest.value,
+                "scope_kind": self.scope.kind.value,
+                "preplan_scope_digest": _optional_digest_value(self.scope.preplan_scope_digest),
+                "manifest_digest": _optional_digest_value(self.scope.manifest_digest),
+                "shard_plan_version": self.scope.shard_plan_version,
+                "shard_plan_digest": _optional_digest_value(self.scope.shard_plan_digest),
+                "canonical_run_set_digest": _optional_digest_value(
+                    self.scope.canonical_run_set_digest
+                ),
+                "recorded_at": self.recorded_at.isoformat().replace("+00:00", "Z"),
+            },
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class CancellationIntent:
     """A request to stop work, distinct from a proven cancellation outcome."""
@@ -139,5 +271,16 @@ def _require_utc(entity_type: str, field: str, value: object) -> None:
         _invalid(entity_type, field, "not_utc")
 
 
+def _require_nonnegative_version(entity_type: str, field: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        _invalid(entity_type, field, "not_integer")
+    if value < 0:
+        _invalid(entity_type, field, "negative")
+
+
 def _invalid(entity_type: str, field: str, reason: str) -> None:
     raise DomainValidationError(entity_type=entity_type, field=field, reason=reason)
+
+
+def _optional_digest_value(digest: Digest | None) -> str | None:
+    return None if digest is None else digest.value

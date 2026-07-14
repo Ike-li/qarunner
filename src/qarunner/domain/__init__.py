@@ -8,8 +8,22 @@ from qarunner.domain.assignment import (
 )
 from qarunner.domain.attempt import Attempt, AttemptState, FinalizeEvidenceResult
 from qarunner.domain.authority import AttemptAuthority, WorkerAuthority
-from qarunner.domain.batch import Batch, BatchState
+from qarunner.domain.batch import (
+    Batch,
+    BatchPreexecutionClosureBasis,
+    BatchPreexecutionScopeItem,
+    BatchPreexecutionScopeKind,
+    BatchPreexecutionSnapshot,
+    BatchPreexecutionTerminalKind,
+    BatchRejection,
+    BatchRejectionReasonClass,
+    BatchRejectionStage,
+    BatchState,
+)
 from qarunner.domain.cancellation import (
+    BatchCancellationIntent,
+    BatchCancellationScope,
+    BatchCancellationScopeKind,
     CancellationIntent,
     CancellationSource,
     TrustedCancellationStop,
@@ -22,6 +36,7 @@ from qarunner.domain.errors import (
     AttemptConflict,
     AttemptEventRejected,
     AttemptUnknownReviewRequired,
+    BatchCancellationConflict,
     CancellationConflict,
     CanonicalizationError,
     DomainValidationError,
@@ -108,6 +123,18 @@ __all__ = [
     "ArtifactPath",
     "ArtifactValidationError",
     "Batch",
+    "BatchCancellationConflict",
+    "BatchCancellationIntent",
+    "BatchCancellationScope",
+    "BatchCancellationScopeKind",
+    "BatchPreexecutionClosureBasis",
+    "BatchPreexecutionScopeKind",
+    "BatchPreexecutionScopeItem",
+    "BatchPreexecutionSnapshot",
+    "BatchPreexecutionTerminalKind",
+    "BatchRejection",
+    "BatchRejectionReasonClass",
+    "BatchRejectionStage",
     "BatchState",
     "BoundShardPlan",
     "CanonicalizationError",
