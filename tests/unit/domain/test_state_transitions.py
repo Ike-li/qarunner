@@ -1,6 +1,81 @@
-"""T-M0-STATE-001: state transitions reject illegal commands without mutation."""
+"""T-M0-STATE-001: state transitions reject illegal commands without mutation.
+
+T-M0-STATE-001A narrows the Batch value, CAS, and absorbing-state contract.
+"""
 
 import pytest
+
+
+@pytest.mark.parametrize("batch_id", ["", "   ", 123])
+def test_batch_rejects_invalid_identity(batch_id: object) -> None:
+    """A Batch cannot enter the domain without a usable opaque identity."""
+    from qarunner.domain import Batch, DomainValidationError
+
+    with pytest.raises(DomainValidationError) as caught:
+        Batch.create(batch_id=batch_id)  # type: ignore[arg-type]
+
+    assert caught.value.code == "domain_validation_error"
+    assert caught.value.entity_type == "batch"
+    assert caught.value.field == "id"
+    assert caught.value.reason == "invalid"
+
+
+def test_batch_rehydration_rejects_arbitrary_string_state() -> None:
+    """Persisted state must resolve to the declared BatchState vocabulary."""
+    from qarunner.domain import Batch, DomainValidationError
+
+    with pytest.raises(DomainValidationError) as caught:
+        Batch(id="batch-001", state="running", version=0)  # type: ignore[arg-type]
+
+    assert caught.value.code == "domain_validation_error"
+    assert caught.value.entity_type == "batch"
+    assert caught.value.field == "state"
+    assert caught.value.reason == "unknown"
+
+
+@pytest.mark.parametrize("version", [True, 1.5, -1])
+def test_batch_rehydration_rejects_invalid_version(version: object) -> None:
+    """Persisted Batch versions are non-negative integers, excluding booleans."""
+    from qarunner.domain import Batch, BatchState, DomainValidationError
+
+    with pytest.raises(DomainValidationError) as caught:
+        Batch(id="batch-001", state=BatchState.DRAFT, version=version)  # type: ignore[arg-type]
+
+    assert caught.value.code == "domain_validation_error"
+    assert caught.value.entity_type == "batch"
+    assert caught.value.field == "version"
+    assert caught.value.reason == "invalid"
+
+
+def test_batch_transition_rejects_arbitrary_string_target_without_mutation() -> None:
+    """A command target must use BatchState rather than an arbitrary string."""
+    from qarunner.domain import Batch, DomainValidationError
+
+    batch = Batch.create(batch_id="batch-001")
+
+    with pytest.raises(DomainValidationError) as caught:
+        batch.transition("not-a-batch-state", expected_version=0)  # type: ignore[arg-type]
+
+    assert caught.value.code == "domain_validation_error"
+    assert caught.value.entity_type == "batch"
+    assert caught.value.field == "state"
+    assert caught.value.reason == "unknown"
+    assert batch.version == 0
+
+
+def test_batch_stale_cas_precedes_target_state_validation() -> None:
+    """A stale command cannot probe later target-state validation."""
+    from qarunner.domain import Batch, VersionConflict
+
+    batch = Batch.create(batch_id="batch-001")
+
+    with pytest.raises(VersionConflict) as caught:
+        batch.transition("not-a-batch-state", expected_version=7)  # type: ignore[arg-type]
+
+    assert caught.value.code == "version_conflict"
+    assert caught.value.current_version == 0
+    assert caught.value.expected_version == 7
+    assert batch.version == 0
 
 
 def _committed_attempt():
@@ -53,6 +128,27 @@ def test_batch_legal_transition_returns_a_new_version() -> None:
     assert draft.version == 0
 
 
+@pytest.mark.parametrize(
+    ("source_name", "target_name"),
+    [("QUEUED", "RUNNING"), ("RUNNING", "FINALIZING")],
+)
+def test_batch_shared_nonterminal_edges_return_a_new_version(
+    source_name: str, target_name: str
+) -> None:
+    """The PRD and detailed design agree on these execution-phase edges."""
+    from qarunner.domain import Batch, BatchState
+
+    source_state = BatchState[source_name]
+    source = Batch(id="batch-001", state=source_state, version=3)
+
+    advanced = source.transition(BatchState[target_name], expected_version=3)
+
+    assert advanced.state is BatchState[target_name]
+    assert advanced.version == 4
+    assert source.state is source_state
+    assert source.version == 3
+
+
 def test_batch_rejects_a_stale_expected_version_without_mutation() -> None:
     """State commands use CAS semantics before applying an otherwise legal edge."""
     from qarunner.domain import Batch, BatchState, VersionConflict
@@ -69,6 +165,46 @@ def test_batch_rejects_a_stale_expected_version_without_mutation() -> None:
     assert caught.value.expected_version == 7
     assert batch.state == BatchState.DRAFT
     assert batch.version == 0
+
+
+@pytest.mark.parametrize(
+    "state_name",
+    ["SUCCEEDED", "FAILED", "PARTIAL", "CANCELLED", "REJECTED"],
+)
+def test_batch_terminal_states_absorb_every_generic_transition(state_name: str) -> None:
+    """A rehydrated terminal Batch cannot regress or be reclassified."""
+    from qarunner.domain import Batch, BatchState, InvalidTransition
+
+    state = BatchState[state_name]
+    terminal = Batch(id="batch-001", state=state, version=11)
+
+    for target in BatchState:
+        with pytest.raises(InvalidTransition) as caught:
+            terminal.transition(target, expected_version=11)
+
+        assert caught.value.current_state is state
+        assert caught.value.requested_state is target
+        assert caught.value.current_version == 11
+        assert caught.value.expected_version == 11
+        assert terminal.state is state
+        assert terminal.version == 11
+
+
+@pytest.mark.parametrize("target_name", ["SUCCEEDED", "FAILED", "PARTIAL", "CANCELLED"])
+def test_batch_finalizing_requires_a_fact_aware_finalize_command(target_name: str) -> None:
+    """Generic transitions cannot bypass future Run/Evidence reconciliation."""
+    from qarunner.domain import Batch, BatchState, InvalidTransition
+
+    finalizing = Batch(id="batch-001", state=BatchState.FINALIZING, version=8)
+    target = BatchState[target_name]
+
+    with pytest.raises(InvalidTransition) as caught:
+        finalizing.transition(target, expected_version=8)
+
+    assert caught.value.current_state is BatchState.FINALIZING
+    assert caught.value.requested_state is target
+    assert finalizing.state is BatchState.FINALIZING
+    assert finalizing.version == 8
 
 
 def test_run_rejects_skipping_from_planned_to_assigned_without_mutation() -> None:

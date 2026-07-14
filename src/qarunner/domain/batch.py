@@ -5,7 +5,11 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, replace
 
-from qarunner.domain.errors import InvalidTransition, ensure_expected_version
+from qarunner.domain.errors import (
+    DomainValidationError,
+    InvalidTransition,
+    ensure_expected_version,
+)
 
 
 class BatchState(enum.StrEnum):
@@ -53,6 +57,26 @@ class Batch:
     state: BatchState
     version: int
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise DomainValidationError(
+                entity_type="batch",
+                field="id",
+                reason="invalid",
+            )
+        if not isinstance(self.state, BatchState):
+            raise DomainValidationError(
+                entity_type="batch",
+                field="state",
+                reason="unknown",
+            )
+        if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 0:
+            raise DomainValidationError(
+                entity_type="batch",
+                field="version",
+                reason="invalid",
+            )
+
     @classmethod
     def create(cls, *, batch_id: str) -> Batch:
         """Create a Batch at the initial draft state."""
@@ -66,6 +90,12 @@ class Batch:
             current_version=self.version,
             expected_version=expected_version,
         )
+        if not isinstance(target, BatchState):
+            raise DomainValidationError(
+                entity_type="batch",
+                field="state",
+                reason="unknown",
+            )
         if target not in _ALLOWED_TRANSITIONS[self.state]:
             raise InvalidTransition(
                 entity_type="batch",
