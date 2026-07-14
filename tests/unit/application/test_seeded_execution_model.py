@@ -162,7 +162,7 @@ async def test_run_owned_event_rejects_stale_cas_without_publishing(
                 committed.version - 1 if stale_layer == "run" else committed.version
             ),
             expected_attempt_version=(
-                current_attempt.version - 1
+                current_attempt.version + 1
                 if stale_layer == "attempt"
                 else current_attempt.version
             ),

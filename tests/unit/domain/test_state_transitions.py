@@ -1,6 +1,7 @@
 """T-M0-STATE-001: state transitions reject illegal commands without mutation.
 
 T-M0-STATE-001A narrows the Batch value, CAS, and absorbing-state contract.
+T-M0-STATE-001C narrows runtime expected-version values at the shared CAS helper.
 """
 
 import pytest
@@ -168,6 +169,42 @@ def test_batch_rejects_a_stale_expected_version_without_mutation() -> None:
 
 
 @pytest.mark.parametrize(
+    ("current_version", "expected_version", "reason"),
+    [
+        pytest.param(0, False, "not_integer", id="false-equals-zero"),
+        pytest.param(1, True, "not_integer", id="true-equals-one"),
+        pytest.param(0, 0.0, "not_integer", id="float-zero-equals-zero"),
+        pytest.param(1, 1.0, "not_integer", id="float-one-equals-one"),
+        pytest.param(0, "0", "not_integer", id="string"),
+        pytest.param(0, None, "not_integer", id="none"),
+        pytest.param(0, -1, "negative", id="negative"),
+    ],
+)
+def test_batch_rejects_invalid_expected_version_runtime_without_mutation(
+    current_version: int,
+    expected_version: object,
+    reason: str,
+) -> None:
+    """CAS inputs must be non-negative integers before equality is considered."""
+    from qarunner.domain import Batch, BatchState, DomainValidationError
+
+    batch = Batch(id="batch-001", state=BatchState.DRAFT, version=current_version)
+
+    with pytest.raises(DomainValidationError) as caught:
+        batch.transition(
+            BatchState.VALIDATING,
+            expected_version=expected_version,  # type: ignore[arg-type]
+        )
+
+    assert caught.value.code == "domain_validation_error"
+    assert caught.value.entity_type == "batch"
+    assert caught.value.field == "expected_version"
+    assert caught.value.reason == reason
+    assert batch.state is BatchState.DRAFT
+    assert batch.version == current_version
+
+
+@pytest.mark.parametrize(
     "state_name",
     ["SUCCEEDED", "FAILED", "PARTIAL", "CANCELLED", "REJECTED"],
 )
@@ -207,6 +244,22 @@ def test_batch_finalizing_requires_a_fact_aware_finalize_command(target_name: st
     assert finalizing.version == 8
 
 
+def test_run_uses_shared_expected_version_runtime_validation() -> None:
+    """Run state commands reject bool before Python can equate it with zero."""
+    from qarunner.domain import DomainValidationError, Run, RunState
+
+    run = Run.create(run_id="run-001")
+
+    with pytest.raises(DomainValidationError) as caught:
+        run.transition(RunState.QUEUED, expected_version=False)  # type: ignore[arg-type]
+
+    assert caught.value.entity_type == "run"
+    assert caught.value.field == "expected_version"
+    assert caught.value.reason == "not_integer"
+    assert run.state is RunState.PLANNED
+    assert run.version == 0
+
+
 def test_run_rejects_skipping_from_planned_to_assigned_without_mutation() -> None:
     """A Run must enter its queue before an Assignment can reserve it."""
     from qarunner.domain import InvalidTransition, Run, RunState
@@ -237,6 +290,22 @@ def test_run_legal_transition_returns_a_new_version() -> None:
     assert queued.version == 1
     assert planned.state == RunState.PLANNED
     assert planned.version == 0
+
+
+def test_attempt_uses_shared_expected_version_runtime_validation() -> None:
+    """Attempt state commands reject floats before equality is considered."""
+    from qarunner.domain import AttemptState, DomainValidationError
+
+    attempt = _committed_attempt()
+
+    with pytest.raises(DomainValidationError) as caught:
+        attempt.transition(AttemptState.PROVISIONING, expected_version=0.0)  # type: ignore[arg-type]
+
+    assert caught.value.entity_type == "attempt"
+    assert caught.value.field == "expected_version"
+    assert caught.value.reason == "not_integer"
+    assert attempt.state is AttemptState.START_COMMITTED
+    assert attempt.version == 0
 
 
 def test_attempt_rejects_skipping_provisioning_without_mutation() -> None:

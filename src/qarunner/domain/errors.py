@@ -361,6 +361,18 @@ def ensure_expected_version(
     *, entity_type: str, entity_id: str, current_version: int, expected_version: int
 ) -> None:
     """Apply the shared CAS precondition for immutable domain commands."""
+    if isinstance(expected_version, bool) or not isinstance(expected_version, int):
+        raise DomainValidationError(
+            entity_type=entity_type,
+            field="expected_version",
+            reason="not_integer",
+        )
+    if expected_version < 0:
+        raise DomainValidationError(
+            entity_type=entity_type,
+            field="expected_version",
+            reason="negative",
+        )
     if expected_version != current_version:
         raise VersionConflict(
             entity_type=entity_type,

@@ -1,4 +1,4 @@
-"""T-M0-STATE-001B: WorkerGeneration state and authority contracts."""
+"""T-M0-STATE-001B/001C: WorkerGeneration state, authority, and shared CAS contracts."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -260,6 +260,27 @@ def test_worker_transition_rejects_stale_cas_before_state_change() -> None:
     assert caught.value.current_version == 0
     assert caught.value.expected_version == 7
     assert worker.state is WorkerState.REGISTERING
+
+
+def test_worker_transition_uses_shared_expected_version_runtime_validation() -> None:
+    """Worker commands reject bool CAS input after authority succeeds."""
+    from qarunner.domain import DomainValidationError, WorkerState
+
+    worker = _registered_worker()
+
+    with pytest.raises(DomainValidationError) as caught:
+        worker.transition(
+            WorkerState.READY,
+            authority=_authority(worker),
+            expected_version=False,  # type: ignore[arg-type]
+            occurred_at=REGISTERED_AT + timedelta(seconds=1),
+        )
+
+    assert caught.value.entity_type == "worker_generation"
+    assert caught.value.field == "expected_version"
+    assert caught.value.reason == "not_integer"
+    assert worker.state is WorkerState.REGISTERING
+    assert worker.version == 0
 
 
 @pytest.mark.parametrize(
