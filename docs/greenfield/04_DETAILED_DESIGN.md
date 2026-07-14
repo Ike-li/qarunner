@@ -1,10 +1,12 @@
 # 测试执行平台详细设计
 
 > 文档编号：QEP-DES-001<br>
-> 版本：V0.1.0<br>
+> 版本：V0.2.0<br>
 > 状态：草稿，待详细设计评审<br>
-> 日期：2026-07-13<br>
-> 上游：[MVP PRD](01_MVP_REQUIREMENTS.md)、[企业 PRD](02_ENTERPRISE_REQUIREMENTS.md)、[架构设计](03_ARCHITECTURE_DESIGN.md)<br>
+> 日期：2026-07-14<br>
+> 上游：[MVP PRD](01_MVP_REQUIREMENTS.md)、[企业 PRD](02_ENTERPRISE_REQUIREMENTS.md)、[架构设计](03_ARCHITECTURE_DESIGN.md)、[状态模型决议包](09_STATE_MODEL_DECISION_PACKET.md)、[状态模型规范契约](10_STATE_MODEL_CONTRACT.md)<br>
+> 已批准范围：`STATE-DEC-001`～`STATE-DEC-008` 的状态模型语义；本详细设计其余内容仍为草稿<br>
+> 未批准范围：`STATE-DEC-009/010` 仍为 `PROPOSED/UNSIGNED`；retry scope、effective precedence、mixed RunOutcome 与具体 retry/unknown authority 不得视为已签<br>
 > 设计原则：本文件先于现有代码对比冻结，不以现有类、表或 API 为前提
 
 ---
@@ -46,6 +48,14 @@
 | INV-008 | `attempt_unknown` 默认不自动重试；人工裁决不能抹去 unknown 事实。 |
 | INV-009 | 计算、框架内部并发、SUT Lease、账号/数据、配额、预算和安全限制共同准入。 |
 | INV-010 | 测试沙箱不拥有平台数据库、执行引擎、云管理或对象存储长期凭据。 |
+| INV-011 | Batch 的 canonical 持久/API 路径包含 `collecting` 和 `awaiting_admission`；不得维护第二套可写 coarse 状态机。 |
+| INV-012 | Cancel intent 不等于 cancelled outcome；completed Evidence 先 finalize 时 completed fact 决定 outcome。 |
+| INV-013 | Run orchestration phase、Attempt fact、Run disposition 和 Run outcome 分离；Attempt fact 不可被 retry/adjudication 改写。 |
+| INV-014 | Batch outcome 由钉住版本的 Suite policy 与平台安全底线共同决定；unknown lineage、Evidence 缺失/冲突和 denominator 漂移不得成功。 |
+| INV-015 | Run/Batch terminal 必须引用不可变、可重放的 finalization basis；Batch 只从一致版本快照经 CAS 发布终态。 |
+| INV-016 | 每个 closed Run 必须一一覆盖其 frozen Manifest item set，分别保存 original/effective resolution；Batch 逐 item 聚合，禁止 `RunOutcome × item_count`。 |
+| INV-017 | `unknown_lineage` 是与实际 effective outcome 分离的粘性维度；retry/adjudication 可追加 effective fact，但不能清除 unknown 历史。 |
+| INV-018 | Pre-execution `rejected/cancelled` 使用独立 closure basis 证明命令事实与无执行事实；不得伪造 execution finalization scope。 |
 
 ---
 
@@ -57,7 +67,7 @@
 |---|---|---|---|
 | DES-MOD-001 | Identity & Authorization | OIDC 主体映射、角色、对象权限、服务身份 | 保存用户密码；把基础设施权限发给用户 |
 | DES-MOD-002 | Suite Catalog | Suite/Revision、框架、输入、原子约束、默认 Profile | 执行 collection 或依赖安装 |
-| DES-MOD-003 | Batch Command | 幂等创建/取消/重跑、deadline、用户意图 | 直接创建容器/Pod |
+| DES-MOD-003 | Batch Command | 幂等创建、versioned cancel intent、deadline、用户意图与 fanout 协调 | 直接创建容器/Pod；把 cancel intent 当 cancelled outcome |
 | DES-MOD-004 | Schedule | cron/时区/misfire、创建幂等 Batch | 把 scheduler 内存 Job 当事实源；执行测试 |
 | DES-MOD-005 | Collection Coordinator | 创建一次性 collection Run，接收 Case Manifest | 在控制面 import 测试包 |
 | DES-MOD-006 | Shard Planner | 原子组、历史画像、确定性 Shard Plan、digest | 修改用户测试语义或忽略约束 |
@@ -66,9 +76,9 @@
 | DES-MOD-009 | Worker Registry | Worker 身份、generation、能力、心跳、drain/quarantine | 接受普通用户指定宿主参数 |
 | DES-MOD-010 | Attempt Coordinator | start commit、fence、renew、cancel、event、reconcile | 在 API 进程执行测试 |
 | DES-MOD-011 | Target Access | Target Grant、Environment Lease、短期访问声明 | 储存/下发超范围长期凭据 |
-| DES-MOD-012 | Evidence & Results | 分块上传、Artifact、Evidence finalize、Case 聚合 | 信任用户生成的“success”字段作为平台事实 |
+| DES-MOD-012 | Evidence & Results | 分块上传、Artifact、Evidence finalize、Run basis/outcome 与 Case 聚合 | 信任用户生成的“success”字段作为平台事实 |
 | DES-MOD-013 | Governance | Quota、Budget、Retention、Audit、人工覆盖 | 允许覆盖安全/SUT 硬限制 |
-| DES-MOD-014 | Reconciler | 期望状态与 Worker/Job/Artifact 重复对账 | 对 unknown 进行无依据推断 |
+| DES-MOD-014 | Reconciler | 期望状态与 Worker/Job/Artifact 重复对账；按版本快照/CAS 收敛 Batch basis | 对 unknown 进行无依据推断；从过期快照发布终态 |
 | DES-MOD-015 | Observability | 统一关联、SLO、告警和容量样本 | 将高基数 ID 无界写入 metric label |
 
 ### 2.2 进程角色
@@ -113,8 +123,8 @@ adapters/store/  Object storage、secret、egress policy
 | 聚合 | 根对象 | 一致性边界 |
 |---|---|---|
 | Suite Aggregate | SuiteRevision | 版本、框架、输入、默认 Profile 和原子约束不可变 |
-| Batch Aggregate | Batch | Manifest/Plan 引用、deadline、策略和聚合终态 |
-| Run Aggregate | Run | Assignment fence、Attempt 序列、取消和最终分类 |
+| Batch Aggregate | Batch | Manifest/Plan/Run-set 引用、cancel intent、policy、不可变 basis 和聚合终态 |
+| Run Aggregate | Run | Orchestration phase、Assignment fence、Attempt 序列、disposition、outcome 和不可变 basis |
 | Worker Aggregate | WorkerGeneration | 身份、能力、状态、心跳、drain/quarantine |
 | Target Aggregate | TargetGrant | 目标范围、TTL、凭据档案和 Environment Lease 上限 |
 | Evidence Aggregate | EvidenceManifest | Attempt 平台事实、Case 汇总、Artifact root digest |
@@ -136,6 +146,9 @@ adapters/store/  Object storage、secret、egress policy
 - `CANCELLED_PRESTART` Assignment closure 的 request digest 不含 intent digest，完整 closure
   fact digest 必须绑定 intent digest。expiry/release 既有 closure root 不漂移；不同取消意图也
   不能借 closure replay 覆盖 Run 已保存的 intent。
+- Batch cancel 同样先形成 versioned intent。其 identity 必须与 actor、reason、幂等请求及
+  authoritative Batch version 绑定；服务端记录时间是审计 metadata，不得由调用方控制或参与
+  调用方幂等身份。具体序列化 Schema 仍待实现级评审。
 
 ### 3.3 Batch 状态
 
@@ -150,49 +163,101 @@ draft
               → finalizing
                 → succeeded | failed | partial | cancelled
 
-任意校验/策略阶段 → rejected
-无法收敛证据      → 保持 finalizing + alert
+validating | collecting | planning | awaiting_admission
+  -- hard failure --> rejected(stage, reason_class)
+无法收敛 Evidence/basis           → 保持 finalizing + alert
 ```
 
 规则：
 
-- `succeeded`：所有原始 Case 可解释收敛，且失败数满足 Suite 成功策略；不存在 unknown/证据缺失。
-- `failed`：Batch 完整收敛，但测试/平台失败达到失败策略。
-- `partial`：存在 cancelled、unknown 或被明确允许的未执行项；不能包装成 succeeded。
-- `cancelled`：用户/策略取消且所有 Run 已停止或明确 unknown。
-- `rejected`：未产生任何 start commit；验证、授权或硬准入失败。
+- 该长路径是持久且对 API 可见的 canonical 状态契约；`collecting`、`awaiting_admission` 不得
+  折叠成另一套可写状态机。只读 coarse phase 如需提供，必须能确定性映射回 canonical state。
+- 无法形成合法 aggregate 的请求直接返回稳定验证错误，不创建 Batch。Batch 一旦持久化，
+  validation、collection、planning 或 admission hard failure 统一进入 `rejected`。持久及 API wire
+  字段固定为 `stage`，token 只能是 `validation/collection/planning/admission`，并同时保存稳定
+  `reason_class`；不得使用 `failed` 或 `collecting_failed` 表示 pre-execution failure。API/UI
+  展示层可派生 `rejected_stage` 或 canonical state 标签，但不得把别名作为第二个 wire/storage 字段
+  dual-write。
+- `draft`、`validating`、`collecting`、`planning`、`awaiting_admission`、`queued` 均接受
+  versioned cancel intent。只有无 materialized Run/Assignment/Attempt/start commit 且无不可信在途任务时，
+  fact-aware command 才可基于阶段事实关闭为 `cancelled`；一旦 Run 已物化，即使尚无
+  start commit，也必须进入 Batch cancel fanout/reconcile。
+- Pre-execution terminal 必须引用独立 immutable closure basis。`rejected` 绑定匹配
+  `stage=validation/collection/planning/admission` 的 rejection fact；`cancelled` 绑定 cancel intent。
+  pre-plan scope 不得伪造 Manifest、Plan、Run、Attempt、Evidence 或零 denominator；计划已冻结但
+  仍无 materialized Run 时，basis 必须证明 canonical Run set 为空，并逐 item 引用
+  中性 pre-execution `not_started` scope fact 及所需 task-stop 事实；该 scope fact 不进入
+  execution `N` 计数。已物化 Run 逐 item 引用 Run prestart-cancel resolution。
+- Batch cancel 先原子记录 intent，并在 authoritative CAS/UoW 中阻止后续 materialize、admit
+  和 commit-start。计划已冻结时，intent 绑定 Manifest、Shard Plan 与 canonical Run set；已物化
+  非终态 Run 接收幂等 cancel，未物化 item 形成显式 `not_executed/cancel` 事实。
+- `succeeded`、`failed`、`partial`、`cancelled` 由钉住版本的 Suite success policy 和平台安全
+  底线从同一 finalization basis 确定。unknown lineage、所需 Evidence 缺失/冲突、original denominator
+  漂移或未获准组合不得得到 `succeeded`。
+- 聚合按优先级匹配：全部 item 都由有权 cancel 收敛为 cancelled/not-executed 时为 `cancelled`；
+  mixed cancelled/not-executed/unknown lineage 为 `partial`；其余 infra failure 或超出 policy 的
+  test failure 为 `failed`；只有无 partial/infra/unknown-lineage 且满足 Suite policy 才为
+  `succeeded`。未 adjudicate unknown 是 unresolved，Batch 保持 `running`，不得冻结后续获批 retry
+  所需的 commit-start；只有全部 Run 关闭后才进入 `finalizing`。
+- Execution terminal basis 必须使每个 Manifest item 恰好追到一个 closed Run basis 内的 item
+  resolution entry，或一个从未 materialize Run 的 `not_executed` fact。original 与 effective
+  resolution 分开保存；unknown lineage 是独立粘性维度。Batch 只能逐 entry 计数，单一
+  RunOutcome 不得复制到该 Run 的所有 item。
+- `cancelled` 不是接收取消请求时的即时状态。只有全部 Run 已 stopped/closed 或留下已裁决的
+  unknown lineage，且所需 Evidence 与未执行项均可解释后，才按同一 truth table 分类；mixed
+  completion 不得被 intent 强制覆盖。
+- `finalizing` 只能由 fact-aware finalize/reconciler 推进；generic transition 不得绕过 immutable
+  basis、policy version、completeness proof 或 Batch version CAS。
+- `rejected`、`succeeded`、`failed`、`partial`、`cancelled` 均为吸收终态；异内容命令返回稳定
+  冲突，只有同一 authority/source version/digest 的 exact replay 可返回原结果。
+- 任何 `→ rejected`、任何 `→ cancelled` 与 `finalizing → terminal` 都必须由 fact-aware command
+  独占；generic transition 不得接收这些 target，也不得代替 rejection、stop/completeness proof
+  或 immutable basis 校验。
 
 ### 3.4 Run、Assignment 与 Attempt
 
 Run 是最小调度单位，Attempt 是实际执行事实，Assignment 是执行前的短期预留：
 
 ```text
-Run planned → queued
-  → Assignment offered → claimed
-      ├─ commit 前过期/释放 → 初次 Run queued；retry Run retry_queued
-      │                         （没有 Attempt，可安全重分配；retry 保留 pending RetryIntent）
-      └─ commit-start → 创建 Attempt N + fence F
-             → provisioning → running → uploading
-             → passed | test_failed | infra_failed | cancelled | attempt_unknown
-                         └─ policy allows retry → Run retry_queued → new Assignment → Attempt N+1
+Run orchestration phase:
+  planned → queued → assigned → running
+  running -- approved retry --> retry_queued → assigned → running
+  queued | retry_queued | assigned -- proven prestart cancel --> closed
+  running -- closed_no_retry + finalization basis --> closed
+
+Assignment offered → claimed
+  ├─ commit 前过期/释放 → 不创建 Attempt；初次调度重新排队，retry 保留 pending RetryIntent
+  └─ commit-start → 原子创建 Attempt N + fence F
+         → provisioning → running → uploading
+         → passed | test_failed | infra_failed | cancelled | attempt_unknown
+              ├─ disposition review_required
+              ├─ disposition retry_queued → new Assignment → commit-start → Attempt N+1
+              └─ disposition closed_no_retry → Run phase closed + immutable RunOutcome/basis
 
 commit 前 cancel，且早于 expiry
-  → Assignment cancelled_prestart + Run cancelled
-  → 不创建 Attempt/fence
+  → Assignment cancelled_prestart；不创建 Attempt/fence
+  → disposition closed_no_retry → Run closed + cancelled outcome/basis
 
 cancel 在 expiry 边界或之后被观察
   → expiry closure 保持权威 + Run 保存 cancel intent
 
 commit 后 cancel
   → 只保存 intent，Run/Assignment/Attempt/fence 不立即改写
-      ├─ 受信 process + SUT-access stop proof → Run/Attempt cancelled
+      ├─ 受信 process + SUT-access stop proof → Attempt cancelled fact → disposition/outcome
       └─ stop 不可证明 → Attempt attempt_unknown
 ```
 
 关键规则：
 
+- Run orchestration phase 只表达调度生命周期，词汇为 `planned`、`queued`、`assigned`、`running`、
+  `retry_queued`、`closed`；`closed` 不可逆，但不承载 passed、failed、cancelled 或 unknown 等执行
+  结果。RunOutcome 是独立持久的 `passed/test_failed/infra_failed/cancelled` 事实，并引用冻结的
+  semantic basis。
+- Attempt outcome、RunDisposition 与 RunOutcome 分离。RunDisposition 至少区分
+  `review_required`、`retry_queued`、`closed_no_retry`。同名 `retry_queued` phase 表示调度位置，
+  disposition 表示已批准的处置事实；两者必须一致。物理 Schema 与 API 表达仍待实现级评审。
 - Assignment 在 commit-start 前没有业务 Attempt；过期/释放可安全重新分配。初次 reservation 回
-  `queued`；retry reservation 回 `retry_queued` 并保留 pending RetryIntent。
+  phase=`queued`；retry reservation 保持 phase/disposition=`retry_queued` 并保留 pending RetryIntent。
 - commit-start 与创建 Attempt 在同一个数据库事务中完成，返回持久 `attempt_id/fence` 后 Worker 才能创建容器。
 - `fence` 对每个 Run 单调递增，任何事件/上传/finalize 都携带 fence。
 - `provisioning` 已可能产生执行副作用；其状态丢失不能退回“未启动”。
@@ -200,12 +265,37 @@ commit 后 cancel
 - `test_failed` 只表示测试进程完成且断言/用例失败；Worker/容器/上传/证据故障不能伪装为测试失败。
 - cancel request 与 cancelled outcome 是不同事实。postcommit request 只记录 intent，不能直接
   宣称 Attempt 已停止；`attempt_unknown` 为吸收终态，迟到 stop proof 不得改写它。
-- `retry_queued` 的 prestart cancel 保留历史 Attempt、RetryIntent 和 pending pointer，但取消
-  intent 会阻止继续 offer 或消费该 retry。
+- `passed` 默认产生 `closed_no_retry`。`test_failed`、`infra_failed` 或 unknown 只有在存在匹配
+  Attempt/fence/item scope 的显式版本化 policy/adjudication authority 时才可进入 `retry_queued`；
+  Suite authority 无权越过平台安全 gate。具体 retry scope、次数、预算、批准角色与 unknown review
+  SLA 仍受 `STATE-DEC-009/010` 阻断，未签前不得激活对应 retry 权限。
+- 未 adjudicate unknown 必须保持 phase=`running`、disposition=`review_required`、outcome 为空；
+  Batch 也保持 `running`，不得先冻结 start commit。unknown 经 adjudication 关闭，或风险批准 retry
+  且新 Attempt 再次关闭 Run 后，Batch 才可进入 `finalizing`。哪个 item scope 继承 Run-level unknown
+  仍由 `STATE-DEC-009` 决定；一旦某 item 的权威链含 unknown，其 `unknown_lineage` 即保持粘性，
+  不能被后来 effective outcome 清除。
+- 批准 retry 只创建可审计 RetryIntent，并同时把 disposition 与 phase 置为 `retry_queued`；
+  后续 Assignment commit-start 才创建 Attempt N+1。retry 不复用工作区、不覆盖旧 Evidence，
+  也不增加 Batch original denominator。
+- Attempt N+1 覆盖完整 immutable Run item set、失败 item/atomic group 还是其他 subset，以及多个
+  Attempt 的 effective resolution precedence，均是 `STATE-DEC-009` 的 `PROPOSED/UNSIGNED` 输入；
+  当前设计不得预选 full-run 或 selective retry，也不得默认 latest wins。
+- `retry_queued` 的 prestart cancel 保留 immutable Attempt/RetryIntent 历史，并由 cancel intent 阻止
+  继续 offer 或消费该 retry；关闭 Run 时必须原子清空 pending RetryIntent pointer，不能删除或改写
+  历史记录。若 retry chain 含 `attempt_unknown`，取消尚未开始的 retry 不等于裁决或取消原 unknown，
+  不得仅凭 cancel intent 自动改写为 `cancelled`；最终 disposition/outcome 仍须引用获授权的
+  adjudication 与 terminal basis，Batch 继续保留 `unknown_lineage`。
 - cancelled Evidence 与 completed Evidence 采用 first-finalized：任一方向先持久化的 root
   获胜，另一方向只能得到冲突，不能覆盖原始 Attempt Evidence。
-- completed Evidence 先于取消证明完成时，当前只保留 immutable Attempt Evidence 与 cancel
-  intent；完整 Run/Batch derived terminal 尚未冻结，见 `OI-DES-011`。
+- completed Evidence 先于取消证明完成时，completed fact 决定 RunOutcome；cancel intent 作为
+  `cancel_requested_before_completion` 审计事实保留。Batch 继续按普通 completed Run 和
+  versioned Suite policy 聚合，迟到 stop/cancel Evidence 不得改写结果。
+- 每个 closed Run basis 必须引用与 frozen Run item set 一一覆盖的 ordered resolution set。每个
+  entry 同时保存不可改写的 original resolution、获授权后的实际 effective resolution，以及独立
+  sticky unknown-lineage 引用。缺项、重复项、跨 Run item 或未知 result mapping 均阻止 Run 关闭。
+- RunOutcome 只表达 Run 级 policy/audit 结果；Batch 不读取它作为 item 计数。mixed per-item
+  resolution set 如何映射 scalar RunOutcome 仍由 `STATE-DEC-009` 阻断，未签前禁止使用
+  worst/latest/majority 等隐式规则。
 
 ### 3.5 Worker 状态
 
@@ -254,11 +344,11 @@ Target Grant 状态：`draft → approved → active → suspended/expired/revok
 | `suite_revision` | `id,suite_id,revision_no,source_spec_digest,config_digest,framework,profile_id,status` | revision immutable；digest 索引 |
 | `test_case` | `id,suite_revision_id,stable_case_id,metadata_json` | `unique(suite_revision_id,stable_case_id)` |
 | `schedule` | `id,suite_id,cron,timezone,next_fire_at,misfire_policy,enabled,version` | `next_fire_at` 可 claim 索引 |
-| `batch` | `id,project_id,suite_revision_id,request_digest,idempotency_scope/key,status,deadline_at,priority_class,version` | `unique(scope,key)`；状态/创建时间索引 |
+| `batch` | `id,project_id,suite_revision_id,request_digest,idempotency_scope/key,status,deadline_at,priority_class,version` | `unique(scope,key)`；canonical 状态/创建时间索引 |
 | `case_manifest` | `id,batch_id,schema_version,digest,item_count,status` | `unique(batch_id)`；approved 后 immutable |
 | `manifest_item` | `manifest_id,item_index,case_id,atomic_group_id,estimated_ms,profile_id,constraints_json` | `unique(manifest_id,item_index)`、`unique(manifest_id,case_id)` |
 | `shard_plan` | `id,batch_id,algorithm_version,digest,run_count,total_estimated_ms,status` | `unique(batch_id)`；approved 后 immutable |
-| `run` | `id,batch_id,plan_id,shard_index,profile_id,estimated_ms,status,current_fence,attempt_count,version` | `unique(plan_id,shard_index)`；queue composite index |
+| `run` | `id,batch_id,plan_id,shard_index,profile_id,estimated_ms,orchestration_phase,current_fence,attempt_count,version` | `unique(plan_id,shard_index)`；phase 与 outcome/disposition 逻辑分离 |
 | `run_manifest_item` | `run_id,manifest_id,item_index` | `unique(manifest_id,item_index)` 保证单归属 |
 | `assignment` | `id,run_id,worker_id,generation,offer_token_hash,status,expires_at,attempt_id,fence,version` | 活动 Assignment partial unique per Run |
 | `attempt` | `id,run_id,attempt_no,fence,status,spec_digest,worker_id,generation,start/finish timestamps,exit_class` | `unique(run_id,attempt_no)`、`unique(run_id,fence)` |
@@ -280,6 +370,11 @@ Target Grant 状态：`draft → approved → active → suspended/expired/revok
 | `outbox` | `id,aggregate_type/id,event_type,payload_digest,payload,status,available_at,attempts` | pending/available index |
 | `audit_event` | `id,actor,action,object_type/id,decision,reason,before/after_digest,occurred_at` | append-only；时间/对象/actor 索引 |
 
+本表仍是草案级逻辑模型。批准的状态语义要求 RunDisposition、RunOutcome、RetryIntent、Batch cancel
+intent、逐 item original/effective resolution、独立 unknown-lineage 引用以及 Run/Batch finalization
+basis 作为彼此可区分、可版本化和可审计的持久事实；其最终采用独立表、不可变记录还是受约束列
+组合，须在 DDL/迁移/并发评审中冻结，不能从本节推断生产 Schema 已经完成。
+
 ### 4.3 完整性检查
 
 数据库约束保证每个 Manifest item 最多属于一个 Run；Plan approve 事务还必须验证：
@@ -293,15 +388,35 @@ manifest.item_count
 
 任何不一致均使 Plan 保持 `invalid`，不能通过“部分成功”继续执行。
 
-Batch finalize 验证：
+Batch execution finalize 先验证 scope coverage：
 
 ```text
-expected manifest items
-= terminal original outcomes
-+ explicit cancelled/unknown/not_executed classifications
+manifest.item_count
+= count(unique closed-Run item-resolution entries)
++ count(unique not_executed facts for items without a Run)
 ```
 
-Retry 结果不能增加 expected denominator，也不能覆盖原始 Attempt；聚合策略必须保留 original 与 retry 两个视图。
+每个 Run resolution entry 必须同时保存 immutable original resolution 与 authorized effective
+resolution；二者可以相同，但不得省略或互相覆盖。`unknown_lineage` 是第三个独立、粘性的权威链
+维度：later effective outcome 必须如实保存，同时 lineage 仍进入 Batch 安全分类。
+
+Retry 结果不能增加 expected denominator，也不能覆盖原始 Attempt；聚合策略必须保留 original 与
+effective 两个视图。Batch 的逐类计数只能遍历 ordered item-resolution entries，禁止把单一
+RunOutcome 乘以该 Run 的 item 数。
+尚为 `review_required`、缺 required Evidence 或没有 terminal basis 的 Run 属于 unresolved，不进入
+上式右侧，Batch 必须保持 `running`。任何 Run basis 曾包含 `attempt_unknown` 时，该 item 在 Batch
+聚合中归入 `unknown_lineage`，但仍必须保留后续 adjudication/retry 产生的实际 effective outcome；
+不得把 lineage 删除，也不得用 lineage 覆盖真实 effective fact。
+
+每个 Manifest item 在 Batch basis 中必须恰好引用一个 Run item-resolution entry 或一个
+`not_executed` fact；同一 item 两者并存、两者都缺失、重复引用或跨 Run 引用都使 completeness proof
+失败。`not_executed` 只适用于从未 materialize Run 的 item，不得伪造成 Run/Attempt result。
+
+Run terminal basis 必须绑定钉住的 schema/policy version、source Run version、最终与原始 Attempt/fence、
+Evidence root、retry chain roots 以及 cancel/unknown-observation/not-executed facts。Batch basis 必须进一步绑定
+Manifest digest、Shard Plan digest/version、canonical Run ID set、逐 Run source version + basis digest
+和 original denominator，并保留 unknown-lineage/adjudication refs。时间 metadata 不参与调用方幂等
+identity，basis digest 不得自引用。
 
 ### 4.4 事务模式
 
@@ -311,6 +426,34 @@ Retry 结果不能增加 expected denominator，也不能覆盖原始 Attempt；
 2. 插入 `idempotency_record(scope,key,digest)`。
 3. 唯一冲突时：相同 digest 返回原响应；不同 digest 返回 `IDEMPOTENCY_CONFLICT`。
 4. 同一事务创建 Batch 和 outbox `batch.created`。
+
+#### Pre-execution closure
+
+`rejected` 与零 materialized Run 的 pre-execution `cancelled` 使用独立 closure basis，不复用
+execution finalization basis。一旦存在 Run，即使从未 start commit，也必须 fanout，使用 Run
+prestart-cancel resolution 与 execution Batch basis：
+
+1. rejection command 锁定 authoritative Batch，校验 source phase 与
+   `stage=validation/collection/planning/admission` 的稳定 rejection fact；cancel command 校验唯一
+   versioned cancel intent。两类 command fact 严格二选一。
+2. pre-plan closure 绑定 submission/preplan scope 与 execution-absence proof；尚不存在的
+   Manifest、Plan、Run、Attempt、Evidence 和 denominator 必须保持不存在，不能补造。
+3. planned-unmaterialized closure 绑定 frozen Manifest/Plan，证明 canonical Run set 为空，并逐 item
+   引用绑定 rejection fact 或 cancel intent 的中性 pre-execution `not_started` scope fact；该 fact
+   不得用作 execution `not_executed`。同一一致性边界证明不存在 materialized Run、
+   Assignment、start commit、Attempt 或 fence。
+4. closure basis immutable；同 source version/authority/basis digest 才能 exact replay，异内容稳定
+   冲突。该契约不代表物理表、migration 或生产 UoW 已通过评审。
+
+#### 记录 Batch cancel intent
+
+1. 校验 actor、幂等请求、authoritative Batch version 和当前 canonical state。
+2. 原子记录 versioned cancel intent，并使后续 materialize、admit、offer/commit-start 在各自
+   authoritative CAS/UoW 中观察该 intent。
+3. 若计划已冻结，绑定 Manifest、Shard Plan 与 canonical Run set；未物化 item 追加显式
+   `not_executed/cancel` fact，已物化非终态 Run 通过 outbox 接收幂等 fanout。
+4. 接收 intent 不修改 Batch terminal。Reconciler 等待 stopped/unknown/Evidence/completeness facts
+   收敛，再按 Suite policy 和平台安全底线发布 outcome。
 
 #### 领取待规划/调度记录
 
@@ -329,15 +472,15 @@ LIMIT :n;
 
 1. 锁定 eligible Run 和 Worker capacity snapshot。
 2. 重新校验 Profile、quota、Target Grant、Lease 和资源余量。
-3. 原子预留资源/Lease，创建短期 Assignment，Run → `assigned`。
+3. 原子预留资源/Lease，创建短期 Assignment，Run orchestration phase → `assigned`；同一边界必须确认 Batch/Run 没有阻止启动的 cancel intent。
 4. 返回 opaque offer token；数据库只存 token hash。
-5. commit 前 Assignment 过期/释放时释放预留；初次 reservation 的 Run → `queued`，retry
-   reservation 的 Run → `retry_queued` 并保留 pending RetryIntent；不产生 Attempt。
+5. commit 前 Assignment 过期/释放时释放预留；初次 reservation 的 phase 回到 `queued`；retry
+   reservation 的 phase/disposition 保持 `retry_queued` 并保留 pending RetryIntent；不产生 Attempt。
 
 #### Commit-start
 
 1. 校验 mTLS worker/generation、offer token、Assignment 状态/TTL 和 `spec_digest`。
-2. `SELECT run FOR UPDATE`，确认没有更高 fence/已运行 Attempt。
+2. 锁定 authoritative Run，确认没有更高 fence/已运行 Attempt，且 Batch/Run cancel intent 未赢得竞态。
 3. `run.current_fence += 1`；创建 Attempt `start_committed`；关联 Assignment。
 4. 创建/激活 Environment Lease 和短期访问声明。
 5. 写审计/outbox，并提交事务。
@@ -356,13 +499,23 @@ LIMIT :n;
 1. 校验 Attempt 当前 fence、所有 upload session complete、Artifact digest/size/path。
 2. 计算 canonical Evidence Manifest/root digest。
 3. 条件插入 `evidence_manifest`；相同 digest 重试幂等，不同 digest 冲突。
-4. 更新 Attempt 终态和 Run 聚合，写 outbox。
-5. Batch 只在所有 Run 完成对账后进入 finalizing/terminal。
+4. 在 Run-local UoW 中原子写入 verified Evidence reference、Attempt terminal、版本化 disposition
+   决策及 outbox；若 disposition 为 `closed_no_retry`，同时写 immutable Run basis/outcome、推进
+   orchestration phase → `closed` 并清理 current pointer。若为 `retry_queued`，只写 RetryIntent、
+   disposition 和 phase=`retry_queued`，不能在 finalize 中创建 Attempt N+1。
+   closed 分支还必须冻结与 Run item set 一一覆盖的 original/effective resolution set；mixed set 到
+   scalar RunOutcome 的规则在 `STATE-DEC-009` 签署前不得隐式推导。
+5. Batch reconciler 从一致版本快照验证 canonical Run set、逐 Run basis/ordered item-resolution
+   entries、original denominator、cancel/unknown-lineage/not_executed facts 与 Suite policy。每个
+   Manifest item 必须唯一引用 Run resolution 或 not-executed fact；只有 completeness proof 成立时，
+   才用 Batch version CAS 原子写 immutable Batch basis + terminal + outbox；stale snapshot 重读重试。
 
 取消专用 finalize 必须在同一事务中校验 Run-owned cancellation intent、current
 Attempt/fence/Worker authority、`TrustedCancellationStop` 与服务端重建的 Evidence root，随后
-原子写入 Attempt `cancelled`、Run `cancelled` 并清除 current Assignment pointer。cancel request
-本身不得执行该终态更新；exact replay 优先于 Run/Attempt CAS，异 root 或异 stop proof 冲突。
+原子写入 Attempt `cancelled` fact，并按 disposition/outcome/basis 规则收敛 Run；Run phase 不使用
+`cancelled`。cancel request 本身不得执行终态更新；exact replay 优先于 Run/Attempt CAS，异 root
+或异 stop proof 冲突。若 completed Evidence 已先 finalize，则 completed root/outcome 获胜，cancel
+intent 只作为 `cancel_requested_before_completion` 审计事实，迟到 cancelled Evidence 返回冲突。
 
 ### 4.5 隔离级别与锁
 
@@ -370,6 +523,8 @@ Attempt/fence/Worker authority、`TrustedCancellationStop` 与服务端重建的
 - Quota/Lease 分配使用单行计数或 slot token 表，避免先查后写竞态。
 - 只在经过证明的跨行不变量需要时使用 `SERIALIZABLE`，并实现有界重试；不全局开启。
 - 外部 API、对象存储、Docker/Kubernetes 调用不放在长数据库事务内；通过 intent/outbox + Reconciler 完成。
+- Run-local UoW 与 Batch terminal CAS 之间不得持有跨聚合长锁；对象存储、Worker 或其他外部 I/O
+  必须在进入 terminal UoW 前完成校验并冻结为 immutable reference。
 - 所有事务设置 statement/lock timeout；超时进入可重试内部错误，不无限占锁。
 
 ### 4.6 Migration 与恢复
@@ -393,6 +548,8 @@ Attempt/fence/Worker authority、`TrustedCancellationStop` 与服务端重建的
 - 列表使用稳定 cursor pagination，不使用大 offset 扫描热表。
 - `ETag/version` 支持管理配置的乐观并发；冲突返回 409。
 - API 只接受领域参数，不接受 Docker/Kubernetes raw spec、宿主路径或任意命令行覆盖。
+- 状态响应必须分别提供 Batch canonical state、Run orchestration phase、RunDisposition、
+  RunOutcome 和 Attempt fact；只读 coarse phase 不能替代 canonical state。
 
 ### 5.2 主要端点
 
@@ -403,15 +560,15 @@ Attempt/fence/Worker authority、`TrustedCancellationStop` 与服务端重建的
 | `POST /suite-revisions/{id}:activate` | maintainer/admin | 激活经过验证的 Revision |
 | `GET /suite-revisions/{id}/cases` | project reader | 分页查询 Case 库存 |
 | `POST /batches` | executor | 幂等创建即时 Batch |
-| `GET /batches/{id}` | object reader | Batch、计划、状态和聚合 |
+| `GET /batches/{id}` | object reader | Batch canonical state、cancel intent、计划、聚合 outcome/basis 摘要 |
 | `GET /batches/{id}/manifest` | object reader | Manifest 元数据/分页 item |
 | `GET /batches/{id}/plan` | object reader | Shard/Capacity Plan 和限制因素 |
 | `POST /batches/{id}:approve-best-effort` | executor/lead | 批准 best-effort 进入队列 |
-| `POST /batches/{id}:cancel` | owner/admin | 请求取消并返回收敛状态 |
+| `POST /batches/{id}:cancel` | owner/admin | 幂等记录 cancel intent 并返回 fanout/收敛状态，不承诺即时 cancelled |
 | `GET /batches/{id}/events` | object reader | SSE 状态/有限日志事件，支持 Last-Event-ID |
-| `GET /runs/{id}` | object reader | Run/Attempt 列表、结果和时间线 |
-| `POST /runs/{id}:retry` | executor/admin | 按策略创建显式新 Attempt 请求 |
-| `POST /attempts/{id}:adjudicate` | admin | unknown 人工裁决；必须给理由 |
+| `GET /runs/{id}` | object reader | Run phase/disposition/outcome/basis、Attempt 列表和时间线 |
+| `POST /runs/{id}:retry` | signed policy-authorized actor（DEC-010 待签） | 按策略记录 RetryIntent；后续 commit-start 才创建新 Attempt |
+| `POST /attempts/{id}:adjudicate` | signed review-authority actor（DEC-010 待签） | unknown 人工裁决；必须给理由和 authority digest |
 | `GET /attempts/{id}/artifacts` | object reader | Artifact 元数据 |
 | `POST /artifacts/{id}:download-url` | object reader | 生成短期、单对象下载授权 |
 | `POST /schedules` | maintainer | 创建 schedule/时区/misfire |
@@ -840,7 +997,14 @@ Evidence Manifest 是 canonical JSON，至少包含：
 - 控制面只解析有大小/Schema 限制的规范 JSON；复杂/不可信报告转换在沙箱完成。
 - Case ID 必须存在于 Run manifest；额外 Case 标记 `unexpected_case`，不能静默扩 denominator。
 - 缺失 Case 根据平台退出事实分类为 `not_reported/infra_failed/cancelled/unknown`，不能默认 passed/skipped。
-- Retry 聚合至少保留：original outcome、每次 retry outcome、最终策略 outcome、flaky flag 和策略版本。
+- 每个 Run item 必须形成独立 resolution entry，保留 original outcome/fact、实际 effective
+  outcome/fact、全部 authority/retry 引用和 sticky unknown-lineage；未知 raw result mapping 保持
+  unresolved，不得用 Run 级 outcome 填满缺失 Case。
+- Retry 聚合至少保留：每 item original outcome、每次 retry outcome、实际 effective outcome、
+  flaky/unknown-lineage 维度和策略版本。Batch 只能逐 item entry 计数，禁止
+  `RunOutcome × item_count`。
+- Full-run、failed-item/atomic-group 或其他 subset retry scope，以及 mixed item resolutions 到
+  scalar RunOutcome 的映射，仍是 `STATE-DEC-009` 的 `PROPOSED/UNSIGNED` 输入。
 
 ---
 
@@ -922,7 +1086,8 @@ pytest collection、Playwright test listing、配置加载和插件发现都可�
 - 全新沙箱、固定只读输入和严格资源/网络/时间上限；
 - 默认不允许真实 SUT 凭据和业务写访问；
 - 输出平台规范 Case 清单、框架原始清单、警告和输入摘要；
-- collection 失败使 Batch 停在 `collecting_failed`，不能用缓存旧清单静默继续；
+- collection hard failure 使已持久 Batch 进入 `rejected`，保存 `stage=collection` 与稳定
+  `reason_class`；不得引入 `collecting_failed`，也不能用缓存旧清单静默继续；
 - 可以使用已校验的相同 revision collection cache，但 cache key 包含 source/dependency/config/runner digest。
 
 ### 9.2 Manifest item
@@ -1114,18 +1279,31 @@ weighted_share = dominant_share / configured_weight
 
 ### 10.7 Retry 策略
 
-| 原因 | 默认自动重试 | 条件 |
+本节只保留候选策略方向；下表中的“有界重试”不构成已激活默认值。多 item retry scope、effective
+precedence 与 mixed RunOutcome 由 `STATE-DEC-009` 决定；次数、reason/scope、预算、批准角色、unknown
+review SLA 与 duplicate-risk authority 由 `STATE-DEC-010` 决定。两项均为
+`PROPOSED/UNSIGNED`，在具名签署并记录 UTC 前，只能用于 RED/schema-validation 计划。
+
+| 原因 | 候选处理（未签） | 条件 |
 |---|---|---|
-| Assignment commit 前过期 | 是，不产生 Attempt | 已确认没有 start commit |
-| 输入/镜像拉取失败，测试进程未启动 | 有界重试 | 来源故障可重试、digest 不变、预算允许 |
-| 明确 Worker/沙箱基础设施失败 | 有界重试 | 已证明旧执行停止且 Lease/secret 失效 |
+| Assignment commit 前过期 | 候选：重新分配，不产生 Attempt | 已确认没有 start commit |
+| 输入/镜像拉取失败，测试进程未启动 | 候选：有界 retry | 来源故障可重试、digest 不变、预算允许 |
+| 明确 Worker/沙箱基础设施失败 | 候选：有界 retry | 已证明旧执行停止且 Lease/secret 失效 |
 | 测试断言失败 | 否 | Suite flaky policy 可显式创建独立 retry Attempt |
 | 超时 | 否 | 需区分产品/平台；人工或批准策略 |
 | 用户取消/策略撤销 | 否 | 新提交是新用户意图 |
 | `attempt_unknown` | 否 | 只有人工批准重复副作用或业务证明幂等 |
 | Artifact 可续传失败 | 续传，不重跑测试 | 本地/对象内容 digest 可校验 |
 
-所有 retry 受次数、资源、预算和优先级上限；框架内部 retry 必须在结果中显式报告，不能与平台 retry 混为一次通过。
+若后续决议批准 retry，所有 retry 必须受已签次数、资源、预算和优先级上限；框架内部 retry 必须
+在结果中显式报告，不能与平台 retry 混为一次通过。当前具体值、角色与 scope 未冻结。
+
+平台 retry 是两阶段协议：批准动作只追加 RetryIntent，并把 RunDisposition 与 RunPhase 都置为 `retry_queued`；
+调度后由新的 Assignment commit-start 原子创建 Attempt N+1；这项两阶段结构已由
+`STATE-DEC-004` 冻结。`passed` 默认 `closed_no_retry`；其他 fact 只有获签且 scope 匹配的
+policy/adjudication authority 才能创建 RetryIntent，且任何处置都不能改写原
+`attempt_unknown` fact。实际 effective outcome 与 sticky unknown lineage 分开保存；具体 authority、
+retry scope/precedence 与 mixed RunOutcome 在 `STATE-DEC-009/010` 签署前不得推定。
 
 ### 10.8 自动扩缩
 
@@ -1340,7 +1518,7 @@ ID 作为结构化日志/trace 字段，不作为 Prometheus 无界 label。Metr
 | commit 后、sandbox 前 Worker 消失 | Attempt 进入 lost 评估；已证明无执行可 infra_failed | 直接退回 queued、抹去 Attempt |
 | running Worker 失联 | TTL 停访问；标 unknown/infra based on proof | 立即盲重跑非幂等测试 |
 | postcommit cancel 但 stop 不可证明 | 写入 intent-bound unknown，等待显式裁决 | 直接标 cancelled 或盲重跑 |
-| cancelled/completed Evidence 竞争 | 保留先 finalized 的 root，另一方向返回冲突 | 用较晚到达事实覆盖终态 |
+| cancelled/completed Evidence 竞争 | 保留先 finalized 的 root；completed-first 按 completed fact 发布 RunOutcome 并保留 cancel audit，另一方向返回冲突 | 用 intent 或较晚到达事实覆盖终态 |
 | Worker 恢复带旧 fence | 要求停止、隔离迟到证据 | 允许推进当前状态 |
 | 容器/Pod 重复启动 | 只有当前 fence/attempt token 生效，其余终止 | 让两个副本共享 Artifact 路径 |
 | PostgreSQL 短时不可用 | stop new commit；Worker 到 lease deadline 停止 | 本地无限续租/新启动 |
@@ -1353,7 +1531,8 @@ ID 作为结构化日志/trace 字段，不作为 Prometheus 无界 label。Metr
 
 ### 14.3 Unknown adjudication
 
-管理员页面必须显示：
+Unknown review 页面必须显示下列事实；可访问/可裁决角色由 `STATE-DEC-010` 具名签署，不得从
+“平台管理员”或现有 RBAC 名称隐式继承：
 
 - 最后有效 fence/renew/event；
 - Worker/网关/secret 的最后确认时间和到期时间；
@@ -1361,10 +1540,13 @@ ID 作为结构化日志/trace 字段，不作为 Prometheus 无界 label。Metr
 - 已上传 Artifact 和缺失证据；
 - Suite 幂等声明、环境负责人意见和重复执行风险。
 
-可选决策：
+以下仅是候选 adjudication 意图；具体可用集合、角色、scope、SLA、single-use 与 retry 参数仍受
+`STATE-DEC-009/010` 阻断：
 
-- `confirm_stopped_then_retry`：有外部证据证明旧执行停止；创建新 Attempt。
-- `accept_duplicate_risk_then_retry`：业务负责人明确接受；高价值审计。
+- `confirm_stopped_then_retry`：有外部证据证明旧执行停止；若后续决议批准，只创建 RetryIntent，
+  由 commit-start 再创建新 Attempt。
+- `accept_duplicate_risk_then_retry`：由 `STATE-DEC-010` 冻结的 authority 显式接受；高价值审计，
+  不得在签署前把“业务负责人”当作已批准 runtime 角色。
 - `mark_infra_failed_no_retry`：保持原事实，不再执行。
 - `mark_completed_from_verified_evidence`：仅当完整受信证据能证明终态，不能靠测试自报文本。
 
@@ -1452,13 +1634,22 @@ GC 分级：
 - renew/cancel/lease expiry 竞态：最终状态合法，过期 Worker 不能继续访问。
 - cancel 与 commit-start 的双向 CAS：只有一个权威顺序，败者不能补造 Attempt 或取消终态。
 - cancel 与 expiry/release 边界：expiry 边界优先，历史 closure 不被 backdated intent 改写。
-- cancelled/completed Evidence 双向先后：先 finalized root 不可被另一 outcome 覆盖。
+- persisted Batch 各 pre-execution phase 的 cancel/hard-failure 竞争：只产生合法 `rejected` 或
+  cancel intent/terminal，stage/reason 可审计，不出现 `collecting_failed`。
+- Batch cancel 与 materialize/admit/commit-start 双向 CAS：intent 赢后不再创建 Run/Attempt；已物化
+  Run 全量幂等 fanout，未物化 item 显式记为 not_executed/cancel。
+- cancelled/completed Evidence 双向先后：先 finalized root 不可被另一 outcome 覆盖；
+  completed-first 的 RunOutcome 来自 completed fact，并保留 cancel audit。
 - stop proof 与 unknown 竞争：unknown 一旦持久化即为吸收终态；迟到 proof 只能形成冲突。
 - finalized cancel 后迟到 event/Evidence：exact replay 幂等，其余事实不得推进终态。
 - 同 `event_id/seq` 相同/不同 digest：分别幂等/冲突。
 - Evidence finalize 与迟到 upload/retry 竞态：旧 fence 不覆盖，新 Attempt 路径独立。
 - Grant revoke 与 Worker renew/egress request 竞态：在 TTL 上限内 fail closed。
 - Worker generation 轮换与迟到旧请求：全部拒绝。
+- RetryIntent 与 commit-start 分两阶段：批准 retry 不创建 Attempt，commit-start 恰好创建一个
+  Attempt N+1，cancel intent 赢得竞态时不得消费 pending RetryIntent。
+- Run-local basis/outcome 与 Batch reconciler：过期 Run snapshot 的 Batch CAS 失败；相同 immutable
+  basis exact replay 幂等；任何 required Evidence 缺失、denominator 漂移或未知 policy 组合均不发布 success。
 
 ### 16.3 属性与模型测试
 
@@ -1547,7 +1738,22 @@ GC 分级：
 | OI-DES-008 | schedule misfire 和 deadline 策略 | 不自动并发补跑多个大回归 | 产品规则签署 |
 | OI-DES-009 | 企业 K8s/Kueue 是否已有组织能力 | 无能力则停留静态 VM Pool | 运维 readiness review |
 | OI-DES-010 | 预测模型样本阈值/衰减/置信度 | 未达门禁使用保守 class default | Shadow Planning 报告 |
-| OI-DES-011 | cancel intent 后 completed Evidence 先 finalize 时的完整 Run/Batch derived terminal | 保留 immutable Attempt Evidence 与 cancel intent，不补造 Run terminal | 完整状态模型、数据库并发与 reconcile 测试 |
+
+`OI-DES-011` 已由五方批准的 `STATE-DEC-005` 选择 A 关闭：cancel intent 已存在但 completed
+Evidence 先 finalize 时，completed fact 决定 RunOutcome；cancel intent 作为
+`cancel_requested_before_completion` 审计事实保留，Batch 按普通 completed Run 与 versioned Suite
+policy 聚合。该关闭只冻结语义；数据库并发、reconciler、API/UI 与迁移测试仍是实现门禁，不代表
+生产实现已完成。
+
+八项签署后发现的下游歧义继续保持未签，不由本详细设计代替决策：
+
+| Decision ID | 状态 | 待冻结内容 | 阻断边界 |
+|---|---|---|---|
+| `STATE-DEC-009` | `PROPOSED/UNSIGNED` | full-run、failed-item/atomic-group 或其他 immutable subset retry；original/effective precedence；unknown 污染范围；mixed resolution set 到 scalar RunOutcome | Run per-item retry/resolution 与 Batch 聚合实现；不阻断 pre-execution vocabulary/closure |
+| `STATE-DEC-010` | `PROPOSED/UNSIGNED` | retry 次数、reason/scope、预算、批准角色；unknown review SLA；duplicate-risk authority 的 scope、有效期、single-use 和职责分离 | retry/unknown runtime authority 与相关 Batch policy；不阻断 pre-execution vocabulary/closure |
+
+两项完成具名签署并记录 UTC 前，本文相应字段、表格和候选规则只用于评审与 RED 测试计划；不得
+据此修改 API、数据库、Worker payload、migration，或关闭任何实现/发布门禁。
 
 ---
 
@@ -1560,6 +1766,8 @@ GC 分级：
 - [x] 单 ECS Docker 与企业 Kubernetes 后端共享领域语义，并有切换/回退规则。
 - [x] 资源估算、嵌套并发、SUT Lease、公平性和自动扩缩职责明确。
 - [x] 安全、故障、恢复、观测和 TDD 验证路径明确。
+- [x] `STATE-DEC-001`～`008` 的五方批准语义已同步；批准范围不等于本详细设计整体基线化。
+- [ ] `STATE-DEC-009/010` 尚为 `PROPOSED/UNSIGNED`；相关 Run/Batch retry、resolution 和 policy 实现不得启动。
 - [ ] 产品、技术、QA、安全和运维批准全部未决事项或阻断例外。
 - [ ] API/Worker/OpenAPI/JSON Schema、数据库 DDL 和沙箱模板完成实现级评审。
 - [ ] 现有代码差距分析完成；在此之前不因实现方便修改本设计基线。

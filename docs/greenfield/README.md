@@ -6,7 +6,7 @@
 
 ## 1. 文档目的
 
-本目录回答八个按顺序展开的问题：
+本目录回答九个按顺序展开的问题：
 
 1. 只有一台 ECS 时，最小可用产品必须解决什么问题？
 2. 面向 10 万+用例库存和每日约 6 万次执行时，企业目标产品必须具备什么能力？
@@ -16,6 +16,7 @@
 6. 如何按 TDD、迁移门禁和回滚边界分阶段实施，而不形成长期双轨？
 7. 如何证明每条需求都有设计、实现阶段、测试和发布证据落点？
 8. 在继续完整状态模型实现前，五方必须逐项关闭哪些冲突和不确定性？
+9. 八项决议关闭后，状态、命令、聚合、持久化和迁移必须遵守哪份实现契约？
 
 ## 2. 文档顺序与约束
 
@@ -30,7 +31,8 @@
 | 6 | [实施计划](06_IMPLEMENTATION_PLAN.md) | Execution Plan | 已冻结设计、现状差距和迁移决策 |
 | 7 | [需求追踪矩阵](07_REQUIREMENTS_TRACEABILITY.md) | RTM | 需求、设计、实施、测试和发布证据 |
 | 8 | [实施状态账本](08_IMPLEMENTATION_STATUS.md) | Execution Ledger | 当前切片、commit、测试证据、风险和下一步 |
-| 9 | [M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md) | Implementation Decision Reference | PRD/DD/当前实现与测试的冲突、八项 OPEN 决议、依赖与实施边界；不新增上游需求 |
+| 9 | [M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md) | Implementation Decision Reference | PRD/DD/当前实现与测试的冲突、八项 implementation-level 决议、依赖与实施边界；不新增上游需求 |
+| 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合、对应实现合同，以及未签的 `STATE-DEC-009/010` 后续决策门 |
 | 执行入口 | [长期 Goal Prompt](GOAL_PROMPT.md) | Codex Goal | 读取后持续执行 M0～M8 |
 
 ## 3. “独立设计”的含义
@@ -59,8 +61,13 @@
 
 ## 6. 当前执行摘要
 
-- MVP PRD V0.2.0 已补充 AC-MVP-026～032，关闭 7 条“缺少独立正式 AC”的结构缺口。
+- MVP PRD V0.3.0 已补充 AC-MVP-026～032，并同步八项已批准状态模型语义；7 条“缺少独立
+  正式 AC”的结构缺口已关闭。
 - 新增条目与全部上游规范仍为 `DRAFT`；未获得五方批准，未产生实现测试 Evidence。
-- M0 完整状态模型当前受 `STATE-DEC-001`～`STATE-DEC-008` 阻断；八项均为 implementation-level
-  `OPEN` 决议，不是新增上游需求，入口见[M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md)。
+- `STATE-DEC-001`～`STATE-DEC-008` 的五方 implementation-level 决议已关闭，获批组合与实现
+  边界见[M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md)；这不表示 `T-M0-STATE-001`、Schema、
+  API、数据库或生产实现已经完成。
+- `STATE-DEC-009/010` 是签署后发现的下游歧义，当前均为 `PROPOSED/UNSIGNED`；它们只阻塞
+  `T-M0-STATE-001G/001H`，不阻塞可先按 TDD 推进的 `001F`。两项具名签署前，不得实现
+  retry scope、effective resolution、mixed RunOutcome、审批角色或 review SLA 的 proposed 答案。
 - 后续阶段、当前验证证据和阻断项只以[实施状态账本](08_IMPLEMENTATION_STATUS.md)为事实入口。
