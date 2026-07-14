@@ -283,6 +283,27 @@ def test_worker_transition_uses_shared_expected_version_runtime_validation() -> 
     assert worker.version == 0
 
 
+def test_worker_transition_checks_authority_before_invalid_expected_version() -> None:
+    from qarunner.domain import WorkerGenerationConflict, WorkerState
+
+    worker = _registered_worker()
+
+    with pytest.raises(WorkerGenerationConflict) as caught:
+        worker.transition(
+            WorkerState.READY,
+            authority=_authority(worker, generation=4),
+            expected_version=False,  # type: ignore[arg-type]
+            occurred_at=REGISTERED_AT + timedelta(seconds=1),
+        )
+
+    assert caught.value.code == "worker_generation_conflict"
+    assert caught.value.reason == "generation_not_current"
+    assert caught.value.current_generation == 4
+    assert caught.value.received_generation == 3
+    assert worker.state is WorkerState.REGISTERING
+    assert worker.version == 0
+
+
 @pytest.mark.parametrize(
     ("active_assignments", "drain_requested", "expected_state"),
     [

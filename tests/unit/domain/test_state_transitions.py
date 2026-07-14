@@ -292,6 +292,46 @@ def test_run_legal_transition_returns_a_new_version() -> None:
     assert planned.version == 0
 
 
+def test_run_owned_attempt_cas_precedes_run_cas_when_both_are_stale() -> None:
+    """The owned Attempt rejects a dual-stale command before the outer Run CAS."""
+    from qarunner.domain import AttemptState, VersionConflict
+    from tests.unit.domain.test_assignment_precommit_closure import _committed_initial
+
+    committed, _ = _committed_initial()
+    provisioning = committed.run.transition_current_attempt(
+        attempt_id=committed.attempt.id,
+        target=AttemptState.PROVISIONING,
+        expected_version=committed.run.version,
+        expected_attempt_version=committed.attempt.version,
+    )
+    current = provisioning.attempts[-1]
+    source_run_version = provisioning.version
+    source_attempt_version = current.version
+
+    assert committed.run.version >= 0
+    assert committed.attempt.version >= 0
+    assert committed.run.version != source_run_version
+    assert committed.attempt.version != source_attempt_version
+
+    with pytest.raises(VersionConflict) as caught:
+        provisioning.transition_current_attempt(
+            attempt_id=current.id,
+            target=AttemptState.RUNNING,
+            expected_version=committed.run.version,
+            expected_attempt_version=committed.attempt.version,
+        )
+
+    assert caught.value.code == "version_conflict"
+    assert caught.value.entity_type == "attempt"
+    assert caught.value.entity_id == current.id
+    assert caught.value.current_version == source_attempt_version
+    assert caught.value.expected_version == committed.attempt.version
+    assert provisioning.version == source_run_version
+    assert provisioning.attempts[-1] is current
+    assert current.state is AttemptState.PROVISIONING
+    assert current.version == source_attempt_version
+
+
 def test_attempt_uses_shared_expected_version_runtime_validation() -> None:
     """Attempt state commands reject floats before equality is considered."""
     from qarunner.domain import AttemptState, DomainValidationError
