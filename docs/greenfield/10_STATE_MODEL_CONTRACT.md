@@ -800,12 +800,12 @@ pointer、历史 Attempt 缺失或 authority 不可证明时进入 quarantine，
 
 ## 10. TDD case matrix
 
-本节是实现待办，不是测试 Evidence。三条 umbrella 子契约全部为 `PLANNED/DRAFT`，必须按
-RED → 最小 GREEN → 重构推进；不得在实现前或仅凭本文标记为 `VERIFIED`。
+本节是实现矩阵，不单独构成测试 Evidence。001F 已由外部可复核 Evidence 升级；001G/001H 仍须按
+RED → 最小 GREEN → 重构推进，不得在实现前或仅凭本文标记为 `VERIFIED`。
 
 | Test contract | 状态 | Decision coverage | 首批 RED case family | 完成门禁 |
 |---|---|---|---|---|
-| `T-M0-STATE-001F` | `PLANNED/DRAFT` | DEC-001/002 | canonical Batch long path；非法/吸收边；逐 phase rejection；reason Schema；六个 preterminal phase cancel intent 与零 materialized-Run closure；in-flight task stop；cancel-vs-phase CAS；legacy generic cancel 禁止 | domain + API contract + migration tests；100% 行/分支门禁；Evidence 文档 |
+| `T-M0-STATE-001F` | `VERIFIED`（仅 deterministic M0） | DEC-001/002 | canonical Batch long path；非法/吸收边；逐 phase rejection；reason Schema；六个 preterminal phase cancel intent 与零 materialized-Run closure；in-flight task stop；cancel-vs-phase CAS；legacy generic cancel 禁止 | Domain/APP-AUTH/HANDOFF/PROOF/API-MIG 共同绑定 `b595077`；159 个联合定向测试、完整 Docker 2092 passed/1 skipped、100% 行/分支。`GATE-IMP-003=OPEN`，production `NO-GO` |
 | `T-M0-STATE-001G` | `PLANNED/DRAFT` | DEC-003/004/005；DEC-009/010 待签 | Run phase/outcome/disposition cross-product；passed/test/infra retry gate；四种 unknown adjudication；Run basis；completed/cancel/unknown 双向竞态；exact replay/stale authority；legacy cancelled backfill | DEC-009/010 先关闭；domain/model + persistence integration + API projection + crash tests；100% 行/分支门禁；Evidence 文档 |
 | `T-M0-STATE-001H` | `PLANNED/DRAFT` | DEC-006/007/008；DEC-009/010 待签 | policy value/digest；exhaustive per-item truth table；denominator/property tests；cancel fanout/commit races；Batch basis canonicalization；stale snapshot；UoW crash/outbox/reconcile；migration/rollback | DEC-009/010 先关闭；property/model + real DB concurrency/fault injection + API/E2E；100% 行/分支门禁；Evidence 文档 |
 
