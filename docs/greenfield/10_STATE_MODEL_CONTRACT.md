@@ -598,6 +598,37 @@ retry 逐次引用相应 suite/platform decision；unknown path 必须引用对�
 风险还必须在同一 sequence 中引用 single-use acceptance。序号缺失/重复、source Attempt/fence/item-set
 不连续、policy family 与 fact 不匹配或任一 digest 不可重放时，不得关闭 Run。
 
+#### 8.1.1 `STATE-DEC-011` G3 canonical closure
+
+以下九项 G3 解释已确认，属于 `qep.run-finalization-basis.v1` 的强制 cross-field contract：
+
+1. `prestart_cancel.cancellation_stop_digest` 必须为 `null`；未启动证明只由
+   `prestart_closure_digest` 表达。
+2. `prestart_cancel.attempt_chain_digest` 必须为 `null`，不得伪造“空 Attempt chain”摘要。
+3. unknown 经裁决授权 retry、随后由新 Attempt Evidence 完成时，`terminal_input_kind` 为
+   `verified_evidence`，并完整保留先前 unknown、adjudication 与 retry 历史。
+4. `verified_evidence` 必须保留所有真实的 retry/unknown/adjudication chain；没有对应历史时才显式
+   为 `null`。
+5. `verified_cancellation_evidence` 同样保留全部真实 retry/unknown/adjudication 历史，不得由最终
+   cancellation 擦除。
+6. `decision_result` 是按 `decision_kind` 判别的强类型联合，只能引用既有 typed immutable facts；
+   不接受自由 JSON、自由文本或未版本化引用。
+7. item-resolution identity 固定为
+   `item_resolution_schema=qep.run-item-resolution-set`、`item_resolution_version=1`，组合绑定
+   `qep.run-item-resolution-set.v1`。
+8. 除 `prestart_cancel` 外，`final_attempt_state` 只允许
+   `passed/test_failed/infra_failed/cancelled/attempt_unknown`；`final_attempt_version >= 0`，
+   `final_attempt_no/fence` 与 `worker_generation` 均为非 bool 正整数。
+9. cancellation 不新增 `decision_kind`。它使用 `contract_rule` 的强类型 `decision_result` 引用匹配的
+   cancellation intent/stop facts，并继续在专用字段持久对应两个 digest。
+
+四种 input 的 nullable 边界据此固定：`prestart_cancel` 的全部 Attempt/worker/Evidence、
+`attempt_chain_digest`、`cancellation_stop_digest` 均为 `null`，但 cancellation intent、prestart
+closure、item-resolution 与 contract rule 必填；其余 input 必须绑定 final Attempt authority。
+Evidence 型 input 的 Evidence root 必填；`unknown_adjudication` 的 Evidence root 由 typed decision
+决定，完成型裁决必填、no-retry infra 裁决为空。所有历史 chain 字段按真实历史填充，不得由最终
+input kind 擦除。
+
 ### 8.2 Batch terminal basis families
 
 每个 Batch terminal 必须且只能引用一个 immutable basis family。`rejected` 与零 materialized Run 的
@@ -843,6 +874,7 @@ RED → 最小 GREEN → 重构推进，不得在实现前或仅凭本文标记�
 |---|---|---|---|---|
 | `STATE-DEC-009` | `DECIDED` | A/A/A/A | 完整 immutable Run item set；latest authorized complete Attempt；per-item sticky；unresolved unknown 时 outcome=null，裁决后 `infra_failed > test_failed > cancelled > passed` 审计投影 | 解锁 001G M0 contract；001H 等待 001G facts |
 | `STATE-DEC-010` | `DECIDED` | A/A/A/A/A/A/A/A/A | test 0/1、infra 0/2；exact allowlist/selector；三重显式预算；职责分离；24h review；independent Reviewer；1h single-use 双职责 duplicate authority；intent pin + commit-start revalidate | 不授权 runtime/production |
+| `STATE-DEC-011` | `DECIDED` | 九项 G3 canonical closure | prestart null 边界；unknown retry 后归 verified Evidence；历史 chain 保留；typed decision result；item Schema/version；final Attempt 数值/终态；cancellation 复用 contract rule | 解锁 001G G3 M0 contract；不授权 runtime/production |
 
 精确参数、拒绝理由、残余风险接受与五方签署见
 [`12_STATE_DEC_009_010_DECISION_PACKET.md`](12_STATE_DEC_009_010_DECISION_PACKET.md)，baseline

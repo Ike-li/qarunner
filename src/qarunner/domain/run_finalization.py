@@ -66,6 +66,187 @@ class ItemAggregationClass(enum.StrEnum):
     UNKNOWN_LINEAGE = "unknown_lineage"
 
 
+class TerminalInputKind(enum.StrEnum):
+    VERIFIED_EVIDENCE = "verified_evidence"
+    VERIFIED_CANCELLATION_EVIDENCE = "verified_cancellation_evidence"
+    PRESTART_CANCEL = "prestart_cancel"
+    UNKNOWN_ADJUDICATION = "unknown_adjudication"
+
+
+class FinalizationDecisionKind(enum.StrEnum):
+    CONTRACT_RULE = "contract_rule"
+    SUITE_RETRY = "suite_retry"
+    PLATFORM_RETRY = "platform_retry"
+    UNKNOWN_ADJUDICATION = "unknown_adjudication"
+    DUPLICATE_RISK_ACCEPTANCE = "duplicate_risk_acceptance"
+
+
+@dataclass(frozen=True, slots=True)
+class ContractRuleResultRef:
+    outcome: RunOutcome
+    cancellation_intent_digest: Digest | None = None
+    cancellation_stop_digest: Digest | None = None
+    prestart_closure_digest: Digest | None = None
+
+    def __post_init__(self) -> None:
+        entity = "contract_rule_result_ref"
+        _require_optional_enum(entity, "outcome", self.outcome, RunOutcome, required=True)
+        for field in (
+            "cancellation_intent_digest",
+            "cancellation_stop_digest",
+            "prestart_closure_digest",
+        ):
+            value = getattr(self, field)
+            if value is not None:
+                _require_digest(entity, field, value)
+
+    def canonical_payload(self) -> dict[str, object]:
+        return _result_payload(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RetryDecisionResultRef:
+    retry_intent_digest: Digest
+    retry_decision_digest: Digest
+    retry_authority_digest: Digest
+    target_attempt_id: str
+    target_attempt_no: int
+    target_attempt_fence: int
+    target_item_set_digest: Digest
+
+    def __post_init__(self) -> None:
+        _require_digest(
+            "retry_decision_result_ref", "retry_intent_digest", self.retry_intent_digest
+        )
+        _require_digest(
+            "retry_decision_result_ref", "retry_decision_digest", self.retry_decision_digest
+        )
+        _require_digest(
+            "retry_decision_result_ref", "retry_authority_digest", self.retry_authority_digest
+        )
+        _require_string("retry_decision_result_ref", "target_attempt_id", self.target_attempt_id)
+        _require_positive_int(
+            "retry_decision_result_ref", "target_attempt_no", self.target_attempt_no
+        )
+        _require_positive_int(
+            "retry_decision_result_ref", "target_attempt_fence", self.target_attempt_fence
+        )
+        _require_digest(
+            "retry_decision_result_ref", "target_item_set_digest", self.target_item_set_digest
+        )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return _result_payload(self)
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownAdjudicationResultRef:
+    adjudication_digest: Digest
+    decision: UnknownAdjudicationDecision
+    evidence_root_digest: Digest | None = None
+    proof_digest: Digest | None = None
+    risk_acceptance_digest: Digest | None = None
+
+    def __post_init__(self) -> None:
+        _require_digest(self.__class__.__name__, "adjudication_digest", self.adjudication_digest)
+        if not isinstance(self.decision, UnknownAdjudicationDecision):
+            _invalid(self.__class__.__name__, "decision", "unknown")
+        for field in ("evidence_root_digest", "proof_digest", "risk_acceptance_digest"):
+            value = getattr(self, field)
+            if value is not None:
+                _require_digest(self.__class__.__name__, field, value)
+
+    def canonical_payload(self) -> dict[str, object]:
+        return _result_payload(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateRiskAcceptanceResultRef:
+    risk_acceptance_digest: Digest
+
+    def __post_init__(self) -> None:
+        _require_digest(
+            self.__class__.__name__, "risk_acceptance_digest", self.risk_acceptance_digest
+        )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return _result_payload(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RunFinalizationDecisionRef:
+    sequence: int
+    decision_kind: FinalizationDecisionKind
+    decision_schema: str
+    decision_id: str
+    decision_version: int
+    decision_digest: Digest
+    decision_result: (
+        ContractRuleResultRef
+        | RetryDecisionResultRef
+        | UnknownAdjudicationResultRef
+        | DuplicateRiskAcceptanceResultRef
+    )
+    source_attempt_id: str | None = None
+    source_attempt_no: int | None = None
+    source_attempt_fence: int | None = None
+    source_item_set_digest: Digest | None = None
+
+    def __post_init__(self) -> None:
+        entity = "run_finalization_decision_ref"
+        _require_positive_int(entity, "sequence", self.sequence)
+        _require_optional_enum(
+            entity, "decision_kind", self.decision_kind, FinalizationDecisionKind, required=True
+        )
+        _require_string(entity, "decision_schema", self.decision_schema)
+        _require_string(entity, "decision_id", self.decision_id)
+        _require_positive_int(entity, "decision_version", self.decision_version)
+        _require_digest(entity, "decision_digest", self.decision_digest)
+        expected = {
+            FinalizationDecisionKind.CONTRACT_RULE: ContractRuleResultRef,
+            FinalizationDecisionKind.SUITE_RETRY: RetryDecisionResultRef,
+            FinalizationDecisionKind.PLATFORM_RETRY: RetryDecisionResultRef,
+            FinalizationDecisionKind.UNKNOWN_ADJUDICATION: UnknownAdjudicationResultRef,
+            FinalizationDecisionKind.DUPLICATE_RISK_ACCEPTANCE: DuplicateRiskAcceptanceResultRef,
+        }
+        if not isinstance(self.decision_result, expected[self.decision_kind]):
+            _invalid(entity, "decision_result", "kind_mismatch")
+        if isinstance(self.decision_result, RetryDecisionResultRef) and (
+            self.decision_result.retry_decision_digest != self.decision_digest
+        ):
+            _invalid(entity, "decision_result", "decision_digest_mismatch")
+        fields = (
+            self.source_attempt_id,
+            self.source_attempt_no,
+            self.source_attempt_fence,
+            self.source_item_set_digest,
+        )
+        if any(value is not None for value in fields) and not all(
+            value is not None for value in fields
+        ):
+            _invalid(entity, "source_attempt", "all_or_none")
+        if all(value is not None for value in fields):
+            _require_string(entity, "source_attempt_id", self.source_attempt_id)
+            _require_positive_int(entity, "source_attempt_no", self.source_attempt_no)
+            _require_positive_int(entity, "source_attempt_fence", self.source_attempt_fence)
+            _require_digest(entity, "source_item_set_digest", self.source_item_set_digest)
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "sequence": self.sequence,
+            "decision_kind": self.decision_kind.value,
+            "decision_schema": self.decision_schema,
+            "decision_id": self.decision_id,
+            "decision_version": self.decision_version,
+            "decision_digest": self.decision_digest.value,
+            "source_attempt_id": self.source_attempt_id,
+            "source_attempt_no": self.source_attempt_no,
+            "source_attempt_fence": self.source_attempt_fence,
+            "source_item_set_digest": _digest_value(self.source_item_set_digest),
+            "decision_result": self.decision_result.canonical_payload(),
+        }
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class RunItemKey:
     manifest_id: str
@@ -334,9 +515,9 @@ class RunItemResolutionSet:
             "manifest_digest",
             "shard_plan_digest",
             "run_item_set_digest",
-            "attempt_chain_digest",
         ):
             _require_digest(entity, field, getattr(self, field))
+        _require_digest(entity, "attempt_chain_digest", self.attempt_chain_digest)
         for field in ("retry_chain_digest", "adjudication_chain_digest"):
             value = getattr(self, field)
             if value is not None:
@@ -571,6 +752,328 @@ def select_latest_authorized_complete_attempt(
 
 
 @dataclass(frozen=True, slots=True)
+class RunFinalizationBasis:
+    run_id: str
+    batch_id: str
+    source_run_version: int
+    manifest_digest: Digest
+    shard_plan_digest: Digest
+    run_item_set_digest: Digest
+    execution_spec_digest: Digest
+    original_attempt_id: str | None
+    original_attempt_fence: int | None
+    final_attempt_id: str | None
+    final_attempt_no: int | None
+    final_attempt_fence: int | None
+    final_attempt_version: int | None
+    final_attempt_state: AttemptExecutionFact | None
+    worker_id: str | None
+    worker_generation: int | None
+    attempt_chain_digest: Digest | None
+    evidence_root_digest: Digest | None
+    unknown_observation_digest: Digest | None
+    adjudication_chain_digest: Digest | None
+    retry_chain_digest: Digest | None
+    item_resolution_set_digest: Digest
+    original_resolution_set_digest: Digest
+    effective_resolution_set_digest: Digest
+    item_count: int
+    cancellation_intent_digest: Digest | None
+    cancellation_stop_digest: Digest | None
+    prestart_closure_digest: Digest | None
+    terminal_rule_schema: str
+    terminal_rule_version: int
+    terminal_rule_digest: Digest
+    decision_chain: tuple[RunFinalizationDecisionRef, ...]
+    disposition: RunDisposition
+    outcome: RunOutcome
+    terminal_input_kind: TerminalInputKind
+
+    def __post_init__(self) -> None:
+        entity = "run_finalization_basis"
+        for field in ("run_id", "batch_id", "terminal_rule_schema"):
+            _require_string(entity, field, getattr(self, field))
+        _require_nonnegative_int(entity, "source_run_version", self.source_run_version)
+        _require_positive_int(entity, "terminal_rule_version", self.terminal_rule_version)
+        _require_positive_int(entity, "item_count", self.item_count)
+        for field in (
+            "manifest_digest",
+            "shard_plan_digest",
+            "run_item_set_digest",
+            "execution_spec_digest",
+            "item_resolution_set_digest",
+            "original_resolution_set_digest",
+            "effective_resolution_set_digest",
+            "terminal_rule_digest",
+        ):
+            _require_digest(entity, field, getattr(self, field))
+        for field in (
+            "evidence_root_digest",
+            "unknown_observation_digest",
+            "adjudication_chain_digest",
+            "retry_chain_digest",
+            "cancellation_intent_digest",
+            "cancellation_stop_digest",
+            "prestart_closure_digest",
+        ):
+            value = getattr(self, field)
+            if value is not None:
+                _require_digest(entity, field, value)
+        _require_optional_enum(
+            entity, "disposition", self.disposition, RunDisposition, required=True
+        )
+        _require_optional_enum(entity, "outcome", self.outcome, RunOutcome, required=True)
+        _require_optional_enum(
+            entity,
+            "terminal_input_kind",
+            self.terminal_input_kind,
+            TerminalInputKind,
+            required=True,
+        )
+        if self.disposition is not RunDisposition.CLOSED_NO_RETRY:
+            _invalid(entity, "disposition", "basis_requires_closed_no_retry")
+        self._validate_decisions(entity)
+        self._validate_input_kind(entity)
+
+    @staticmethod
+    def decision_ref(**values: object) -> RunFinalizationDecisionRef:
+        return RunFinalizationDecisionRef(**values)  # type: ignore[arg-type]
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        resolution_set: RunItemResolutionSet,
+        manifest_digest: Digest,
+        shard_plan_digest: Digest,
+        run_item_set_digest: Digest,
+        source_run_version: int,
+        **values: object,
+    ) -> RunFinalizationBasis:
+        if not isinstance(resolution_set, RunItemResolutionSet):
+            _invalid("run_finalization_basis", "resolution_set", "invalid")
+        expected = (
+            resolution_set.manifest_digest,
+            resolution_set.shard_plan_digest,
+            resolution_set.run_item_set_digest,
+            resolution_set.source_run_version,
+        )
+        if (
+            manifest_digest,
+            shard_plan_digest,
+            run_item_set_digest,
+            source_run_version,
+        ) != expected:
+            _invalid("run_finalization_basis", "resolution_set", "envelope_mismatch")
+        return cls(
+            run_id=resolution_set.run_id,
+            batch_id=resolution_set.batch_id,
+            source_run_version=source_run_version,
+            manifest_digest=manifest_digest,
+            shard_plan_digest=shard_plan_digest,
+            run_item_set_digest=run_item_set_digest,
+            attempt_chain_digest=(
+                None
+                if values.get("terminal_input_kind") is TerminalInputKind.PRESTART_CANCEL
+                else resolution_set.attempt_chain_digest
+            ),
+            retry_chain_digest=resolution_set.retry_chain_digest,
+            adjudication_chain_digest=resolution_set.adjudication_chain_digest,
+            item_resolution_set_digest=resolution_set.resolution_set_digest,
+            original_resolution_set_digest=resolution_set.original_resolution_set_digest,
+            effective_resolution_set_digest=resolution_set.effective_resolution_set_digest,
+            item_count=resolution_set.item_count,
+            **values,
+        )
+
+    def _validate_decisions(self, entity: str) -> None:
+        if not isinstance(self.decision_chain, tuple) or any(
+            not isinstance(ref, RunFinalizationDecisionRef) for ref in self.decision_chain
+        ):
+            _invalid(entity, "decision_chain", "invalid")
+        if tuple(ref.sequence for ref in self.decision_chain) != tuple(
+            range(1, len(self.decision_chain) + 1)
+        ):
+            _invalid(entity, "decision_chain", "non_contiguous")
+        if not any(
+            ref.decision_kind is FinalizationDecisionKind.CONTRACT_RULE
+            for ref in self.decision_chain
+        ):
+            _invalid(entity, "decision_chain", "contract_rule_required")
+        self._validate_retry_decisions(entity)
+
+    def _validate_retry_decisions(self, entity: str) -> None:
+        retries = [
+            ref
+            for ref in self.decision_chain
+            if ref.decision_kind
+            in {FinalizationDecisionKind.SUITE_RETRY, FinalizationDecisionKind.PLATFORM_RETRY}
+        ]
+        previous_target: RetryDecisionResultRef | None = None
+        for ref in retries:
+            result = ref.decision_result
+            assert isinstance(result, RetryDecisionResultRef)
+            if ref.source_attempt_id is None:
+                _invalid(entity, "decision_chain", "retry_source_required")
+            if (
+                result.target_attempt_no != ref.source_attempt_no + 1
+                or result.target_attempt_fence <= ref.source_attempt_fence
+                or result.target_item_set_digest != ref.source_item_set_digest
+            ):
+                _invalid(entity, "decision_chain", "retry_target_discontinuous")
+            if previous_target is not None and (
+                ref.source_attempt_id != previous_target.target_attempt_id
+                or ref.source_attempt_no != previous_target.target_attempt_no
+                or ref.source_attempt_fence != previous_target.target_attempt_fence
+                or ref.source_item_set_digest != previous_target.target_item_set_digest
+            ):
+                _invalid(entity, "decision_chain", "retry_source_discontinuous")
+            previous_target = result
+        if retries:
+            first = retries[0]
+            last = previous_target
+            assert last is not None
+            if (
+                first.source_attempt_id != self.original_attempt_id
+                or first.source_attempt_fence != self.original_attempt_fence
+                or last.target_attempt_id != self.final_attempt_id
+                or last.target_attempt_no != self.final_attempt_no
+                or last.target_attempt_fence != self.final_attempt_fence
+                or last.target_item_set_digest != self.run_item_set_digest
+            ):
+                _invalid(entity, "decision_chain", "retry_basis_mismatch")
+
+    def _validate_input_kind(self, entity: str) -> None:
+        attempt_fields = (
+            "original_attempt_id",
+            "original_attempt_fence",
+            "final_attempt_id",
+            "final_attempt_no",
+            "final_attempt_fence",
+            "final_attempt_version",
+            "final_attempt_state",
+            "worker_id",
+            "worker_generation",
+        )
+        if self.terminal_input_kind is TerminalInputKind.PRESTART_CANCEL:
+            _forbid_present(
+                entity, self, *attempt_fields, "attempt_chain_digest", "evidence_root_digest"
+            )
+            for field in ("cancellation_intent_digest", "prestart_closure_digest"):
+                _require_digest(entity, field, getattr(self, field))
+            if self.cancellation_stop_digest is not None:
+                _invalid(entity, "cancellation_stop_digest", "forbidden")
+            if self.outcome is not RunOutcome.CANCELLED:
+                _invalid(entity, "outcome", "prestart_requires_cancelled")
+            return
+        _require_digest(entity, "attempt_chain_digest", self.attempt_chain_digest)
+        for field in ("original_attempt_id", "final_attempt_id", "worker_id"):
+            _require_string(entity, field, getattr(self, field))
+        for field in (
+            "original_attempt_fence",
+            "final_attempt_no",
+            "final_attempt_fence",
+            "worker_generation",
+        ):
+            _require_positive_int(entity, field, getattr(self, field))
+        _require_nonnegative_int(entity, "final_attempt_version", self.final_attempt_version)
+        _require_optional_enum(
+            entity,
+            "final_attempt_state",
+            self.final_attempt_state,
+            AttemptExecutionFact,
+            required=True,
+        )
+        if self.prestart_closure_digest is not None:
+            _invalid(entity, "prestart_closure_digest", "forbidden")
+        if self.terminal_input_kind is TerminalInputKind.VERIFIED_CANCELLATION_EVIDENCE:
+            if self.final_attempt_state is not AttemptExecutionFact.CANCELLED:
+                _invalid(entity, "final_attempt_state", "cancellation_requires_cancelled")
+            for field in (
+                "evidence_root_digest",
+                "cancellation_intent_digest",
+                "cancellation_stop_digest",
+            ):
+                _require_digest(entity, field, getattr(self, field))
+            if self.outcome is not RunOutcome.CANCELLED:
+                _invalid(entity, "outcome", "cancellation_requires_cancelled")
+            self._validate_cancel_rule(entity)
+        elif self.terminal_input_kind is TerminalInputKind.UNKNOWN_ADJUDICATION:
+            if self.final_attempt_state is not AttemptExecutionFact.ATTEMPT_UNKNOWN:
+                _invalid(entity, "final_attempt_state", "unknown_required")
+            for field in ("unknown_observation_digest", "adjudication_chain_digest"):
+                _require_digest(entity, field, getattr(self, field))
+            refs = [
+                ref.decision_result
+                for ref in self.decision_chain
+                if ref.decision_kind is FinalizationDecisionKind.UNKNOWN_ADJUDICATION
+            ]
+            if len(refs) != 1:
+                _invalid(entity, "decision_chain", "unknown_adjudication_required")
+            result = refs[0]
+            assert isinstance(result, UnknownAdjudicationResultRef)
+            if result.decision is UnknownAdjudicationDecision.MARK_INFRA_FAILED_NO_RETRY:
+                if (
+                    self.outcome is not RunOutcome.INFRA_FAILED
+                    or self.evidence_root_digest is not None
+                ):
+                    _invalid(entity, "outcome", "infra_adjudication_matrix")
+            elif (
+                result.decision
+                is UnknownAdjudicationDecision.MARK_COMPLETED_FROM_VERIFIED_EVIDENCE
+            ):
+                _require_digest(entity, "evidence_root_digest", self.evidence_root_digest)
+                if result.evidence_root_digest != self.evidence_root_digest:
+                    _invalid(entity, "evidence_root_digest", "adjudication_mismatch")
+            else:
+                _invalid(entity, "decision_result", "retry_cannot_close_unknown")
+        else:
+            if self.final_attempt_state is AttemptExecutionFact.ATTEMPT_UNKNOWN:
+                _invalid(entity, "final_attempt_state", "unresolved_unknown")
+            _require_digest(entity, "evidence_root_digest", self.evidence_root_digest)
+            if self.outcome.value != self.final_attempt_state.value:
+                _invalid(entity, "outcome", "attempt_state_mismatch")
+
+    def _validate_cancel_rule(self, entity: str) -> None:
+        rules = [
+            ref.decision_result
+            for ref in self.decision_chain
+            if ref.decision_kind is FinalizationDecisionKind.CONTRACT_RULE
+        ]
+        if not any(
+            isinstance(rule, ContractRuleResultRef)
+            and rule.cancellation_intent_digest == self.cancellation_intent_digest
+            and rule.cancellation_stop_digest == self.cancellation_stop_digest
+            for rule in rules
+        ):
+            _invalid(entity, "decision_chain", "cancellation_rule_mismatch")
+
+    def canonical_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"schema_version": "qep.run-finalization-basis.v1"}
+        for field in self.__dataclass_fields__:
+            value = getattr(self, field)
+            if isinstance(value, (Digest, enum.StrEnum)):
+                payload[field] = value.value
+            elif isinstance(value, tuple):
+                payload[field] = [item.canonical_payload() for item in value]
+            else:
+                payload[field] = value
+        payload["item_resolution_schema"] = "qep.run-item-resolution-set"
+        payload["item_resolution_version"] = 1
+        payload["decision_chain_digest"] = canonical_digest(
+            schema_version="qep.run-finalization-decision-chain.v1",
+            payload={"decisions": payload["decision_chain"]},
+        ).value
+        return payload
+
+    @property
+    def basis_digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.run-finalization-basis.v1", payload=self.canonical_payload()
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RunFinalizationState:
     """Pure v1 cross-field projection without changing the legacy Run writer."""
 
@@ -729,6 +1232,14 @@ def _validate_fact_and_mapping(value: object, entity: str) -> None:
 
 def _digest_value(value: Digest | None) -> str | None:
     return None if value is None else value.value
+
+
+def _result_payload(value: object) -> dict[str, object]:
+    return {
+        field: (item.value if isinstance(item, (Digest, enum.StrEnum)) else item)
+        for field in value.__dataclass_fields__
+        for item in (getattr(value, field),)
+    }
 
 
 def _resolution_payload(value: object, *, execution_field: str) -> dict[str, object]:
