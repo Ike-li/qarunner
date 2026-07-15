@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 from qarunner.application.handoff import BatchMaterializedScopeHandoff
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
+    AuthorityProjectionStamp,
     AuthorityProjectionUnavailable,
+    AuthorityStateConflict,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
     BatchClosureAuthority,
@@ -34,11 +36,19 @@ class InMemoryBatchPreexecutionGateway:
         authority_available: bool = True,
         authority_allowed: bool = True,
         publication_error: Exception | None = None,
+        current_closure_epoch: int = 1,
+        current_rejection_epoch: int = 1,
+        authority_checked_at: datetime = datetime(2026, 7, 15, 6, tzinfo=UTC),
+        authority_expires_at: datetime = datetime(2026, 7, 16, 6, tzinfo=UTC),
     ) -> None:
         self.batch = batch
         self.authority_available = authority_available
         self.authority_allowed = authority_allowed
         self.publication_error = publication_error
+        self.current_closure_epoch = current_closure_epoch
+        self.current_rejection_epoch = current_rejection_epoch
+        self.authority_checked_at = authority_checked_at
+        self.authority_expires_at = authority_expires_at
         self.authority_checks = 0
         self.closure_authority_checks = 0
         self.rejection_authority_checks = 0
@@ -117,18 +127,48 @@ class InMemoryBatchPreexecutionGateway:
         batch_id: str,
         reconciler_id: str,
         closure_epoch: int,
+        project_id: str,
+        suite_revision_id: str,
+        source_batch_version: int,
     ) -> BatchClosureAuthority:
         self.closure_authority_checks += 1
         if not self.authority_available:
             raise AuthorityProjectionUnavailable
+        if self.authority_expires_at <= self.authority_checked_at:
+            raise AuthorityProjectionUnavailable
         if not self.authority_allowed:
             raise AuthorityPermissionDenied
+        if closure_epoch != self.current_closure_epoch:
+            raise AuthorityStateConflict(reason="closure_epoch_superseded")
+        intent = self.batch.cancellation_intent
+        if intent is not None and (
+            project_id != intent.project_id
+            or suite_revision_id != intent.suite_revision_id
+            or source_batch_version != intent.source_batch_version + 1
+        ):
+            raise AuthorityStateConflict(reason="source_binding_superseded")
+        projection = self._projection_stamp()
         return BatchClosureAuthority(
+            project_id="project-001" if intent is None else intent.project_id,
+            suite_revision_id=(
+                self._authority.suite_revision_id if intent is None else intent.suite_revision_id
+            ),
+            source_batch_version=(
+                source_batch_version if intent is None else intent.source_batch_version + 1
+            ),
             authority_digest=canonical_digest(
                 schema_version="qep.test-closure-authority.v1",
-                payload={"batch_id": batch_id, "reconciler_id": reconciler_id},
+                payload={
+                    "batch_id": batch_id,
+                    "reconciler_id": reconciler_id,
+                    "projection_version": projection.projection_version,
+                    "revocation_watermark": projection.revocation_watermark,
+                    "write_epoch": self.current_closure_epoch,
+                },
             ),
-            write_epoch=closure_epoch,
+            scope=self._authority.scope if intent is None else intent.scope,
+            projection=projection,
+            write_epoch=self.current_closure_epoch,
         )
 
     async def publish_materialized_handoff(
@@ -158,21 +198,49 @@ class InMemoryBatchPreexecutionGateway:
         batch_id: str,
         phase_owner_id: str,
         rejection_epoch: int,
+        source_batch_version: int,
     ) -> BatchRejectionAuthority:
         self.rejection_authority_checks += 1
         if not self.authority_available:
             raise AuthorityProjectionUnavailable
+        if self.authority_expires_at <= self.authority_checked_at:
+            raise AuthorityProjectionUnavailable
         if not self.authority_allowed:
             raise AuthorityPermissionDenied
+        if rejection_epoch != self.current_rejection_epoch:
+            raise AuthorityStateConflict(reason="phase_epoch_superseded")
+        current_source_version = (
+            self.batch.version
+            if self.batch.rejection_fact is None
+            else self.batch.rejection_fact.source_batch_version
+        )
+        if source_batch_version != current_source_version:
+            raise AuthorityStateConflict(reason="source_binding_superseded")
+        projection = self._projection_stamp()
         return BatchRejectionAuthority(
             project_id="project-001",
             suite_revision_id=self._authority.suite_revision_id,
             authority_digest=canonical_digest(
                 schema_version="qep.test-rejection-authority.v1",
-                payload={"batch_id": batch_id, "phase_owner_id": phase_owner_id},
+                payload={
+                    "batch_id": batch_id,
+                    "phase_owner_id": phase_owner_id,
+                    "projection_version": projection.projection_version,
+                    "revocation_watermark": projection.revocation_watermark,
+                    "write_epoch": self.current_rejection_epoch,
+                },
             ),
             scope=self._authority.scope,
-            write_epoch=rejection_epoch,
+            projection=projection,
+            write_epoch=self.current_rejection_epoch,
+        )
+
+    def _projection_stamp(self) -> AuthorityProjectionStamp:
+        return AuthorityProjectionStamp(
+            source="local-authority-projection",
+            projection_version=7,
+            revocation_watermark=11,
+            expires_at=self.authority_expires_at,
         )
 
     async def publish_preexecution_closure(self, *, batch: Batch) -> None:

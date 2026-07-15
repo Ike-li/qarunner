@@ -127,6 +127,39 @@ async def test_rejection_authority_denied_fails_before_batch_read() -> None:
 
 
 @pytest.mark.asyncio
+async def test_superseded_rejection_epoch_returns_state_conflict_before_batch_read() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    batch, rejection = _batch_and_rejection()
+    state = InMemoryBatchPreexecutionGateway(batch=batch, current_rejection_epoch=2)
+
+    with pytest.raises(PreexecutionStateConflict) as captured:
+        await RecordPreexecutionRejection(
+            gateway=state,
+            proof=ProvePreexecutionClosure(
+                gateway=InMemoryPreexecutionProofGateway(inventory_sealed=True)
+            ),
+        ).execute(
+            RecordPreexecutionRejectionCommand(
+                rejection=rejection,
+                phase_owner_id="coordinator-001",
+                rejection_epoch=1,
+            )
+        )
+
+    assert captured.value.reason == "phase_epoch_superseded"
+    assert state.batch_reads == 0
+
+
+@pytest.mark.asyncio
 async def test_zero_child_rejection_atomically_closes_batch_and_exact_replays() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway

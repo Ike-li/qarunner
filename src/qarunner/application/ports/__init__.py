@@ -3,7 +3,9 @@
 from qarunner.application.ports.audit import AuditLog, AuditRecord
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
+    AuthorityProjectionStamp,
     AuthorityProjectionUnavailable,
+    AuthorityStateConflict,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
     BatchClosureAuthority,
@@ -63,6 +65,8 @@ __all__ = [
     "AttemptEventLog",
     "AuthorityPermissionDenied",
     "AuthorityProjectionUnavailable",
+    "AuthorityProjectionStamp",
+    "AuthorityStateConflict",
     "AuditLog",
     "AuditRecord",
     "BatchCancellationAuthority",

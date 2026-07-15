@@ -8,6 +8,7 @@ from qarunner.application.handoff import build_cancel_handoff, build_rejection_c
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
     AuthorityProjectionUnavailable,
+    AuthorityStateConflict,
     BatchPreexecutionGateway,
 )
 from qarunner.application.preexecution_proof import (
@@ -41,6 +42,18 @@ class ObjectForbidden(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("the operation is forbidden")
+
+
+class PreexecutionStateConflict(RuntimeError):
+    """Safe internal problem for superseded phase or reconciler authority."""
+
+    code = "STATE_CONFLICT"
+    retryable = False
+    http_status = 409
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__("the operation conflicts with current pre-execution authority")
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,18 +174,23 @@ class ReconcilePreexecutionCancellation:
                 batch_id=command.batch_id,
                 reconciler_id=command.reconciler_id,
                 closure_epoch=command.closure_epoch,
+                project_id=command.project_id,
+                suite_revision_id=command.suite_revision_id,
+                source_batch_version=command.expected_batch_version,
             )
         except AuthorityProjectionUnavailable:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
             raise ObjectForbidden() from None
+        except AuthorityStateConflict as error:
+            raise PreexecutionStateConflict(reason=error.reason) from None
         batch = await self._gateway.get_batch_for_update(batch_id=command.batch_id)
         proof = await self._proof.execute(
             ProvePreexecutionClosureCommand(
                 batch_id=command.batch_id,
-                project_id=command.project_id,
-                suite_revision_id=command.suite_revision_id,
-                source_batch_version=command.expected_batch_version,
+                project_id=authority.project_id,
+                suite_revision_id=authority.suite_revision_id,
+                source_batch_version=authority.source_batch_version,
             )
         )
         if isinstance(proof, MaterializedExecutionScope):
@@ -232,11 +250,14 @@ class RecordPreexecutionRejection:
                 batch_id=command.rejection.batch_id,
                 phase_owner_id=command.phase_owner_id,
                 rejection_epoch=command.rejection_epoch,
+                source_batch_version=command.rejection.source_batch_version,
             )
         except AuthorityProjectionUnavailable:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
             raise ObjectForbidden() from None
+        except AuthorityStateConflict as error:
+            raise PreexecutionStateConflict(reason=error.reason) from None
         batch = await self._gateway.get_batch_for_update(batch_id=command.rejection.batch_id)
         stored = batch.rejection_fact
         if stored is not None and stored.rejection_id == command.rejection.rejection_id:

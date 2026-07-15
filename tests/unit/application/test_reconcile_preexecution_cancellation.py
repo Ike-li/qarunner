@@ -330,6 +330,122 @@ async def test_closure_authority_failure_precedes_batch_read_proof_and_replay(
     assert state.handoffs == {}
 
 
+@pytest.mark.asyncio
+async def test_superseded_closure_epoch_returns_state_conflict_before_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, intent = _requested_batch()
+    state = InMemoryBatchPreexecutionGateway(batch=requested, current_closure_epoch=2)
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=False,
+        run_ids=("run-001",),
+    )
+
+    with pytest.raises(PreexecutionStateConflict) as captured:
+        await ReconcilePreexecutionCancellation(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id=intent.project_id,
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert captured.value.reason == "closure_epoch_superseded"
+    assert captured.value.http_status == 409
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_authority_projection_fails_closed_without_freezing_a_max_age() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+        TemporarilyUnavailable,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, intent = _requested_batch()
+    expired_at = datetime(2026, 7, 15, 6, tzinfo=UTC)
+    state = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        authority_checked_at=expired_at,
+        authority_expires_at=expired_at,
+    )
+
+    with pytest.raises(TemporarilyUnavailable):
+        await ReconcilePreexecutionCancellation(
+            gateway=state,
+            proof=ProvePreexecutionClosure(
+                gateway=InMemoryPreexecutionProofGateway(inventory_sealed=True)
+            ),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id=intent.project_id,
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert state.batch_reads == 0
+
+
+@pytest.mark.asyncio
+async def test_closure_source_binding_drift_returns_state_conflict_before_proof() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, intent = _requested_batch()
+    state = InMemoryBatchPreexecutionGateway(batch=requested)
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as captured:
+        await ReconcilePreexecutionCancellation(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id="foreign-project",
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert captured.value.reason == "source_binding_superseded"
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+
+
 def _requested_batch():
     from qarunner.domain import (
         Batch,

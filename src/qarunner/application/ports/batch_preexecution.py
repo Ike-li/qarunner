@@ -19,6 +19,14 @@ class AuthorityPermissionDenied(RuntimeError):
     """The current caller has no permission on the requested object."""
 
 
+class AuthorityStateConflict(RuntimeError):
+    """The requested phase/reconciler authority is no longer current."""
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 @dataclass(frozen=True, slots=True)
 class BatchCancellationAuthority:
     """Server-derived facts required to materialize a cancellation intent."""
@@ -44,6 +52,16 @@ class BatchClosureSideEffect:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthorityProjectionStamp:
+    """Current local projection position; maximum freshness window remains policy-owned."""
+
+    source: str
+    projection_version: int
+    revocation_watermark: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class BatchRejectionSideEffect:
     batch_id: str
     rejection_digest: Digest
@@ -52,7 +70,12 @@ class BatchRejectionSideEffect:
 
 @dataclass(frozen=True, slots=True)
 class BatchClosureAuthority:
+    project_id: str
+    suite_revision_id: str
+    source_batch_version: int
     authority_digest: Digest
+    scope: BatchCancellationScope
+    projection: AuthorityProjectionStamp
     write_epoch: int
 
 
@@ -64,6 +87,7 @@ class BatchRejectionAuthority:
     suite_revision_id: str
     authority_digest: Digest
     scope: BatchCancellationScope
+    projection: AuthorityProjectionStamp
     write_epoch: int
 
 
@@ -88,6 +112,9 @@ class BatchPreexecutionGateway(Protocol):
         batch_id: str,
         reconciler_id: str,
         closure_epoch: int,
+        project_id: str,
+        suite_revision_id: str,
+        source_batch_version: int,
     ) -> BatchClosureAuthority: ...
 
     async def require_rejection_authority(
@@ -96,6 +123,7 @@ class BatchPreexecutionGateway(Protocol):
         batch_id: str,
         phase_owner_id: str,
         rejection_epoch: int,
+        source_batch_version: int,
     ) -> BatchRejectionAuthority: ...
 
     async def publish_materialized_handoff(
