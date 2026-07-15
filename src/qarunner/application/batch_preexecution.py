@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from qarunner.application.handoff import build_cancel_handoff
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
     AuthorityProjectionUnavailable,
@@ -154,7 +155,7 @@ class ReconcilePreexecutionCancellation:
         self._proof = proof
 
     async def execute(self, command: ReconcilePreexecutionCancellationCommand):
-        await self._gateway.require_closure_authority(
+        authority = await self._gateway.require_closure_authority(
             batch_id=command.batch_id,
             reconciler_id=command.reconciler_id,
             closure_epoch=command.closure_epoch,
@@ -169,7 +170,18 @@ class ReconcilePreexecutionCancellation:
             )
         )
         if isinstance(proof, MaterializedExecutionScope):
-            return proof
+            intent = batch.cancellation_intent
+            if intent is None:
+                raise RuntimeError("materialized cancellation reconciliation requires intent")
+            handoff = build_cancel_handoff(
+                intent=intent,
+                source_batch_version=command.expected_batch_version,
+                authoritative_run_set_digest=proof.authoritative_run_set_digest,
+                authority_digest=authority.authority_digest,
+                write_epoch=authority.write_epoch,
+            )
+            published = await self._gateway.publish_materialized_handoff(handoff=handoff)
+            return published.value
         closed = batch.finalize_unmaterialized_cancel(
             snapshot=proof,
             expected_version=command.expected_batch_version,

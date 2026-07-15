@@ -6,6 +6,7 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionUnavailable,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
+    BatchClosureAuthority,
     BatchClosureSideEffect,
     BatchPreexecutionGateway,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "BatchCancellationAuthority",
     "BatchCancellationSideEffect",
     "BatchClosureSideEffect",
+    "BatchClosureAuthority",
     "BatchPreexecutionGateway",
     "EvidenceManifestIndex",
     "EvidenceVerificationRequest",

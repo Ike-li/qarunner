@@ -68,6 +68,10 @@ class InMemoryPreexecutionProofGateway:
         self.snapshot_assemblies = 0
         self.published_snapshots: tuple[object, ...] = ()
         self.quarantined_batches: tuple[str, ...] = ()
+        self.materialized_run_set_digest = canonical_digest(
+            schema_version="qep.authoritative-materialized-run-set.v1",
+            payload={"batch_id": "batch-001", "run_ids": list(sorted(run_ids))},
+        )
 
     async def scan_execution_children(self, *, batch_id: str) -> ExecutionChildInventory:
         del batch_id

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from qarunner.application.handoff import BatchMaterializedScopeHandoff
+from qarunner.application.ports.common import ReplayResult
 from qarunner.domain.batch import Batch
 from qarunner.domain.cancellation import BatchCancellationIntent, BatchCancellationScope
 from qarunner.domain.digest import Digest
@@ -41,6 +43,12 @@ class BatchClosureSideEffect:
     basis_digest: Digest
 
 
+@dataclass(frozen=True, slots=True)
+class BatchClosureAuthority:
+    authority_digest: Digest
+    write_epoch: int
+
+
 @runtime_checkable
 class BatchPreexecutionGateway(Protocol):
     """Narrow authority and persistence boundary for pre-execution Batch work."""
@@ -62,6 +70,10 @@ class BatchPreexecutionGateway(Protocol):
         batch_id: str,
         reconciler_id: str,
         closure_epoch: int,
-    ) -> None: ...
+    ) -> BatchClosureAuthority: ...
+
+    async def publish_materialized_handoff(
+        self, *, handoff: BatchMaterializedScopeHandoff
+    ) -> ReplayResult[BatchMaterializedScopeHandoff]: ...
 
     async def publish_preexecution_closure(self, *, batch: Batch) -> None: ...

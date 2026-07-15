@@ -8,6 +8,7 @@ from qarunner.application.ports.preexecution_proof import (
     canonical_task_set_digest,
 )
 from qarunner.domain.batch import BatchPreexecutionSnapshot
+from qarunner.domain.digest import Digest, canonical_digest
 
 
 class ClosureNotReady(RuntimeError):
@@ -44,6 +45,7 @@ class MaterializedExecutionScope:
 
     batch_id: str
     run_ids: tuple[str, ...]
+    authoritative_run_set_digest: Digest
 
 
 class ProvePreexecutionClosure:
@@ -69,9 +71,14 @@ class ProvePreexecutionClosure:
             await self._gateway.quarantine_integrity_failure(batch_id=command.batch_id)
             raise IntegrityFailure
         if children.run_ids:
+            run_ids = tuple(sorted(children.run_ids))
             return MaterializedExecutionScope(
                 batch_id=command.batch_id,
-                run_ids=children.run_ids,
+                run_ids=run_ids,
+                authoritative_run_set_digest=canonical_digest(
+                    schema_version="qep.authoritative-materialized-run-set.v1",
+                    payload={"batch_id": command.batch_id, "run_ids": list(run_ids)},
+                ),
             )
         inventory = await self._gateway.read_sealed_task_inventory(batch_id=command.batch_id)
         if inventory is None:

@@ -100,7 +100,7 @@ async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> 
 
 
 @pytest.mark.asyncio
-async def test_materialized_scope_returns_handoff_input_without_closing_batch() -> None:
+async def test_materialized_scope_publishes_one_deterministic_handoff_without_closure() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
 
@@ -108,10 +108,8 @@ async def test_materialized_scope_returns_handoff_input_without_closing_batch() 
         ReconcilePreexecutionCancellation,
         ReconcilePreexecutionCancellationCommand,
     )
-    from qarunner.application.preexecution_proof import (
-        MaterializedExecutionScope,
-        ProvePreexecutionClosure,
-    )
+    from qarunner.application.handoff import BatchMaterializedScopeHandoff
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
 
     requested, intent = _requested_batch()
     state = InMemoryBatchPreexecutionGateway(batch=requested)
@@ -120,24 +118,164 @@ async def test_materialized_scope_returns_handoff_input_without_closing_batch() 
         run_ids=("run-001",),
     )
 
-    result = await ReconcilePreexecutionCancellation(
+    handler = ReconcilePreexecutionCancellation(
         gateway=state,
         proof=ProvePreexecutionClosure(gateway=proof_gateway),
-    ).execute(
-        ReconcilePreexecutionCancellationCommand(
-            batch_id=requested.id,
-            project_id=intent.project_id,
-            suite_revision_id=intent.suite_revision_id,
-            expected_batch_version=requested.version,
-            reconciler_id="reconciler-001",
-            closure_epoch=1,
-        )
+    )
+    command = ReconcilePreexecutionCancellationCommand(
+        batch_id=requested.id,
+        project_id=intent.project_id,
+        suite_revision_id=intent.suite_revision_id,
+        expected_batch_version=requested.version,
+        reconciler_id="reconciler-001",
+        closure_epoch=1,
     )
 
-    assert isinstance(result, MaterializedExecutionScope)
-    assert result.run_ids == ("run-001",)
+    result = await handler.execute(command)
+    replay = await handler.execute(command)
+
+    assert isinstance(result, BatchMaterializedScopeHandoff)
+    assert replay is result
+    assert result.schema_version == "qep.batch-materialized-scope-handoff.v1"
+    assert result.trigger_kind.value == "cancel_intent"
+    assert result.destination == "execution_path"
+    assert result.authoritative_run_set_digest == proof_gateway.materialized_run_set_digest
+    assert result.handoff_id.startswith("handoff-")
+    assert result.event_id.startswith("handoff-event-")
     assert state.batch is requested
     assert state.batch.preexecution_closure_basis is None
+    assert len(state.audit_records) == 1
+    assert len(state.semantic_outbox) == 1
+    assert state.semantic_outbox[0].event_id == result.event_id
+    assert state.run_resolutions == ()
+    assert state.fanout_results == ()
+    assert state.not_executed_facts == ()
+    assert state.run_outcomes == ()
+
+
+@pytest.mark.asyncio
+async def test_materialized_scope_without_cancellation_intent_is_rejected() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+    from qarunner.domain import Batch, BatchState
+
+    batch = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    state = InMemoryBatchPreexecutionGateway(batch=batch)
+    handler = ReconcilePreexecutionCancellation(
+        gateway=state,
+        proof=ProvePreexecutionClosure(
+            gateway=InMemoryPreexecutionProofGateway(
+                inventory_sealed=False,
+                run_ids=("run-001",),
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="requires intent"):
+        await handler.execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=batch.id,
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                expected_batch_version=batch.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert state.handoffs == {}
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_binding_drift_is_quarantined_without_second_event() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+    from qarunner.domain.errors import IdempotencyConflict
+
+    requested, intent = _requested_batch()
+    state = InMemoryBatchPreexecutionGateway(batch=requested)
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=False,
+        run_ids=("run-001",),
+    )
+    handler = ReconcilePreexecutionCancellation(
+        gateway=state,
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
+    )
+    command = ReconcilePreexecutionCancellationCommand(
+        batch_id=requested.id,
+        project_id=intent.project_id,
+        suite_revision_id=intent.suite_revision_id,
+        expected_batch_version=requested.version,
+        reconciler_id="reconciler-001",
+        closure_epoch=1,
+    )
+    await handler.execute(command)
+    proof_gateway.run_ids = ("run-001", "run-002")
+
+    with pytest.raises(IdempotencyConflict):
+        await handler.execute(command)
+
+    assert len(state.handoffs) == 1
+    assert len(state.audit_records) == 1
+    assert len(state.semantic_outbox) == 1
+    assert len(state.quarantined_handoffs) == 1
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_publication_failure_is_atomic() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, intent = _requested_batch()
+    state = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        publication_error=RuntimeError("transaction failed"),
+    )
+    handler = ReconcilePreexecutionCancellation(
+        gateway=state,
+        proof=ProvePreexecutionClosure(
+            gateway=InMemoryPreexecutionProofGateway(
+                inventory_sealed=False,
+                run_ids=("run-001",),
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="transaction failed"):
+        await handler.execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id=intent.project_id,
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert state.batch is requested
+    assert state.handoffs == {}
     assert state.audit_records == ()
     assert state.semantic_outbox == ()
 

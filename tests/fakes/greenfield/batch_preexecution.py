@@ -2,20 +2,24 @@
 
 from datetime import UTC, datetime
 
+from qarunner.application.handoff import BatchMaterializedScopeHandoff
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
     AuthorityProjectionUnavailable,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
+    BatchClosureAuthority,
     BatchClosureSideEffect,
 )
+from qarunner.application.ports.common import ReplayResult
 from qarunner.domain.batch import Batch
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationScope,
     BatchCancellationScopeKind,
 )
-from qarunner.domain.digest import canonical_digest
+from qarunner.domain.digest import Digest, canonical_digest
+from qarunner.domain.errors import IdempotencyConflict
 
 
 class InMemoryBatchPreexecutionGateway:
@@ -36,8 +40,20 @@ class InMemoryBatchPreexecutionGateway:
         self.authority_checks = 0
         self.closure_authority_checks = 0
         self.batch_reads = 0
-        self.audit_records: tuple[BatchCancellationSideEffect | BatchClosureSideEffect, ...] = ()
-        self.semantic_outbox: tuple[BatchCancellationSideEffect | BatchClosureSideEffect, ...] = ()
+        self.audit_records: tuple[
+            BatchCancellationSideEffect | BatchClosureSideEffect | BatchMaterializedScopeHandoff,
+            ...,
+        ] = ()
+        self.semantic_outbox: tuple[
+            BatchCancellationSideEffect | BatchClosureSideEffect | BatchMaterializedScopeHandoff,
+            ...,
+        ] = ()
+        self.handoffs: dict[Digest, BatchMaterializedScopeHandoff] = {}
+        self.run_resolutions: tuple[object, ...] = ()
+        self.fanout_results: tuple[object, ...] = ()
+        self.not_executed_facts: tuple[object, ...] = ()
+        self.run_outcomes: tuple[object, ...] = ()
+        self.quarantined_handoffs: tuple[Digest, ...] = ()
         self._authority = BatchCancellationAuthority(
             suite_revision_id="suite-revision-001",
             authorization_digest=canonical_digest(
@@ -92,9 +108,36 @@ class InMemoryBatchPreexecutionGateway:
         batch_id: str,
         reconciler_id: str,
         closure_epoch: int,
-    ) -> None:
-        del batch_id, reconciler_id, closure_epoch
+    ) -> BatchClosureAuthority:
         self.closure_authority_checks += 1
+        return BatchClosureAuthority(
+            authority_digest=canonical_digest(
+                schema_version="qep.test-closure-authority.v1",
+                payload={"batch_id": batch_id, "reconciler_id": reconciler_id},
+            ),
+            write_epoch=closure_epoch,
+        )
+
+    async def publish_materialized_handoff(
+        self, *, handoff: BatchMaterializedScopeHandoff
+    ) -> ReplayResult[BatchMaterializedScopeHandoff]:
+        stored = self.handoffs.get(handoff.semantic_trigger_key)
+        if stored is not None:
+            if stored.handoff_digest != handoff.handoff_digest:
+                self.quarantined_handoffs += (handoff.semantic_trigger_key,)
+                raise IdempotencyConflict(
+                    scope=f"batch:{handoff.batch_id}:materialized_handoff",
+                    key=handoff.semantic_trigger_key.value,
+                    stored_digest=stored.handoff_digest,
+                    received_digest=handoff.handoff_digest,
+                )
+            return ReplayResult(value=stored, replayed=True)
+        if self.publication_error is not None:
+            raise self.publication_error
+        self.handoffs[handoff.semantic_trigger_key] = handoff
+        self.audit_records += (handoff,)
+        self.semantic_outbox += (handoff,)
+        return ReplayResult(value=handoff, replayed=False)
 
     async def publish_preexecution_closure(self, *, batch: Batch) -> None:
         assert batch.preexecution_closure_basis is not None
