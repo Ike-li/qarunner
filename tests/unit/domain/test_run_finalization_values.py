@@ -22,7 +22,7 @@ def _state(**changes: object):
         "disposition": None,
         "outcome": None,
         "finalization_basis_digest": None,
-        "latest_attempt_state": None,
+        "latest_attempt_fact": None,
         "current_assignment_id": "assignment-001",
         "pending_retry_intent_id": None,
     }
@@ -72,16 +72,16 @@ def test_active_phase_may_have_no_disposition_outcome_or_basis(phase_name: str) 
 
 
 def test_review_required_is_a_running_unknown_without_outcome() -> None:
-    from qarunner.domain import AttemptState, RunDisposition, RunPhase
+    from qarunner.domain import AttemptExecutionFact, RunDisposition, RunPhase
 
     state = _state(
         phase=RunPhase.RUNNING,
         disposition=RunDisposition.REVIEW_REQUIRED,
-        latest_attempt_state=AttemptState.ATTEMPT_UNKNOWN,
+        latest_attempt_fact=AttemptExecutionFact.ATTEMPT_UNKNOWN,
     )
 
     assert state.disposition is RunDisposition.REVIEW_REQUIRED
-    assert state.latest_attempt_state is AttemptState.ATTEMPT_UNKNOWN
+    assert state.latest_attempt_fact is AttemptExecutionFact.ATTEMPT_UNKNOWN
 
 
 def test_retry_queued_requires_its_pending_intent_without_outcome() -> None:
@@ -122,7 +122,7 @@ def test_closed_no_retry_requires_outcome_basis_and_cleared_active_pointers(
         ({"phase": "running"}, "phase"),
         ({"disposition": "review_required"}, "disposition"),
         ({"outcome": "passed"}, "outcome"),
-        ({"latest_attempt_state": "attempt_unknown"}, "latest_attempt_state"),
+        ({"latest_attempt_fact": "attempt_unknown"}, "latest_attempt_fact"),
         ({"finalization_basis_digest": "sha256:not-typed"}, "finalization_basis_digest"),
         ({"current_assignment_id": " "}, "current_assignment_id"),
         ({"pending_retry_intent_id": 7}, "pending_retry_intent_id"),
@@ -170,7 +170,7 @@ def test_rejects_raw_or_malformed_values(changes: dict[str, object], field: str)
             {
                 "phase": "QUEUED",
                 "disposition": "REVIEW_REQUIRED",
-                "latest_attempt_state": "ATTEMPT_UNKNOWN",
+                "latest_attempt_fact": "ATTEMPT_UNKNOWN",
                 "current_assignment_id": None,
             },
             "review_requires_running",
@@ -192,20 +192,33 @@ def test_rejects_raw_or_malformed_values(changes: dict[str, object], field: str)
             },
             "retry_disposition_requires_retry_phase",
         ),
+        (
+            {
+                "phase": "RETRY_QUEUED",
+                "disposition": "RETRY_QUEUED",
+                "pending_retry_intent_id": "retry-001",
+                "current_assignment_id": "assignment-001",
+            },
+            "retry_forbids_current_assignment",
+        ),
+        (
+            {"phase": "RUNNING", "pending_retry_intent_id": "retry-001"},
+            "pending_intent_requires_retry_phase",
+        ),
     ],
 )
 def test_cross_field_invalid_combinations_fail_closed(
     changes: dict[str, object],
     reason: str,
 ) -> None:
-    from qarunner.domain import AttemptState, RunDisposition, RunOutcome, RunPhase
+    from qarunner.domain import AttemptExecutionFact, RunDisposition, RunOutcome, RunPhase
 
     typed = dict(changes)
     for field, enum_type in (
         ("phase", RunPhase),
         ("disposition", RunDisposition),
         ("outcome", RunOutcome),
-        ("latest_attempt_state", AttemptState),
+        ("latest_attempt_fact", AttemptExecutionFact),
     ):
         value = typed.get(field)
         if isinstance(value, str):
