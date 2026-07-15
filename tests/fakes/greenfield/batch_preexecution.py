@@ -10,9 +10,11 @@ from qarunner.application.ports.batch_preexecution import (
     BatchCancellationSideEffect,
     BatchClosureAuthority,
     BatchClosureSideEffect,
+    BatchRejectionAuthority,
+    BatchRejectionSideEffect,
 )
 from qarunner.application.ports.common import ReplayResult
-from qarunner.domain.batch import Batch
+from qarunner.domain.batch import Batch, BatchRejection
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationScope,
@@ -39,13 +41,20 @@ class InMemoryBatchPreexecutionGateway:
         self.publication_error = publication_error
         self.authority_checks = 0
         self.closure_authority_checks = 0
+        self.rejection_authority_checks = 0
         self.batch_reads = 0
         self.audit_records: tuple[
-            BatchCancellationSideEffect | BatchClosureSideEffect | BatchMaterializedScopeHandoff,
+            BatchCancellationSideEffect
+            | BatchClosureSideEffect
+            | BatchRejectionSideEffect
+            | BatchMaterializedScopeHandoff,
             ...,
         ] = ()
         self.semantic_outbox: tuple[
-            BatchCancellationSideEffect | BatchClosureSideEffect | BatchMaterializedScopeHandoff,
+            BatchCancellationSideEffect
+            | BatchClosureSideEffect
+            | BatchRejectionSideEffect
+            | BatchMaterializedScopeHandoff,
             ...,
         ] = ()
         self.handoffs: dict[Digest, BatchMaterializedScopeHandoff] = {}
@@ -139,12 +148,50 @@ class InMemoryBatchPreexecutionGateway:
         self.semantic_outbox += (handoff,)
         return ReplayResult(value=handoff, replayed=False)
 
+    async def require_rejection_authority(
+        self,
+        *,
+        batch_id: str,
+        phase_owner_id: str,
+        rejection_epoch: int,
+    ) -> BatchRejectionAuthority:
+        self.rejection_authority_checks += 1
+        if not self.authority_available:
+            raise AuthorityProjectionUnavailable
+        if not self.authority_allowed:
+            raise AuthorityPermissionDenied
+        return BatchRejectionAuthority(
+            project_id="project-001",
+            suite_revision_id=self._authority.suite_revision_id,
+            authority_digest=canonical_digest(
+                schema_version="qep.test-rejection-authority.v1",
+                payload={"batch_id": batch_id, "phase_owner_id": phase_owner_id},
+            ),
+            scope=self._authority.scope,
+            write_epoch=rejection_epoch,
+        )
+
     async def publish_preexecution_closure(self, *, batch: Batch) -> None:
         assert batch.preexecution_closure_basis is not None
         if self.batch is batch:
             return
         side_effect = BatchClosureSideEffect(
             batch_id=batch.id,
+            basis_digest=batch.preexecution_closure_basis.digest,
+        )
+        self.batch = batch
+        self.audit_records += (side_effect,)
+        self.semantic_outbox += (side_effect,)
+
+    async def publish_preexecution_rejection(
+        self, *, batch: Batch, rejection: BatchRejection
+    ) -> None:
+        assert batch.preexecution_closure_basis is not None
+        if self.publication_error is not None:
+            raise self.publication_error
+        side_effect = BatchRejectionSideEffect(
+            batch_id=batch.id,
+            rejection_digest=rejection.digest,
             basis_digest=batch.preexecution_closure_basis.digest,
         )
         self.batch = batch

@@ -3,6 +3,7 @@
 import enum
 from dataclasses import dataclass
 
+from qarunner.domain.batch import BatchRejection
 from qarunner.domain.cancellation import BatchCancellationIntent
 from qarunner.domain.digest import Digest, canonical_digest
 
@@ -49,10 +50,72 @@ def build_cancel_handoff(
     write_epoch: int,
 ) -> BatchMaterializedScopeHandoff:
     """Build the one deterministic execution-path handoff for a cancellation intent."""
-    trigger_kind = HandoffTriggerKind.CANCEL_INTENT
-    trigger_digest = intent.digest
+    return _build_handoff(
+        trigger_kind=HandoffTriggerKind.CANCEL_INTENT,
+        trigger_digest=intent.digest,
+        batch_id=intent.batch_id,
+        source_batch_version=source_batch_version,
+        project_id=intent.project_id,
+        suite_revision_id=intent.suite_revision_id,
+        preplan_scope_digest=intent.scope.preplan_scope_digest,
+        manifest_digest=intent.scope.manifest_digest,
+        shard_plan_version=intent.scope.shard_plan_version,
+        shard_plan_digest=intent.scope.shard_plan_digest,
+        authoritative_run_set_digest=authoritative_run_set_digest,
+        authority_digest=authority_digest,
+        write_epoch=write_epoch,
+    )
+
+
+def build_rejection_conflict_handoff(
+    *,
+    rejection: BatchRejection,
+    project_id: str,
+    suite_revision_id: str,
+    preplan_scope_digest: Digest | None,
+    manifest_digest: Digest | None,
+    shard_plan_version: int | None,
+    shard_plan_digest: Digest | None,
+    authoritative_run_set_digest: Digest,
+    authority_digest: Digest,
+    write_epoch: int,
+) -> BatchMaterializedScopeHandoff:
+    """Build the execution-path observation for a rejection racing materialized Runs."""
+    return _build_handoff(
+        trigger_kind=HandoffTriggerKind.REJECTION_CONFLICT,
+        trigger_digest=rejection.digest,
+        batch_id=rejection.batch_id,
+        source_batch_version=rejection.source_batch_version,
+        project_id=project_id,
+        suite_revision_id=suite_revision_id,
+        preplan_scope_digest=preplan_scope_digest,
+        manifest_digest=manifest_digest,
+        shard_plan_version=shard_plan_version,
+        shard_plan_digest=shard_plan_digest,
+        authoritative_run_set_digest=authoritative_run_set_digest,
+        authority_digest=authority_digest,
+        write_epoch=write_epoch,
+    )
+
+
+def _build_handoff(
+    *,
+    trigger_kind: HandoffTriggerKind,
+    trigger_digest: Digest,
+    batch_id: str,
+    source_batch_version: int,
+    project_id: str,
+    suite_revision_id: str,
+    preplan_scope_digest: Digest | None,
+    manifest_digest: Digest | None,
+    shard_plan_version: int | None,
+    shard_plan_digest: Digest | None,
+    authoritative_run_set_digest: Digest,
+    authority_digest: Digest,
+    write_epoch: int,
+) -> BatchMaterializedScopeHandoff:
     identity_payload = {
-        "batch_id": intent.batch_id,
+        "batch_id": batch_id,
         "command_or_observation_digest": trigger_digest.value,
         "schema_version": SCHEMA_VERSION,
         "trigger_kind": trigger_kind.value,
@@ -65,12 +128,12 @@ def build_cancel_handoff(
     binding_payload = {
         **identity_payload,
         "source_batch_version": source_batch_version,
-        "project_id": intent.project_id,
-        "suite_revision_id": intent.suite_revision_id,
-        "preplan_scope_digest": _value(intent.scope.preplan_scope_digest),
-        "manifest_digest": _value(intent.scope.manifest_digest),
-        "shard_plan_version": intent.scope.shard_plan_version,
-        "shard_plan_digest": _value(intent.scope.shard_plan_digest),
+        "project_id": project_id,
+        "suite_revision_id": suite_revision_id,
+        "preplan_scope_digest": _value(preplan_scope_digest),
+        "manifest_digest": _value(manifest_digest),
+        "shard_plan_version": shard_plan_version,
+        "shard_plan_digest": _value(shard_plan_digest),
         "authoritative_run_set_digest": authoritative_run_set_digest.value,
         "authority_digest": authority_digest.value,
         "write_epoch": write_epoch,
@@ -89,14 +152,14 @@ def build_cancel_handoff(
         handoff_digest=handoff_digest,
         trigger_kind=trigger_kind,
         command_or_observation_digest=trigger_digest,
-        batch_id=intent.batch_id,
+        batch_id=batch_id,
         source_batch_version=source_batch_version,
-        project_id=intent.project_id,
-        suite_revision_id=intent.suite_revision_id,
-        preplan_scope_digest=intent.scope.preplan_scope_digest,
-        manifest_digest=intent.scope.manifest_digest,
-        shard_plan_version=intent.scope.shard_plan_version,
-        shard_plan_digest=intent.scope.shard_plan_digest,
+        project_id=project_id,
+        suite_revision_id=suite_revision_id,
+        preplan_scope_digest=preplan_scope_digest,
+        manifest_digest=manifest_digest,
+        shard_plan_version=shard_plan_version,
+        shard_plan_digest=shard_plan_digest,
         authoritative_run_set_digest=authoritative_run_set_digest,
         authority_digest=authority_digest,
         write_epoch=write_epoch,

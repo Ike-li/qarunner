@@ -9,6 +9,8 @@ from qarunner.application.ports.batch_preexecution import (
     BatchClosureAuthority,
     BatchClosureSideEffect,
     BatchPreexecutionGateway,
+    BatchRejectionAuthority,
+    BatchRejectionSideEffect,
 )
 from qarunner.application.ports.clock import UtcClock
 from qarunner.application.ports.common import PortContractError, ReplayResult
@@ -68,6 +70,8 @@ __all__ = [
     "BatchClosureSideEffect",
     "BatchClosureAuthority",
     "BatchPreexecutionGateway",
+    "BatchRejectionAuthority",
+    "BatchRejectionSideEffect",
     "EvidenceManifestIndex",
     "EvidenceVerificationRequest",
     "EvidenceVerifier",

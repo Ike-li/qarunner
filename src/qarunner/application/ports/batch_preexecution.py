@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from qarunner.application.handoff import BatchMaterializedScopeHandoff
 from qarunner.application.ports.common import ReplayResult
-from qarunner.domain.batch import Batch
+from qarunner.domain.batch import Batch, BatchRejection
 from qarunner.domain.cancellation import BatchCancellationIntent, BatchCancellationScope
 from qarunner.domain.digest import Digest
 
@@ -44,8 +44,26 @@ class BatchClosureSideEffect:
 
 
 @dataclass(frozen=True, slots=True)
+class BatchRejectionSideEffect:
+    batch_id: str
+    rejection_digest: Digest
+    basis_digest: Digest
+
+
+@dataclass(frozen=True, slots=True)
 class BatchClosureAuthority:
     authority_digest: Digest
+    write_epoch: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchRejectionAuthority:
+    """Server-derived phase ownership and scope for a rejection command."""
+
+    project_id: str
+    suite_revision_id: str
+    authority_digest: Digest
+    scope: BatchCancellationScope
     write_epoch: int
 
 
@@ -72,8 +90,20 @@ class BatchPreexecutionGateway(Protocol):
         closure_epoch: int,
     ) -> BatchClosureAuthority: ...
 
+    async def require_rejection_authority(
+        self,
+        *,
+        batch_id: str,
+        phase_owner_id: str,
+        rejection_epoch: int,
+    ) -> BatchRejectionAuthority: ...
+
     async def publish_materialized_handoff(
         self, *, handoff: BatchMaterializedScopeHandoff
     ) -> ReplayResult[BatchMaterializedScopeHandoff]: ...
 
     async def publish_preexecution_closure(self, *, batch: Batch) -> None: ...
+
+    async def publish_preexecution_rejection(
+        self, *, batch: Batch, rejection: BatchRejection
+    ) -> None: ...

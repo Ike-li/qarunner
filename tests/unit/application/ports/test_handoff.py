@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from tests.fakes.greenfield.handoff import InMemoryMaterializedScopeHandoffConsumer
 
-from qarunner.application.handoff import build_cancel_handoff
+from qarunner.application.handoff import build_cancel_handoff, build_rejection_conflict_handoff
 from qarunner.application.ports.handoff import (
     HandoffDeliveryMetadata,
     HandoffEventBlocked,
@@ -16,6 +16,9 @@ from qarunner.domain import (
     BatchCancellationIntent,
     BatchCancellationScope,
     BatchCancellationScopeKind,
+    BatchRejection,
+    BatchRejectionReasonClass,
+    BatchRejectionStage,
     CancellationSource,
     canonical_digest,
 )
@@ -108,6 +111,42 @@ def test_handoff_identity_is_deterministic_while_binding_drift_changes_only_full
     assert drifted.event_id == handoff.event_id
     assert drifted.handoff_digest != handoff.handoff_digest
     assert drifted.payload_digest != handoff.payload_digest
+
+
+def test_rejection_conflict_handoff_uses_rejection_observation_without_terminal_result() -> None:
+    rejection = BatchRejection(
+        rejection_id="rejection-001",
+        batch_id="batch-001",
+        source_batch_version=3,
+        stage=BatchRejectionStage.VALIDATION,
+        reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+        reason_code="invalid_suite",
+        input_digest=_digest("rejection-input"),
+        authority_digest=None,
+        recorded_at=datetime(2026, 7, 15, 6, tzinfo=UTC),
+    )
+
+    handoff = build_rejection_conflict_handoff(
+        rejection=rejection,
+        project_id="project-001",
+        suite_revision_id="suite-revision-001",
+        preplan_scope_digest=_digest("preplan-scope"),
+        manifest_digest=None,
+        shard_plan_version=None,
+        shard_plan_digest=None,
+        authoritative_run_set_digest=_digest("run-set"),
+        authority_digest=_digest("phase-authority"),
+        write_epoch=1,
+    )
+
+    assert handoff.trigger_kind.value == "rejection_conflict"
+    assert handoff.command_or_observation_digest == rejection.digest
+    assert handoff.source_batch_version == rejection.source_batch_version
+    assert handoff.destination == "execution_path"
+    assert not hasattr(handoff, "batch_terminal")
+    assert not hasattr(handoff, "run_resolution")
+    assert not hasattr(handoff, "fanout_result")
+    assert not hasattr(handoff, "execution_basis")
 
 
 def _handoff(*, run_label: str = "run-set"):
