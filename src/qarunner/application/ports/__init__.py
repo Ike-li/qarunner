@@ -54,6 +54,14 @@ from qarunner.application.ports.preexecution_proof import (
     ZeroChildSnapshotInputs,
     canonical_task_set_digest,
 )
+from qarunner.application.ports.run_finalization import (
+    FinalizeRunAuthority,
+    RunFinalizationGateway,
+    RunFinalizationMutationSnapshot,
+    RunFinalizationProjection,
+    RunFinalizationPublication,
+    RunFinalizationSideEffect,
+)
 from qarunner.application.ports.secrets import (
     SecretBroker,
     SecretDeliveryLease,
@@ -86,6 +94,7 @@ __all__ = [
     "ExecutionChildInventory",
     "FactCommitResult",
     "FactKey",
+    "FinalizeRunAuthority",
     "HandoffEventBlocked",
     "HandoffDeliveryMetadata",
     "HandoffEventConflict",
@@ -97,6 +106,11 @@ __all__ = [
     "PreexecutionTaskGeneration",
     "PreexecutionTaskKey",
     "ReplayResult",
+    "RunFinalizationGateway",
+    "RunFinalizationMutationSnapshot",
+    "RunFinalizationProjection",
+    "RunFinalizationPublication",
+    "RunFinalizationSideEffect",
     "SecretBroker",
     "SecretDeliveryLease",
     "SecretRequest",
