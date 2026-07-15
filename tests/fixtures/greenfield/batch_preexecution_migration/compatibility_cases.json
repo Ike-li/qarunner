@@ -1,0 +1,135 @@
+[
+  {
+    "id": "reconstructable-legacy-terminal",
+    "record": {
+      "record_id": "batch-001",
+      "legacy_terminal": "cancelled",
+      "state_model_version": null,
+      "compatibility_epoch": null,
+      "ownership_digest": "sha256:ownership-001",
+      "command_digest": "sha256:intent-001",
+      "basis_digest": "sha256:basis-001",
+      "proof_digest": "sha256:proof-001",
+      "v1_terminal": null
+    },
+    "expected": {"disposition": "reconstructable", "reason": "immutable_facts_complete"}
+  },
+  {
+    "id": "basisless-legacy-terminal",
+    "record": {
+      "record_id": "batch-002",
+      "legacy_terminal": "rejected",
+      "state_model_version": null,
+      "compatibility_epoch": null,
+      "ownership_digest": "sha256:ownership-002",
+      "command_digest": "sha256:rejection-002",
+      "basis_digest": null,
+      "proof_digest": "sha256:proof-002",
+      "v1_terminal": null
+    },
+    "expected": {"disposition": "legacy_unverified", "reason": "basisless_legacy_terminal"}
+  },
+  {
+    "id": "mixed-reader-trusted",
+    "record": {
+      "record_id": "batch-003",
+      "legacy_terminal": "cancelled",
+      "state_model_version": 1,
+      "compatibility_epoch": "M0-STATE-V1",
+      "ownership_digest": "sha256:ownership-003",
+      "command_digest": "sha256:intent-003",
+      "basis_digest": "sha256:basis-003",
+      "proof_digest": "sha256:proof-003",
+      "v1_terminal": "cancelled"
+    },
+    "expected": {"disposition": "trusted_v1", "reason": "v1_facts_complete"}
+  },
+  {
+    "id": "mixed-reader-conflict",
+    "record": {
+      "record_id": "batch-004",
+      "legacy_terminal": "rejected",
+      "state_model_version": 1,
+      "compatibility_epoch": "M0-STATE-V1",
+      "ownership_digest": "sha256:ownership-004",
+      "command_digest": "sha256:intent-004",
+      "basis_digest": "sha256:basis-004",
+      "proof_digest": "sha256:proof-004",
+      "v1_terminal": "cancelled"
+    },
+    "expected": {"disposition": "conflict", "reason": "legacy_v1_terminal_mismatch"}
+  },
+  {
+    "id": "unknown-compatibility-epoch",
+    "record": {
+      "record_id": "batch-005",
+      "legacy_terminal": "cancelled",
+      "state_model_version": 1,
+      "compatibility_epoch": "M0-STATE-V2",
+      "ownership_digest": "sha256:ownership-005",
+      "command_digest": "sha256:intent-005",
+      "basis_digest": "sha256:basis-005",
+      "proof_digest": "sha256:proof-005",
+      "v1_terminal": "cancelled"
+    },
+    "expected": {"disposition": "fail_closed", "reason": "unsupported_compatibility_epoch"}
+  },
+  {
+    "id": "unknown-state-model-version",
+    "record": {
+      "record_id": "batch-006",
+      "legacy_terminal": "cancelled",
+      "state_model_version": 2,
+      "compatibility_epoch": "M0-STATE-V1",
+      "ownership_digest": "sha256:ownership-006",
+      "command_digest": "sha256:intent-006",
+      "basis_digest": "sha256:basis-006",
+      "proof_digest": "sha256:proof-006",
+      "v1_terminal": "cancelled"
+    },
+    "expected": {"disposition": "fail_closed", "reason": "unsupported_state_model_version"}
+  },
+  {
+    "id": "version-without-epoch",
+    "record": {
+      "record_id": "batch-007", "legacy_terminal": "cancelled",
+      "state_model_version": 1, "compatibility_epoch": null,
+      "ownership_digest": "sha256:ownership-007", "command_digest": "sha256:intent-007",
+      "basis_digest": "sha256:basis-007", "proof_digest": "sha256:proof-007",
+      "v1_terminal": null
+    },
+    "expected": {"disposition": "fail_closed", "reason": "unsupported_compatibility_epoch"}
+  },
+  {
+    "id": "v1-terminal-without-binding",
+    "record": {
+      "record_id": "batch-008", "legacy_terminal": null,
+      "state_model_version": null, "compatibility_epoch": null,
+      "ownership_digest": "sha256:ownership-008", "command_digest": "sha256:intent-008",
+      "basis_digest": "sha256:basis-008", "proof_digest": "sha256:proof-008",
+      "v1_terminal": "cancelled"
+    },
+    "expected": {"disposition": "fail_closed", "reason": "missing_v1_compatibility_binding"}
+  },
+  {
+    "id": "incomplete-v1-facts",
+    "record": {
+      "record_id": "batch-009", "legacy_terminal": null,
+      "state_model_version": 1, "compatibility_epoch": "M0-STATE-V1",
+      "ownership_digest": "sha256:ownership-009", "command_digest": "sha256:intent-009",
+      "basis_digest": "sha256:basis-009", "proof_digest": null,
+      "v1_terminal": "cancelled"
+    },
+    "expected": {"disposition": "conflict", "reason": "incomplete_v1_facts"}
+  },
+  {
+    "id": "no-terminal-basis",
+    "record": {
+      "record_id": "batch-010", "legacy_terminal": null,
+      "state_model_version": null, "compatibility_epoch": null,
+      "ownership_digest": null, "command_digest": null,
+      "basis_digest": null, "proof_digest": null, "v1_terminal": null
+    },
+    "expected": {"disposition": "legacy_unverified", "reason": "no_terminal_basis"}
+  }
+]
