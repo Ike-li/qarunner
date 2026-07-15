@@ -16,7 +16,7 @@ from qarunner.application.preexecution_proof import (
     ProvePreexecutionClosure,
     ProvePreexecutionClosureCommand,
 )
-from qarunner.domain.batch import BatchRejection
+from qarunner.domain.batch import BatchPreexecutionTerminalKind, BatchRejection
 from qarunner.domain.cancellation import BatchCancellationIntent, CancellationSource
 from qarunner.domain.digest import canonical_digest
 from qarunner.domain.errors import BatchCancellationConflict, IdempotencyConflict
@@ -191,6 +191,11 @@ class ReconcilePreexecutionCancellation:
                 project_id=authority.project_id,
                 suite_revision_id=authority.suite_revision_id,
                 source_batch_version=authority.source_batch_version,
+                scope=authority.scope,
+                terminal_kind=BatchPreexecutionTerminalKind.PRESTART_CANCEL,
+                command_digest=batch.cancellation_intent.digest
+                if batch.cancellation_intent
+                else None,
             )
         )
         if isinstance(proof, MaterializedExecutionScope):
@@ -275,6 +280,9 @@ class RecordPreexecutionRejection:
                 project_id=authority.project_id,
                 suite_revision_id=authority.suite_revision_id,
                 source_batch_version=command.rejection.source_batch_version,
+                scope=authority.scope,
+                terminal_kind=BatchPreexecutionTerminalKind.REJECTION,
+                command_digest=command.rejection.digest,
             )
         )
         if isinstance(proof, MaterializedExecutionScope):

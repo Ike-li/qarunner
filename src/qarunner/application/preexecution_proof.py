@@ -7,7 +7,8 @@ from qarunner.application.ports.preexecution_proof import (
     ZeroChildSnapshotInputs,
     canonical_task_set_digest,
 )
-from qarunner.domain.batch import BatchPreexecutionSnapshot
+from qarunner.domain.batch import BatchPreexecutionSnapshot, BatchPreexecutionTerminalKind
+from qarunner.domain.cancellation import BatchCancellationScope, BatchCancellationScopeKind
 from qarunner.domain.digest import Digest, canonical_digest
 
 
@@ -37,6 +38,9 @@ class ProvePreexecutionClosureCommand:
     project_id: str
     suite_revision_id: str
     source_batch_version: int
+    scope: BatchCancellationScope | None = None
+    terminal_kind: BatchPreexecutionTerminalKind | None = None
+    command_digest: Digest | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +50,14 @@ class MaterializedExecutionScope:
     batch_id: str
     run_ids: tuple[str, ...]
     authoritative_run_set_digest: Digest
+
+
+def canonical_materialized_run_set_digest(*, batch_id: str, run_ids: tuple[str, ...]) -> Digest:
+    """Bind the stable authoritative Run set observed under Batch serialization."""
+    return canonical_digest(
+        schema_version="qep.authoritative-materialized-run-set.v1",
+        payload={"batch_id": batch_id, "run_ids": list(sorted(run_ids))},
+    )
 
 
 class ProvePreexecutionClosure:
@@ -75,9 +87,9 @@ class ProvePreexecutionClosure:
             return MaterializedExecutionScope(
                 batch_id=command.batch_id,
                 run_ids=run_ids,
-                authoritative_run_set_digest=canonical_digest(
-                    schema_version="qep.authoritative-materialized-run-set.v1",
-                    payload={"batch_id": command.batch_id, "run_ids": list(run_ids)},
+                authoritative_run_set_digest=canonical_materialized_run_set_digest(
+                    batch_id=command.batch_id,
+                    run_ids=run_ids,
                 ),
             )
         inventory = await self._gateway.read_sealed_task_inventory(batch_id=command.batch_id)
@@ -136,6 +148,41 @@ class ProvePreexecutionClosure:
         stop_keys = tuple(stop.key for stop in stops)
         if task_keys != stop_keys:
             raise ClosureNotReady
+        planned_inventory = None
+        if (
+            command.scope is not None
+            and command.scope.kind is BatchCancellationScopeKind.FROZEN_PLAN
+        ):
+            planned_inventory = await self._gateway.read_sealed_planned_scope_inventory(
+                batch_id=command.batch_id
+            )
+            if planned_inventory is None:
+                raise ClosureNotReady
+            issuer_trusted = await self._gateway.is_trusted_planned_scope_issuer(
+                issuer_id=planned_inventory.issuer_id
+            )
+            item_keys = tuple(sorted(planned_inventory.manifest_item_keys))
+            if (
+                not issuer_trusted
+                or planned_inventory.batch_id != command.batch_id
+                or planned_inventory.project_id != command.project_id
+                or planned_inventory.suite_revision_id != command.suite_revision_id
+                or planned_inventory.manifest_digest != command.scope.manifest_digest
+                or planned_inventory.shard_plan_version != command.scope.shard_plan_version
+                or planned_inventory.shard_plan_digest != command.scope.shard_plan_digest
+                or command.scope.canonical_run_set_digest
+                != canonical_materialized_run_set_digest(
+                    batch_id=command.batch_id,
+                    run_ids=(),
+                )
+                or planned_inventory.item_count != len(item_keys)
+                or not item_keys
+                or len(set(item_keys)) != len(item_keys)
+                or command.terminal_kind is None
+                or command.command_digest is None
+            ):
+                await self._gateway.quarantine_integrity_failure(batch_id=command.batch_id)
+                raise IntegrityFailure
         return await self._gateway.assemble_zero_child_snapshot(
             inputs=ZeroChildSnapshotInputs(
                 batch_id=inventory.batch_id,
@@ -146,5 +193,9 @@ class ProvePreexecutionClosure:
                 high_watermark=inventory.high_watermark,
                 task_set_digest=inventory.task_set_digest,
                 stop_fact_digests=tuple(stop.digest for stop in stops),
+                scope=command.scope,
+                terminal_kind=command.terminal_kind,
+                command_digest=command.command_digest,
+                planned_inventory=planned_inventory,
             )
         )

@@ -446,6 +446,107 @@ async def test_closure_source_binding_drift_returns_state_conflict_before_proof(
     assert proof_gateway.child_scans == 0
 
 
+@pytest.mark.asyncio
+async def test_planned_zero_child_cancel_builds_authoritative_typed_item_coverage() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import (
+        ProvePreexecutionClosure,
+        canonical_materialized_run_set_digest,
+    )
+    from qarunner.domain import (
+        Batch,
+        BatchCancellationIntent,
+        BatchCancellationScope,
+        BatchCancellationScopeKind,
+        BatchPreexecutionScopeKind,
+        BatchPreexecutionTerminalKind,
+        BatchState,
+        CancellationSource,
+        canonical_digest,
+    )
+
+    def digest(label: str):
+        return canonical_digest(
+            schema_version="qep.test-planned-closure.v1",
+            payload={"label": label},
+        )
+
+    scope = BatchCancellationScope(
+        kind=BatchCancellationScopeKind.FROZEN_PLAN,
+        preplan_scope_digest=None,
+        manifest_digest=digest("manifest"),
+        shard_plan_version=2,
+        shard_plan_digest=digest("plan"),
+        canonical_run_set_digest=canonical_materialized_run_set_digest(
+            batch_id="batch-001",
+            run_ids=(),
+        ),
+    )
+    source = Batch(id="batch-001", state=BatchState.AWAITING_ADMISSION, version=3)
+    intent = BatchCancellationIntent(
+        batch_id=source.id,
+        project_id="project-001",
+        suite_revision_id="suite-revision-001",
+        source_batch_version=source.version,
+        idempotency_key="cancel-planned-001",
+        source=CancellationSource.USER_REQUEST,
+        actor_id="user-001",
+        reason="stop planned batch",
+        authorization_digest=digest("authority"),
+        scope=scope,
+        recorded_at=datetime(2026, 7, 15, 6, tzinfo=UTC),
+    )
+    requested = source.request_cancel(intent=intent, expected_version=source.version)
+    state = InMemoryBatchPreexecutionGateway(batch=requested)
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        planned_manifest_id="manifest-001",
+        planned_manifest_digest=scope.manifest_digest,
+        planned_item_keys=("case-002", "case-001"),
+        planned_shard_plan_id="plan-001",
+        planned_shard_plan_version=scope.shard_plan_version,
+        planned_shard_plan_digest=scope.shard_plan_digest,
+    )
+
+    closed = await ReconcilePreexecutionCancellation(
+        gateway=state,
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
+    ).execute(
+        ReconcilePreexecutionCancellationCommand(
+            batch_id=requested.id,
+            project_id=intent.project_id,
+            suite_revision_id=intent.suite_revision_id,
+            expected_batch_version=requested.version,
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+    )
+
+    basis = closed.preexecution_closure_basis
+    assert basis is not None
+    assert basis.scope_kind is BatchPreexecutionScopeKind.PLANNED_UNMATERIALIZED
+    snapshot = proof_gateway.published_snapshots[-1]
+    assert tuple(item.manifest_item_key for item in snapshot.scope_items) == (
+        "case-001",
+        "case-002",
+    )
+    assert all(
+        item.terminal_kind is BatchPreexecutionTerminalKind.PRESTART_CANCEL
+        and item.batch_cancellation_intent_digest == intent.digest
+        and item.resolution == "not_started"
+        for item in snapshot.scope_items
+    )
+    assert basis.item_coverage_proof_digest is not None
+    assert state.not_executed_facts == ()
+    assert state.run_outcomes == ()
+
+
 def _requested_batch():
     from qarunner.domain import (
         Batch,

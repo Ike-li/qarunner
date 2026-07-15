@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from qarunner.domain.batch import BatchPreexecutionSnapshot
+from qarunner.domain.batch import (
+    BatchPreexecutionSnapshot,
+    BatchPreexecutionTerminalKind,
+)
+from qarunner.domain.cancellation import BatchCancellationScope
 from qarunner.domain.digest import Digest, canonical_digest
 
 
@@ -91,6 +95,22 @@ class TaskLedgerPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class SealedPlannedScopeInventory:
+    batch_id: str
+    project_id: str
+    suite_revision_id: str
+    manifest_id: str
+    manifest_digest: Digest
+    shard_plan_id: str
+    shard_plan_version: int
+    shard_plan_digest: Digest
+    item_count: int
+    manifest_item_keys: tuple[str, ...]
+    issuer_id: str
+    sealed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ZeroChildSnapshotInputs:
     batch_id: str
     project_id: str
@@ -100,6 +120,10 @@ class ZeroChildSnapshotInputs:
     high_watermark: int
     task_set_digest: Digest
     stop_fact_digests: tuple[Digest, ...]
+    scope: BatchCancellationScope | None
+    terminal_kind: BatchPreexecutionTerminalKind | None
+    command_digest: Digest | None
+    planned_inventory: SealedPlannedScopeInventory | None
 
 
 @runtime_checkable
@@ -117,6 +141,12 @@ class PreexecutionProofGateway(Protocol):
     async def is_trusted_inventory_issuer(self, *, issuer_id: str) -> bool: ...
 
     async def is_trusted_stop_issuer(self, *, issuer_id: str) -> bool: ...
+
+    async def read_sealed_planned_scope_inventory(
+        self, *, batch_id: str
+    ) -> SealedPlannedScopeInventory | None: ...
+
+    async def is_trusted_planned_scope_issuer(self, *, issuer_id: str) -> bool: ...
 
     async def quarantine_integrity_failure(self, *, batch_id: str) -> None: ...
 

@@ -6,13 +6,19 @@ from qarunner.application.ports.preexecution_proof import (
     ExecutionChildInventory,
     PreexecutionTaskGeneration,
     PreexecutionTaskKey,
+    SealedPlannedScopeInventory,
     SealedTaskInventory,
     TaskLedgerPosition,
     TrustedTaskStop,
     ZeroChildSnapshotInputs,
     canonical_task_set_digest,
 )
-from qarunner.domain.batch import BatchPreexecutionScopeKind, BatchPreexecutionSnapshot
+from qarunner.domain.batch import (
+    BatchPreexecutionScopeItem,
+    BatchPreexecutionScopeKind,
+    BatchPreexecutionSnapshot,
+    BatchPreexecutionTerminalKind,
+)
 from qarunner.domain.digest import Digest, canonical_digest
 
 
@@ -38,6 +44,12 @@ class InMemoryPreexecutionProofGateway:
         high_watermark: int | None = None,
         current_ledger_version: int | None = None,
         current_high_watermark: int | None = None,
+        planned_manifest_id: str | None = None,
+        planned_manifest_digest: Digest | None = None,
+        planned_item_keys: tuple[str, ...] = (),
+        planned_shard_plan_id: str | None = None,
+        planned_shard_plan_version: int | None = None,
+        planned_shard_plan_digest: Digest | None = None,
     ) -> None:
         self.inventory_sealed = inventory_sealed
         self.task_generations = task_generations
@@ -61,6 +73,12 @@ class InMemoryPreexecutionProofGateway:
         self.current_high_watermark = (
             self.high_watermark if current_high_watermark is None else current_high_watermark
         )
+        self.planned_manifest_id = planned_manifest_id
+        self.planned_manifest_digest = planned_manifest_digest
+        self.planned_item_keys = planned_item_keys
+        self.planned_shard_plan_id = planned_shard_plan_id
+        self.planned_shard_plan_version = planned_shard_plan_version
+        self.planned_shard_plan_digest = planned_shard_plan_digest
         self.child_scans = 0
         self.inventory_reads = 0
         self.stop_reads = 0
@@ -151,34 +169,53 @@ class InMemoryPreexecutionProofGateway:
     async def is_trusted_stop_issuer(self, *, issuer_id: str) -> bool:
         return issuer_id == "runtime-001"
 
+    async def read_sealed_planned_scope_inventory(
+        self, *, batch_id: str
+    ) -> SealedPlannedScopeInventory | None:
+        if self.planned_manifest_id is None:
+            return None
+        assert self.planned_manifest_digest is not None
+        assert self.planned_shard_plan_id is not None
+        assert self.planned_shard_plan_version is not None
+        assert self.planned_shard_plan_digest is not None
+        return SealedPlannedScopeInventory(
+            batch_id=batch_id,
+            project_id=self.inventory_project_id,
+            suite_revision_id=self.inventory_suite_revision_id,
+            manifest_id=self.planned_manifest_id,
+            manifest_digest=self.planned_manifest_digest,
+            shard_plan_id=self.planned_shard_plan_id,
+            shard_plan_version=self.planned_shard_plan_version,
+            shard_plan_digest=self.planned_shard_plan_digest,
+            item_count=len(self.planned_item_keys),
+            manifest_item_keys=self.planned_item_keys,
+            issuer_id="coordinator-001",
+            sealed_at=datetime(2026, 7, 15, 6, 3, tzinfo=UTC),
+        )
+
+    async def is_trusted_planned_scope_issuer(self, *, issuer_id: str) -> bool:
+        return issuer_id == "coordinator-001"
+
     async def assemble_zero_child_snapshot(
         self, *, inputs: ZeroChildSnapshotInputs
     ) -> BatchPreexecutionSnapshot:
         self.snapshot_assemblies += 1
-        snapshot = BatchPreexecutionSnapshot(
-            batch_id=inputs.batch_id,
-            source_batch_version=inputs.source_batch_version,
-            scope_kind=BatchPreexecutionScopeKind.PRE_PLAN,
-            submission_digest=canonical_digest(
+        run_absence_digest = canonical_digest(
+            schema_version="qep.preexecution-materialized-run-absence.v1",
+            payload={
+                "batch_id": inputs.batch_id,
+                "source_batch_version": inputs.source_batch_version,
+            },
+        )
+        common = {
+            "batch_id": inputs.batch_id,
+            "source_batch_version": inputs.source_batch_version,
+            "submission_digest": canonical_digest(
                 schema_version="qep.test-preexecution-submission.v1",
                 payload={"batch_id": inputs.batch_id},
             ),
-            preplan_scope_digest=canonical_digest(
-                schema_version="qep.test-batch-cancel.v1",
-                payload={"label": "preplan-scope"},
-            ),
-            manifest_digest=None,
-            shard_plan_version=None,
-            shard_plan_digest=None,
-            canonical_run_set_digest=None,
-            materialized_run_absence_digest=canonical_digest(
-                schema_version="qep.preexecution-materialized-run-absence.v1",
-                payload={
-                    "batch_id": inputs.batch_id,
-                    "source_batch_version": inputs.source_batch_version,
-                },
-            ),
-            execution_absence_snapshot_digest=canonical_digest(
+            "materialized_run_absence_digest": run_absence_digest,
+            "execution_absence_snapshot_digest": canonical_digest(
                 schema_version="qep.preexecution-execution-absence.v1",
                 payload={
                     "batch_id": inputs.batch_id,
@@ -189,9 +226,74 @@ class InMemoryPreexecutionProofGateway:
                     "stop_fact_digests": [digest.value for digest in inputs.stop_fact_digests],
                 },
             ),
-            task_stop_fact_digests=inputs.stop_fact_digests,
-            scope_items=(),
-            item_coverage_proof_digest=None,
-        )
+            "task_stop_fact_digests": inputs.stop_fact_digests,
+        }
+        if inputs.planned_inventory is not None:
+            assert inputs.scope is not None
+            assert inputs.terminal_kind is not None
+            assert inputs.command_digest is not None
+            inventory = inputs.planned_inventory
+            items = tuple(
+                BatchPreexecutionScopeItem(
+                    batch_id=inputs.batch_id,
+                    source_batch_version=inputs.source_batch_version,
+                    terminal_kind=inputs.terminal_kind,
+                    rejection_fact_digest=(
+                        inputs.command_digest
+                        if inputs.terminal_kind is BatchPreexecutionTerminalKind.REJECTION
+                        else None
+                    ),
+                    batch_cancellation_intent_digest=(
+                        inputs.command_digest
+                        if inputs.terminal_kind is BatchPreexecutionTerminalKind.PRESTART_CANCEL
+                        else None
+                    ),
+                    manifest_id=inventory.manifest_id,
+                    manifest_digest=inventory.manifest_digest,
+                    manifest_item_key=item_key,
+                    shard_plan_id=inventory.shard_plan_id,
+                    shard_plan_version=inventory.shard_plan_version,
+                    shard_plan_digest=inventory.shard_plan_digest,
+                    materialized_run_absence_digest=run_absence_digest,
+                    resolution="not_started",
+                )
+                for item_key in sorted(inventory.manifest_item_keys)
+            )
+            snapshot = BatchPreexecutionSnapshot(
+                **common,
+                scope_kind=BatchPreexecutionScopeKind.PLANNED_UNMATERIALIZED,
+                preplan_scope_digest=None,
+                manifest_digest=inventory.manifest_digest,
+                shard_plan_version=inventory.shard_plan_version,
+                shard_plan_digest=inventory.shard_plan_digest,
+                canonical_run_set_digest=inputs.scope.canonical_run_set_digest,
+                scope_items=items,
+                item_coverage_proof_digest=canonical_digest(
+                    schema_version="qep.preexecution-item-coverage.v1",
+                    payload={"item_digests": [item.digest.value for item in items]},
+                ),
+            )
+        else:
+            preplan_scope_digest = (
+                inputs.scope.preplan_scope_digest if inputs.scope is not None else None
+            )
+            snapshot = BatchPreexecutionSnapshot(
+                **common,
+                scope_kind=BatchPreexecutionScopeKind.PRE_PLAN,
+                preplan_scope_digest=(
+                    preplan_scope_digest
+                    if preplan_scope_digest is not None
+                    else canonical_digest(
+                        schema_version="qep.test-batch-cancel.v1",
+                        payload={"label": "preplan-scope"},
+                    )
+                ),
+                manifest_digest=None,
+                shard_plan_version=None,
+                shard_plan_digest=None,
+                canonical_run_set_digest=None,
+                scope_items=(),
+                item_coverage_proof_digest=None,
+            )
         self.published_snapshots += (snapshot,)
         return snapshot
