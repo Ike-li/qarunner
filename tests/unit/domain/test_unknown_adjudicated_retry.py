@@ -175,7 +175,7 @@ def _retry_intent(
     from qarunner.domain import RetryIntent
 
     record = adjudication or _adjudication()
-    return RetryIntent(
+    return RetryIntent.from_unknown_adjudication(
         id=intent_id,
         run_id="run-001",
         source_attempt_id="attempt-001",
@@ -272,7 +272,7 @@ def _adjudicated_attempt2_with_retry_intent():
         expected_version=unknown.version,
         expected_attempt_version=unknown.attempts[-1].version,
     )
-    intent = RetryIntent(
+    intent = RetryIntent.from_unknown_adjudication(
         id="retry-002",
         run_id=run.id,
         source_attempt_id=attempt2.id,
@@ -1010,9 +1010,13 @@ def test_retry_intent_rejects_invalid_authority_values(
     from qarunner.domain import DomainValidationError
 
     with pytest.raises(DomainValidationError) as caught:
-        replace(_retry_intent(), **changes)
+        intent = _retry_intent()
+        if "adjudication_digest" in changes or "decision" in changes:
+            replace(intent.authority, **changes)
+        else:
+            replace(intent, **changes)
 
-    assert caught.value.entity_type == "retry_intent"
+    assert caught.value.entity_type in {"retry_intent", "unknown_retry_authority"}
     assert caught.value.field == field
     assert caught.value.reason == reason
 
@@ -1046,7 +1050,15 @@ def test_retry_intent_must_exactly_bind_current_source_and_adjudication(
             **changes,
             "decision": UnknownAdjudicationDecision[changes["decision"]],
         }
-    intent = replace(_retry_intent(adjudication=adjudication), **changes)
+    intent = _retry_intent(adjudication=adjudication)
+    authority_changes = {}
+    if "adjudication_digest" in changes:
+        authority_changes["adjudication_digest"] = changes.pop("adjudication_digest")
+    if "decision" in changes:
+        authority_changes["decision"] = changes.pop("decision")
+    if authority_changes:
+        changes["authority"] = replace(intent.authority, **authority_changes)
+    intent = replace(intent, **changes)
 
     with pytest.raises(RetryNotAllowed) as caught:
         adjudicated.queue_adjudicated_retry(
@@ -1192,8 +1204,8 @@ def test_assignment_and_attempt_rehydration_reject_invalid_retry_links() -> None
     assert self_source.value.reason == "source_is_self"
 
     with pytest.raises(DomainValidationError) as bad_decision:
-        replace(provenance, decision="bad")
-    assert bad_decision.value.entity_type == "retry_provenance"
+        replace(provenance.authority, decision="bad")
+    assert bad_decision.value.entity_type == "unknown_retry_authority"
     assert bad_decision.value.field == "decision"
     assert bad_decision.value.reason == "unknown"
 
@@ -1675,7 +1687,7 @@ def test_run_rehydration_rejects_additional_cross_history_corruption(
             source_attempt_id="attempt-002",
             source_attempt_no=2,
             source_fence=2,
-            adjudication_id="adjudication-extra",
+            authority=replace(intent.authority, adjudication_id="adjudication-extra"),
             created_at=intent.created_at + timedelta(seconds=1),
         )
         source = run

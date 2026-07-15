@@ -1423,7 +1423,10 @@ def test_run_rehydration_rejects_unknown_history_before_assignment_commit() -> N
         unknown_observation=observation,
         adjudications=(adjudication,),
     )
-    changed_intent = replace(intent, adjudication_digest=adjudication.digest)
+    changed_intent = replace(
+        intent,
+        authority=replace(intent.authority, adjudication_digest=adjudication.digest),
+    )
 
     with pytest.raises(DomainValidationError) as caught:
         replace(

@@ -7,6 +7,7 @@ def _retry_provenance():
     from qarunner.domain import (
         RetryProvenance,
         UnknownAdjudicationDecision,
+        UnknownAdjudicationRetryAuthority,
         canonical_digest,
     )
 
@@ -22,9 +23,11 @@ def _retry_provenance():
         source_attempt_id="attempt-001",
         source_attempt_no=1,
         source_fence=1,
-        adjudication_id="adjudication-001",
-        adjudication_digest=digest("adjudication"),
-        decision=UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY,
+        authority=UnknownAdjudicationRetryAuthority(
+            adjudication_id="adjudication-001",
+            adjudication_digest=digest("adjudication"),
+            decision=UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY,
+        ),
     )
 
 

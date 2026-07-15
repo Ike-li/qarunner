@@ -89,7 +89,12 @@ from qarunner.domain.manifest import (
     ShardRequirements,
     WorkEstimate,
 )
-from qarunner.domain.retry import RetryIntent, RetryProvenance
+from qarunner.domain.retry import (
+    PolicyRetryAuthority,
+    RetryIntent,
+    RetryProvenance,
+    UnknownAdjudicationRetryAuthority,
+)
 from qarunner.domain.run import (
     FinalizeAttemptEvidenceResult,
     FinalizeCancellationEvidenceResult,
@@ -265,6 +270,7 @@ __all__ = [
     "UnknownAdjudicationResultRef",
     "RunState",
     "RetryIntent",
+    "PolicyRetryAuthority",
     "PlatformRetryPolicy",
     "RetryBudget",
     "RetryBudgetUsage",
@@ -281,6 +287,7 @@ __all__ = [
     "evaluate_run_retry",
     "RetryNotAllowed",
     "RetryProvenance",
+    "UnknownAdjudicationRetryAuthority",
     "RunBinding",
     "ReconcileWorkerFacts",
     "PlatformExitClass",

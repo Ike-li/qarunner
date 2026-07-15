@@ -44,7 +44,13 @@ from qarunner.domain.evidence import (
     VerifiedArtifact,
     build_evidence_manifest,
 )
-from qarunner.domain.retry import RetryIntent, RetryProvenance
+from qarunner.domain.retry import (
+    PolicyRetryAuthority,
+    RetryIntent,
+    RetryProvenance,
+    UnknownAdjudicationRetryAuthority,
+)
+from qarunner.domain.run_retry_policy import RetryDecision, RunRetryDecision
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownObservation,
@@ -292,9 +298,7 @@ class Run:
                 or provenance.retry_intent_digest != intent.digest
                 or provenance.source_attempt_no != intent.source_attempt_no
                 or provenance.source_fence != intent.source_fence
-                or provenance.adjudication_id != intent.adjudication_id
-                or provenance.adjudication_digest != intent.adjudication_digest
-                or provenance.decision is not intent.decision
+                or provenance.authority != intent.authority
             ):
                 _invalid_run("attempts", "retry_provenance_mismatch")
 
@@ -307,7 +311,7 @@ class Run:
         ):
             _invalid_run("pending_retry_intent_id", "source_attempt_not_current")
         retry_authorities = tuple(
-            (intent.source_attempt_id, intent.adjudication_id) for intent in self.retry_intents
+            (intent.source_attempt_id, intent.authority) for intent in self.retry_intents
         )
         if len(retry_authorities) != len(set(retry_authorities)):
             _invalid_run("retry_intents", "duplicate_authority")
@@ -322,16 +326,25 @@ class Run:
                 or intent.execution_spec_digest != source.spec_digest
             ):
                 _invalid_run("retry_intents", "source_mismatch")
-            adjudication = source.adjudications[-1] if source.adjudications else None
-            if (
-                adjudication is None
-                or intent.adjudication_id != adjudication.id
-                or intent.adjudication_digest != adjudication.digest
-                or intent.decision is not adjudication.decision
-                or not adjudication.decision.permits_retry
-                or intent.created_at < adjudication.occurred_at
-            ):
-                _invalid_run("retry_intents", "adjudication_not_authoritative")
+            if isinstance(intent.authority, UnknownAdjudicationRetryAuthority):
+                adjudication = source.adjudications[-1] if source.adjudications else None
+                if (
+                    adjudication is None
+                    or intent.adjudication_id != adjudication.id
+                    or intent.adjudication_digest != adjudication.digest
+                    or intent.decision is not adjudication.decision
+                    or not adjudication.decision.permits_retry
+                    or intent.created_at < adjudication.occurred_at
+                ):
+                    _invalid_run("retry_intents", "adjudication_not_authoritative")
+            else:
+                expected = (
+                    AttemptState.TEST_FAILED
+                    if intent.authority.source_outcome.value == "test_failed"
+                    else AttemptState.INFRA_FAILED
+                )
+                if source.state is not expected:
+                    _invalid_run("retry_intents", "policy_not_authoritative")
 
         attempt_assignment_ids = {attempt.assignment_id for attempt in self.attempts}
         retry_intent_epochs = {
@@ -1515,6 +1528,56 @@ class Run:
             pending_retry_intent_id=retry_intent.id,
         )
 
+    def queue_policy_retry(
+        self,
+        *,
+        retry_intent: RetryIntent,
+        retry_decision: RunRetryDecision,
+        expected_version: int,
+    ) -> Run:
+        """Persist a policy-authorized full-Run retry in the shared intent chain."""
+        existing = next(
+            (value for value in self.retry_intents if value.id == retry_intent.id), None
+        )
+        if existing is not None:
+            if existing.digest != retry_intent.digest:
+                raise IdempotencyConflict(
+                    scope=f"run:{self.id}:retry-intent",
+                    key=retry_intent.id,
+                    stored_digest=existing.digest,
+                    received_digest=retry_intent.digest,
+                )
+            return self
+        source = self._current_attempt(retry_intent.source_attempt_id)
+        if self.cancel_intent is not None:
+            raise RetryNotAllowed(
+                run_id=self.id, attempt_id=source.id, adjudication_id="", reason="cancel_requested"
+            )
+        if self.state is not RunState.RUNNING or self.pending_retry_intent is not None:
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id="",
+                reason="retry_already_queued",
+            )
+        self._ensure_policy_retry_intent_authoritative(
+            retry_intent=retry_intent, retry_decision=retry_decision, source=source
+        )
+        ensure_expected_version(
+            entity_type="run",
+            entity_id=self.id,
+            current_version=self.version,
+            expected_version=expected_version,
+        )
+        return replace(
+            self,
+            state=RunState.RETRY_QUEUED,
+            version=self.version + 1,
+            current_assignment_id=None,
+            retry_intents=(*self.retry_intents, retry_intent),
+            pending_retry_intent_id=retry_intent.id,
+        )
+
     def ensure_automatic_retry_source_is_not_unknown(
         self, *, attempt_id: str, expected_version: int
     ) -> None:
@@ -1600,6 +1663,26 @@ class Run:
         retry_intent: RetryIntent,
         source: Attempt,
     ) -> None:
+        if isinstance(retry_intent.authority, PolicyRetryAuthority):
+            expected_state = (
+                AttemptState.TEST_FAILED
+                if retry_intent.authority.source_outcome.value == "test_failed"
+                else AttemptState.INFRA_FAILED
+            )
+            if (
+                source.state is not expected_state
+                or retry_intent.run_id != self.id
+                or retry_intent.source_attempt_no != source.attempt_no
+                or retry_intent.source_fence != source.fence
+                or retry_intent.execution_spec_digest != source.spec_digest
+            ):
+                raise RetryNotAllowed(
+                    run_id=self.id,
+                    attempt_id=source.id,
+                    adjudication_id="",
+                    reason="retry_intent_mismatch",
+                )
+            return
         if source.state is not AttemptState.ATTEMPT_UNKNOWN:
             raise RetryNotAllowed(
                 run_id=self.id,
@@ -1642,6 +1725,54 @@ class Run:
                 run_id=self.id,
                 attempt_id=source.id,
                 adjudication_id=current_adjudication.id,
+                reason="retry_intent_mismatch",
+            )
+
+    def _ensure_policy_retry_intent_authoritative(
+        self, *, retry_intent: RetryIntent, retry_decision: RunRetryDecision, source: Attempt
+    ) -> None:
+        authority = retry_intent.authority
+        if not isinstance(authority, PolicyRetryAuthority):
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id="",
+                reason="policy_authority_required",
+            )
+        fact = retry_decision.source
+        expected_state = (
+            AttemptState.TEST_FAILED
+            if authority.source_outcome.value == "test_failed"
+            else AttemptState.INFRA_FAILED
+        )
+        if (
+            retry_decision.decision is not RetryDecision.RETRY
+            or retry_decision.retry_intent_digest != retry_intent.digest
+            or source.state is not expected_state
+            or fact.run_id != self.id
+            or fact.run_version != self.version
+            or fact.attempt_id != source.id
+            or fact.attempt_no != source.attempt_no
+            or fact.attempt_fence != source.fence
+            or fact.outcome is not authority.source_outcome
+            or fact.item_resolution_set_digest != authority.item_resolution_set_digest
+            or fact.source_item_set_digest != authority.source_item_set_digest
+            or fact.target_item_set_digest != authority.target_item_set_digest
+            or retry_decision.decision_source_kind is not authority.decision_source_kind
+            or retry_decision.policy_digest != authority.policy_digest
+            or retry_decision.authority_schema != authority.authority_schema
+            or retry_decision.authority_id != authority.authority_id
+            or retry_decision.authority_version != authority.authority_version
+            or retry_decision.authority_digest != authority.authority_digest
+            or retry_intent.run_id != self.id
+            or retry_intent.source_attempt_no != source.attempt_no
+            or retry_intent.source_fence != source.fence
+            or retry_intent.execution_spec_digest != source.spec_digest
+        ):
+            raise RetryNotAllowed(
+                run_id=self.id,
+                attempt_id=source.id,
+                adjudication_id="",
                 reason="retry_intent_mismatch",
             )
 

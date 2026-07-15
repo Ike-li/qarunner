@@ -1205,7 +1205,7 @@ def _adjudication(cycle: int) -> UnknownAdjudication:
 
 def _retry_intent(cycle: int) -> RetryIntent:
     adjudication = _adjudication(cycle)
-    return RetryIntent(
+    return RetryIntent.from_unknown_adjudication(
         id=f"retry-{cycle}",
         run_id=_RUN_KEY.value,
         source_attempt_id=_attempt_id(cycle),
