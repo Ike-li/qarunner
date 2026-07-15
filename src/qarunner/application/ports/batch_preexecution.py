@@ -87,6 +87,7 @@ class BatchRejectionSideEffect:
 
 @dataclass(frozen=True, slots=True)
 class BatchClosureAuthority:
+    batch_id: str
     project_id: str
     suite_revision_id: str
     source_batch_version: int
@@ -131,9 +132,6 @@ class BatchPreexecutionGateway(Protocol):
         batch_id: str,
         reconciler_id: str,
         closure_epoch: int,
-        project_id: str,
-        suite_revision_id: str,
-        source_batch_version: int,
     ) -> BatchClosureAuthority: ...
 
     async def require_rejection_authority(

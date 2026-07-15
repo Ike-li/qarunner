@@ -5,6 +5,28 @@ from datetime import UTC, datetime
 import pytest
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("project_id", "project-attacker"),
+        ("suite_revision_id", "suite-attacker"),
+        ("expected_batch_version", 999),
+    ],
+)
+def test_closure_command_rejects_server_derived_source_fields(field: str, value: object) -> None:
+    from qarunner.application.batch_preexecution import ReconcilePreexecutionCancellationCommand
+
+    values = {
+        "batch_id": "batch-001",
+        "reconciler_id": "reconciler-001",
+        "closure_epoch": 1,
+        field: value,
+    }
+
+    with pytest.raises(TypeError):
+        ReconcilePreexecutionCancellationCommand(**values)  # type: ignore[arg-type]
+
+
 @pytest.mark.asyncio
 async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
@@ -63,9 +85,6 @@ async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> 
     closed = await handler.execute(
         ReconcilePreexecutionCancellationCommand(
             batch_id=source.id,
-            project_id=intent.project_id,
-            suite_revision_id=intent.suite_revision_id,
-            expected_batch_version=requested.version,
             reconciler_id="reconciler-001",
             closure_epoch=1,
         )
@@ -85,9 +104,6 @@ async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> 
     replay = await handler.execute(
         ReconcilePreexecutionCancellationCommand(
             batch_id=source.id,
-            project_id=intent.project_id,
-            suite_revision_id=intent.suite_revision_id,
-            expected_batch_version=requested.version,
             reconciler_id="reconciler-001",
             closure_epoch=1,
         )
@@ -95,6 +111,8 @@ async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> 
 
     assert replay is closed
     assert state.closure_authority_checks == 2
+    assert proof_gateway.child_scans == 1
+    assert proof_gateway.snapshot_assemblies == 1
     assert len(state.audit_records) == 1
     assert len(state.semantic_outbox) == 1
 
@@ -124,9 +142,6 @@ async def test_materialized_scope_publishes_one_deterministic_handoff_without_cl
     )
     command = ReconcilePreexecutionCancellationCommand(
         batch_id=requested.id,
-        project_id=intent.project_id,
-        suite_revision_id=intent.suite_revision_id,
-        expected_batch_version=requested.version,
         reconciler_id="reconciler-001",
         closure_epoch=1,
     )
@@ -159,6 +174,7 @@ async def test_materialized_scope_without_cancellation_intent_is_rejected() -> N
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
 
     from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
         ReconcilePreexecutionCancellation,
         ReconcilePreexecutionCancellationCommand,
     )
@@ -167,28 +183,26 @@ async def test_materialized_scope_without_cancellation_intent_is_rejected() -> N
 
     batch = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
     state = InMemoryBatchPreexecutionGateway(batch=batch)
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=False,
+        run_ids=("run-001",),
+    )
     handler = ReconcilePreexecutionCancellation(
         gateway=state,
-        proof=ProvePreexecutionClosure(
-            gateway=InMemoryPreexecutionProofGateway(
-                inventory_sealed=False,
-                run_ids=("run-001",),
-            )
-        ),
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
     )
 
-    with pytest.raises(RuntimeError, match="requires intent"):
+    with pytest.raises(PreexecutionStateConflict) as caught:
         await handler.execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=batch.id,
-                project_id="project-001",
-                suite_revision_id="suite-revision-001",
-                expected_batch_version=batch.version,
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
         )
 
+    assert caught.value.reason == "closure_command_missing"
+    assert proof_gateway.child_scans == 0
     assert state.handoffs == {}
     assert state.audit_records == ()
     assert state.semantic_outbox == ()
@@ -218,9 +232,6 @@ async def test_materialized_handoff_binding_drift_is_quarantined_without_second_
     )
     command = ReconcilePreexecutionCancellationCommand(
         batch_id=requested.id,
-        project_id=intent.project_id,
-        suite_revision_id=intent.suite_revision_id,
-        expected_batch_version=requested.version,
         reconciler_id="reconciler-001",
         closure_epoch=1,
     )
@@ -266,9 +277,6 @@ async def test_materialized_handoff_publication_failure_is_atomic() -> None:
         await handler.execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=requested.id,
-                project_id=intent.project_id,
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
@@ -285,7 +293,7 @@ async def test_materialized_handoff_publication_failure_is_atomic() -> None:
     ("gateway_options", "expected_problem"),
     [
         ({"authority_available": False}, "TemporarilyUnavailable"),
-        ({"authority_allowed": False}, "ObjectForbidden"),
+        ({"authority_allowed": False}, "PreexecutionStateConflict"),
     ],
 )
 async def test_closure_authority_failure_precedes_batch_read_proof_and_replay(
@@ -316,9 +324,6 @@ async def test_closure_authority_failure_precedes_batch_read_proof_and_replay(
         ).execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=requested.id,
-                project_id=intent.project_id,
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
@@ -356,9 +361,6 @@ async def test_superseded_closure_epoch_returns_state_conflict_before_replay() -
         ).execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=requested.id,
-                project_id=intent.project_id,
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
@@ -399,51 +401,12 @@ async def test_expired_authority_projection_fails_closed_without_freezing_a_max_
         ).execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=requested.id,
-                project_id=intent.project_id,
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
         )
 
     assert state.batch_reads == 0
-
-
-@pytest.mark.asyncio
-async def test_closure_source_binding_drift_returns_state_conflict_before_proof() -> None:
-    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
-    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
-
-    from qarunner.application.batch_preexecution import (
-        PreexecutionStateConflict,
-        ReconcilePreexecutionCancellation,
-        ReconcilePreexecutionCancellationCommand,
-    )
-    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
-
-    requested, intent = _requested_batch()
-    state = InMemoryBatchPreexecutionGateway(batch=requested)
-    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
-
-    with pytest.raises(PreexecutionStateConflict) as captured:
-        await ReconcilePreexecutionCancellation(
-            gateway=state,
-            proof=ProvePreexecutionClosure(gateway=proof_gateway),
-        ).execute(
-            ReconcilePreexecutionCancellationCommand(
-                batch_id=requested.id,
-                project_id="foreign-project",
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
-                reconciler_id="reconciler-001",
-                closure_epoch=1,
-            )
-        )
-
-    assert captured.value.reason == "source_binding_superseded"
-    assert state.batch_reads == 0
-    assert proof_gateway.child_scans == 0
 
 
 @pytest.mark.asyncio
@@ -488,9 +451,6 @@ async def test_closure_scope_binding_drift_returns_state_conflict_before_replay(
         ).execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=requested.id,
-                project_id=intent.project_id,
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
@@ -527,9 +487,6 @@ async def test_retired_reconciler_returns_state_conflict_before_batch_read_or_re
         ).execute(
             ReconcilePreexecutionCancellationCommand(
                 batch_id=requested.id,
-                project_id=intent.project_id,
-                suite_revision_id=intent.suite_revision_id,
-                expected_batch_version=requested.version,
                 reconciler_id="retired-reconciler",
                 closure_epoch=1,
             )
@@ -618,9 +575,6 @@ async def test_planned_zero_child_cancel_builds_authoritative_typed_item_coverag
     ).execute(
         ReconcilePreexecutionCancellationCommand(
             batch_id=requested.id,
-            project_id=intent.project_id,
-            suite_revision_id=intent.suite_revision_id,
-            expected_batch_version=requested.version,
             reconciler_id="reconciler-001",
             closure_epoch=1,
         )

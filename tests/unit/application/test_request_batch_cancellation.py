@@ -6,6 +6,96 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_registered_service_derives_policy_source_into_cancel_intent() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        RequestBatchCancellation,
+        RequestBatchCancellationCommand,
+    )
+    from qarunner.domain import Batch, BatchState, CancellationSource
+
+    batch = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    gateway = InMemoryBatchPreexecutionGateway(
+        batch=batch,
+        cancel_actor_id="policy-service-001",
+        cancel_source=CancellationSource.POLICY_ENFORCEMENT,
+        cancel_registered_service=True,
+    )
+
+    intent = await RequestBatchCancellation(gateway=gateway).execute(
+        RequestBatchCancellationCommand(
+            batch_id=batch.id,
+            expected_batch_version=batch.version,
+            idempotency_key="policy-cancel-001",
+            reason="policy stopped execution",
+        )
+    )
+
+    assert intent.actor_id == "policy-service-001"
+    assert intent.source is CancellationSource.POLICY_ENFORCEMENT
+    assert gateway.batch_reads == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_name", ["POLICY_ENFORCEMENT", "DEADLINE_EXCEEDED"])
+async def test_unregistered_identity_cannot_claim_a_system_cancel_source_before_replay(
+    source_name: str,
+) -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        ObjectForbidden,
+        RequestBatchCancellation,
+        RequestBatchCancellationCommand,
+    )
+    from qarunner.domain import Batch, BatchState, CancellationSource
+
+    batch = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    gateway = InMemoryBatchPreexecutionGateway(
+        batch=batch,
+        cancel_actor_id="unregistered-service",
+        cancel_source=CancellationSource[source_name],
+        cancel_registered_service=False,
+    )
+
+    with pytest.raises(ObjectForbidden):
+        await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id=batch.id,
+                expected_batch_version=batch.version,
+                idempotency_key="system-cancel-001",
+                reason="system requested cancellation",
+            )
+        )
+
+    assert gateway.batch_reads == 0
+    assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+async def test_cancel_policy_denial_precedes_batch_read_and_stored_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import ObjectForbidden, RequestBatchCancellation
+    from qarunner.domain import Batch, BatchState
+
+    source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    intent = _intent(batch_id=source.id, source_batch_version=source.version)
+    requested = source.request_cancel(intent=intent, expected_version=source.version)
+    gateway = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        cancel_policy_allowed=False,
+    )
+
+    with pytest.raises(ObjectForbidden):
+        await RequestBatchCancellation(gateway=gateway).execute(_command(intent=intent))
+
+    assert gateway.batch_reads == 0
+    assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
 async def test_cancel_authority_binds_batch_and_server_derived_identity() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
 
@@ -472,6 +562,69 @@ async def test_stale_version_blocks_only_a_new_cancel_mutation() -> None:
     assert gateway.batch is source
     assert gateway.audit_records == ()
     assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_current_version", [False, True], ids=["stale", "current"])
+async def test_rejected_terminal_blocks_late_cancel_before_version_cas(
+    use_current_version: bool,
+) -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+        RequestBatchCancellation,
+        RequestBatchCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+    from qarunner.domain import (
+        Batch,
+        BatchRejectionReasonClass,
+        BatchState,
+        canonical_digest,
+    )
+
+    source = Batch(id="batch-001", state=BatchState.VALIDATING, version=3)
+    gateway = InMemoryBatchPreexecutionGateway(batch=source)
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+    rejected = await RecordPreexecutionRejection(
+        gateway=gateway,
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
+    ).execute(
+        RecordPreexecutionRejectionCommand(
+            batch_id=source.id,
+            rejection_id="rejection-winner-001",
+            reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+            reason_code="invalid_suite",
+            input_digest=canonical_digest(
+                schema_version="qep.test-rejection-input.v1",
+                payload={"case": "late-cancel"},
+            ),
+            phase_owner_id="coordinator-001",
+            rejection_epoch=1,
+        )
+    )
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id=source.id,
+                expected_batch_version=(
+                    rejected.version if use_current_version else source.version
+                ),
+                idempotency_key="late-cancel-001",
+                reason="too late",
+            )
+        )
+
+    assert caught.value.reason == "rejection_terminal_winner"
+    assert gateway.batch is rejected
+    assert gateway.batch.cancellation_intent is None
+    assert len(gateway.audit_records) == 1
+    assert len(gateway.semantic_outbox) == 1
 
 
 def _intent(*, batch_id: str, source_batch_version: int):

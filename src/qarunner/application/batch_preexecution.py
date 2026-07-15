@@ -134,6 +134,8 @@ class RequestBatchCancellation:
             and stored.reason == command.reason
         ):
             return stored
+        if batch.rejection_fact is not None:
+            raise PreexecutionStateConflict(reason="rejection_terminal_winner")
         intent = BatchCancellationIntent(
             batch_id=command.batch_id,
             project_id=authority.project_id,
@@ -158,9 +160,6 @@ class RequestBatchCancellation:
 @dataclass(frozen=True, slots=True)
 class ReconcilePreexecutionCancellationCommand:
     batch_id: str
-    project_id: str
-    suite_revision_id: str
-    expected_batch_version: int
     reconciler_id: str
     closure_epoch: int
 
@@ -183,19 +182,30 @@ class ReconcilePreexecutionCancellation:
                 batch_id=command.batch_id,
                 reconciler_id=command.reconciler_id,
                 closure_epoch=command.closure_epoch,
-                project_id=command.project_id,
-                suite_revision_id=command.suite_revision_id,
-                source_batch_version=command.expected_batch_version,
             )
         except AuthorityProjectionUnavailable:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
-            raise ObjectForbidden() from None
+            raise PreexecutionStateConflict(reason="reconciler_authority_denied") from None
         except InternalAuthorityRetired as error:
             raise PreexecutionStateConflict(reason=error.reason) from None
         except AuthorityStateConflict as error:
             raise PreexecutionStateConflict(reason=error.reason) from None
         batch = await self._gateway.get_batch_for_update(batch_id=command.batch_id)
+        basis = batch.preexecution_closure_basis
+        intent = batch.cancellation_intent
+        if intent is None:
+            raise PreexecutionStateConflict(reason="closure_command_missing")
+        if basis is not None:
+            if (
+                basis.batch_id != authority.batch_id
+                or basis.source_batch_version != authority.source_batch_version
+                or basis.terminal_kind is not BatchPreexecutionTerminalKind.PRESTART_CANCEL
+                or basis.batch_cancellation_intent_digest != intent.digest
+                or not _basis_matches_authority_scope(basis=basis, scope=authority.scope)
+            ):
+                raise PreexecutionStateConflict(reason="closure_authority_binding_superseded")
+            return batch
         proof = await self._proof.execute(
             ProvePreexecutionClosureCommand(
                 batch_id=command.batch_id,
@@ -210,12 +220,11 @@ class ReconcilePreexecutionCancellation:
             )
         )
         if isinstance(proof, MaterializedExecutionScope):
-            intent = batch.cancellation_intent
             if intent is None:
                 raise RuntimeError("materialized cancellation reconciliation requires intent")
             handoff = build_cancel_handoff(
                 intent=intent,
-                source_batch_version=command.expected_batch_version,
+                source_batch_version=authority.source_batch_version,
                 authoritative_run_set_digest=proof.authoritative_run_set_digest,
                 authority_digest=authority.authority_digest,
                 write_epoch=authority.write_epoch,
@@ -224,7 +233,7 @@ class ReconcilePreexecutionCancellation:
             return published.value
         closed = batch.finalize_unmaterialized_cancel(
             snapshot=proof,
-            expected_version=command.expected_batch_version,
+            expected_version=authority.source_batch_version,
         )
         await self._gateway.publish_preexecution_closure(batch=closed)
         return closed
@@ -274,7 +283,7 @@ class RecordPreexecutionRejection:
         except AuthorityProjectionUnavailable:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
-            raise ObjectForbidden() from None
+            raise PreexecutionStateConflict(reason="phase_owner_authority_denied") from None
         except InternalAuthorityRetired as error:
             raise PreexecutionStateConflict(reason=error.reason) from None
         except AuthorityStateConflict as error:
@@ -307,6 +316,10 @@ class RecordPreexecutionRejection:
             ):
                 raise PreexecutionStateConflict(reason="rejection_authority_binding_superseded")
             return batch
+        if stored is not None:
+            raise PreexecutionStateConflict(reason="rejection_terminal_winner")
+        if batch.cancellation_intent is not None:
+            raise PreexecutionStateConflict(reason="cancellation_intent_winner")
         proof = await self._proof.execute(
             ProvePreexecutionClosureCommand(
                 batch_id=authority.batch_id,

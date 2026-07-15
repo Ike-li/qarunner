@@ -60,6 +60,157 @@ def test_rejection_command_does_not_accept_a_complete_rejection_fact() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state_name", "stage_name", "frozen_plan"),
+    [
+        pytest.param("VALIDATING", "VALIDATION", False, id="validating"),
+        pytest.param("COLLECTING", "COLLECTION", False, id="collecting"),
+        pytest.param("PLANNING", "PLANNING", False, id="planning"),
+        pytest.param("AWAITING_ADMISSION", "ADMISSION", True, id="awaiting-admission"),
+    ],
+)
+async def test_rejection_phase_family_derives_current_stage_source_and_scope(
+    state_name: str,
+    stage_name: str,
+    frozen_plan: bool,
+) -> None:
+    """Every rejectable phase derives its own current stage, version, and scope."""
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+    )
+    from qarunner.application.preexecution_proof import (
+        ProvePreexecutionClosure,
+        canonical_materialized_run_set_digest,
+    )
+    from qarunner.domain import (
+        Batch,
+        BatchCancellationScope,
+        BatchCancellationScopeKind,
+        BatchPreexecutionScopeKind,
+        BatchRejectionReasonClass,
+        BatchRejectionStage,
+        BatchState,
+        canonical_digest,
+    )
+
+    def digest(label: str):
+        return canonical_digest(
+            schema_version="qep.test-rejection-phase-family.v1",
+            payload={"label": label},
+        )
+
+    batch = Batch(id="batch-001", state=BatchState[state_name], version=7)
+    if frozen_plan:
+        scope = BatchCancellationScope(
+            kind=BatchCancellationScopeKind.FROZEN_PLAN,
+            preplan_scope_digest=None,
+            manifest_digest=digest("manifest"),
+            shard_plan_version=2,
+            shard_plan_digest=digest("plan"),
+            canonical_run_set_digest=canonical_materialized_run_set_digest(
+                batch_id=batch.id,
+                run_ids=(),
+            ),
+        )
+        proof_gateway = InMemoryPreexecutionProofGateway(
+            inventory_sealed=True,
+            planned_manifest_id="manifest-001",
+            planned_manifest_digest=scope.manifest_digest,
+            planned_item_keys=("case-001",),
+            planned_shard_plan_id="plan-001",
+            planned_shard_plan_version=scope.shard_plan_version,
+            planned_shard_plan_digest=scope.shard_plan_digest,
+        )
+    else:
+        scope = BatchCancellationScope(
+            kind=BatchCancellationScopeKind.PRE_PLAN,
+            preplan_scope_digest=digest("preplan"),
+            manifest_digest=None,
+            shard_plan_version=None,
+            shard_plan_digest=None,
+            canonical_run_set_digest=None,
+        )
+        proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+    state = InMemoryBatchPreexecutionGateway(batch=batch, authority_scope=scope)
+    command = RecordPreexecutionRejectionCommand(
+        batch_id=batch.id,
+        rejection_id=f"rejection-{state_name.lower()}",
+        reason_class=BatchRejectionReasonClass.POLICY_DENIED,
+        reason_code="phase_failure",
+        input_digest=digest("input"),
+        phase_owner_id="phase-owner-001",
+        rejection_epoch=1,
+    )
+
+    closed = await RecordPreexecutionRejection(
+        gateway=state,
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
+    ).execute(command)
+
+    assert closed.rejection_fact is not None
+    assert closed.rejection_fact.source_batch_version == batch.version
+    assert closed.rejection_fact.stage is BatchRejectionStage[stage_name]
+    assert state.last_rejection_authority.source_batch_version == batch.version
+    assert state.last_rejection_authority.stage is BatchRejectionStage[stage_name]
+    assert state.last_rejection_authority.scope is scope
+    assert closed.preexecution_closure_basis is not None
+    assert closed.preexecution_closure_basis.scope_kind is (
+        BatchPreexecutionScopeKind.PLANNED_UNMATERIALIZED
+        if frozen_plan
+        else BatchPreexecutionScopeKind.PRE_PLAN
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state_name",
+    [
+        pytest.param("QUEUED", id="queued"),
+        pytest.param("RUNNING", id="running"),
+        pytest.param("SUCCEEDED", id="succeeded"),
+        pytest.param("FAILED", id="failed"),
+        pytest.param("PARTIAL", id="partial"),
+        pytest.param("CANCELLED", id="cancelled"),
+        pytest.param("REJECTED", id="legacy-rejected-without-fact"),
+    ],
+)
+async def test_invalid_rejection_phase_fails_closed_before_batch_read_or_proof(
+    state_name: str,
+) -> None:
+    """An invalid current phase is an authority conflict, never a mapping KeyError."""
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+    from qarunner.domain import Batch, BatchState
+
+    _, rejection = _batch_and_rejection()
+    batch = Batch(id=rejection.batch_id, state=BatchState[state_name], version=9)
+    state = InMemoryBatchPreexecutionGateway(batch=batch)
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await RecordPreexecutionRejection(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(_command(rejection))
+
+    assert caught.value.reason == "rejection_phase_not_current"
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
 async def test_materialized_rejection_publishes_handoff_then_returns_internal_state_conflict() -> (
     None
 ):
@@ -144,7 +295,7 @@ async def test_rejection_authority_denied_fails_before_batch_read() -> None:
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
 
     from qarunner.application.batch_preexecution import (
-        ObjectForbidden,
+        PreexecutionStateConflict,
         RecordPreexecutionRejection,
     )
     from qarunner.application.preexecution_proof import ProvePreexecutionClosure
@@ -152,7 +303,7 @@ async def test_rejection_authority_denied_fails_before_batch_read() -> None:
     batch, rejection = _batch_and_rejection()
     state = InMemoryBatchPreexecutionGateway(batch=batch, authority_allowed=False)
 
-    with pytest.raises(ObjectForbidden):
+    with pytest.raises(PreexecutionStateConflict) as caught:
         await RecordPreexecutionRejection(
             gateway=state,
             proof=ProvePreexecutionClosure(
@@ -161,6 +312,7 @@ async def test_rejection_authority_denied_fails_before_batch_read() -> None:
         ).execute(_command(rejection))
 
     assert state.batch_reads == 0
+    assert caught.value.reason == "phase_owner_authority_denied"
 
 
 @pytest.mark.asyncio
@@ -318,6 +470,95 @@ async def test_zero_child_rejection_atomically_closes_batch_and_exact_replays() 
             )
         )
     assert proof_gateway.child_scans == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stale_authority_lineage", [False, True], ids=["current", "stale"])
+async def test_pending_cancel_winner_blocks_late_rejection_before_proof_or_handoff(
+    stale_authority_lineage: bool,
+) -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+    from qarunner.domain import (
+        BatchCancellationIntent,
+        CancellationSource,
+    )
+
+    batch, rejection = _batch_and_rejection()
+    probe = InMemoryBatchPreexecutionGateway(batch=batch)
+    authority = probe.last_cancel_authority
+    intent = BatchCancellationIntent(
+        batch_id=batch.id,
+        project_id=authority.project_id,
+        suite_revision_id=authority.suite_revision_id,
+        source_batch_version=batch.version,
+        idempotency_key="cancel-winner-001",
+        source=CancellationSource.USER_REQUEST,
+        actor_id=authority.actor_id,
+        reason="cancel wins",
+        authorization_digest=authority.authorization_digest,
+        scope=authority.scope,
+        recorded_at=authority.recorded_at,
+    )
+    requested = batch.request_cancel(intent=intent, expected_version=batch.version)
+    state = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        rejection_source_batch_version=(
+            batch.version if stale_authority_lineage else requested.version
+        ),
+    )
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=False,
+        run_ids=("run-001",),
+    )
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await RecordPreexecutionRejection(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(_command(rejection))
+
+    assert caught.value.reason == "cancellation_intent_winner"
+    assert proof_gateway.child_scans == 0
+    assert state.handoffs == {}
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+    assert state.batch is requested
+
+
+@pytest.mark.asyncio
+async def test_different_rejection_id_on_terminal_conflicts_before_proof() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    batch, rejection = _batch_and_rejection()
+    state = InMemoryBatchPreexecutionGateway(batch=batch)
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+    handler = RecordPreexecutionRejection(
+        gateway=state,
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
+    )
+    await handler.execute(_command(rejection))
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await handler.execute(replace(_command(rejection), rejection_id="rejection-002"))
+
+    assert caught.value.reason == "rejection_terminal_winner"
+    assert proof_gateway.child_scans == 1
+    assert len(state.audit_records) == 1
+    assert len(state.semantic_outbox) == 1
 
 
 @pytest.mark.asyncio
