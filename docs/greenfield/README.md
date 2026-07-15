@@ -78,10 +78,16 @@
   `STATE-001F-PROD-DEC-001～009` Option A 已由用户明确授权的 `Ike-li` 代表
   PROD/DEV/QA/SEC/OPS 具名签署并全部转为 `DECIDED`，签署记录、UTC 与适用 baseline 见该文档
   §12.2。这只关闭 implementation-boundary 决策，不把 `T-M0-STATE-001F` 升级为 `VERIFIED`。
-- 001F 整体仍为 `IN_PROGRESS`：M0 相关七项决议的决策前置已关闭，但
-  `GATE-IMP-001/002`、窄实施授权和第 11 号文档 §10.3 的四包 M0 contract Evidence 尚未关闭。
-  001F 的五包 M1 PG concurrency/proof integration/fault recovery/migration/capacity Evidence 与
-  一包 M2 真实 API/RBAC Evidence 不反向阻塞 M0 contract completion，也尚未形成。
+- 001F 整体仍为 `IN_PROGRESS`：M0 相关七项决议与 `GATE-IMP-001/002` 已关闭。
+  `2026-07-15T10:27:49Z` 的首刀窄授权是历史记录；现行 `GOAL_PROMPT.md` 已授权在实施
+  计划范围内连续实施。已提交 `e88cfd8` 的首个 authority-unavailable tracer，当时全仓
+  门禁为 1934 passed、1 skipped、9 deselected、100% coverage；后续 intent application lane 已由
+  `abc3e6c` 扩展为 authority denied、exact replay、两类冲突、新 mutation、stale CAS 与原子
+  Batch/audit/outbox publication，最新全仓为 1941 passed、1 skipped、9 deselected、100% coverage。
+  closure handler 尚未实现，因此不构成整包 `APP-AUTH` 完成。四包 M0 contract Evidence 均尚未关闭；
+  `GATE-IMP-003` 保持 `OPEN`。001F 的五包 M1
+  PG concurrency/proof integration/fault recovery/migration/capacity Evidence 与一包 M2 真实
+  API/RBAC Evidence 不反向阻塞 M0 contract completion，也尚未形成。
 - 状态模型合同 §10 对 001G/001H 的 umbrella 完成门跨越 M0～M2：M0 先关闭 contract slices 并
   基线化接口后才能进入 M1；真实 persistence/API/crash/real-DB/E2E 由 001G/001H 各自的独立
   Evidence 关闭，不能复用 001F 六包。Production activation 仍等待上述全部 Evidence、M8 与独立
