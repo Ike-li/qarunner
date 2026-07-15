@@ -34,7 +34,7 @@
 | 8 | [实施状态账本](08_IMPLEMENTATION_STATUS.md) | Execution Ledger | 当前切片、commit、测试证据、风险和下一步 |
 | 9 | [M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md) | Implementation Decision Reference | PRD/DD/当前实现与测试的冲突、八项 implementation-level 决议、依赖与实施边界；不新增上游需求 |
 | 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合、对应实现合同，以及未签的 `STATE-DEC-009/010` 后续决策门 |
-| 11 | [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md) | Implementation Boundary Decision Reference | 001F 生产 authority/proof/UoW/API/recovery 的九项待签决议、Evidence 门禁，以及与 001G/001H 的 fail-closed handoff 边界 |
+| 11 | [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md) | Implementation Boundary Decision Reference | 001F 生产 authority/proof/UoW/API/recovery 的九项已签 `DECIDED` implementation-boundary 决议、Evidence 门禁，以及与 001G/001H 的 fail-closed handoff 边界；签署不等于实施或生产授权 |
 | 执行入口 | [长期 Goal Prompt](GOAL_PROMPT.md) | Codex Goal | 读取后持续执行 M0～M8 |
 
 ## 3. “独立设计”的含义
@@ -74,13 +74,14 @@
   `T-M0-STATE-001F` 的 M0 contract 状态升级为 `VERIFIED` 后，才可另建决议包具名签署并进入
   001G；001H 还必须等待 001G immutable Run facts。签署前不得实现其 proposed 答案。
 - 001F 纯领域/Fake 子切片状态为 `VERIFIED`，对应
-  `EV-M0-BATCH-PREEXECUTION-DOMAIN-001F` Evidence 已记录并可定位；001F 整体仍为
-  `IN_PROGRESS`，等待 M0 相关七项决议、`GATE-IMP-001/002`、窄实施授权和第 11 号文档 §10.3
-  的四包 M0 contract Evidence。
-- [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md)中的九项
-  `STATE-001F-PROD-DEC-*` 均为 `PROPOSED/UNSIGNED`。001F 的五包 M1 PG concurrency/proof
-  integration/fault recovery/migration/capacity Evidence 与一包 M2 真实 API/RBAC Evidence 不反向
-  阻塞 M0 contract completion。
+  `EV-M0-BATCH-PREEXECUTION-DOMAIN-001F` Evidence 已记录并可定位；第 11 号文档中的九项
+  `STATE-001F-PROD-DEC-001～009` Option A 已由用户明确授权的 `Ike-li` 代表
+  PROD/DEV/QA/SEC/OPS 具名签署并全部转为 `DECIDED`，签署记录、UTC 与适用 baseline 见该文档
+  §12.2。这只关闭 implementation-boundary 决策，不把 `T-M0-STATE-001F` 升级为 `VERIFIED`。
+- 001F 整体仍为 `IN_PROGRESS`：M0 相关七项决议的决策前置已关闭，但
+  `GATE-IMP-001/002`、窄实施授权和第 11 号文档 §10.3 的四包 M0 contract Evidence 尚未关闭。
+  001F 的五包 M1 PG concurrency/proof integration/fault recovery/migration/capacity Evidence 与
+  一包 M2 真实 API/RBAC Evidence 不反向阻塞 M0 contract completion，也尚未形成。
 - 状态模型合同 §10 对 001G/001H 的 umbrella 完成门跨越 M0～M2：M0 先关闭 contract slices 并
   基线化接口后才能进入 M1；真实 persistence/API/crash/real-DB/E2E 由 001G/001H 各自的独立
   Evidence 关闭，不能复用 001F 六包。Production activation 仍等待上述全部 Evidence、M8 与独立
