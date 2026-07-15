@@ -118,6 +118,51 @@ async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> 
 
 
 @pytest.mark.asyncio
+async def test_stored_closure_replay_rejects_authority_source_binding_drift() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, _ = _requested_batch()
+    first_state = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        authority_scope=requested.cancellation_intent.scope,
+    )
+    first_proof = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+    command = ReconcilePreexecutionCancellationCommand(
+        batch_id=requested.id,
+        reconciler_id="reconciler-001",
+        closure_epoch=1,
+    )
+    closed = await ReconcilePreexecutionCancellation(
+        gateway=first_state,
+        proof=ProvePreexecutionClosure(gateway=first_proof),
+    ).execute(command)
+    replay_state = InMemoryBatchPreexecutionGateway(
+        batch=closed,
+        authority_scope=closed.cancellation_intent.scope,
+        closure_source_batch_version=closed.version + 1,
+    )
+    replay_proof = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await ReconcilePreexecutionCancellation(
+            gateway=replay_state,
+            proof=ProvePreexecutionClosure(gateway=replay_proof),
+        ).execute(command)
+
+    assert caught.value.reason == "closure_authority_binding_superseded"
+    assert replay_proof.child_scans == 0
+    assert replay_state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
 async def test_materialized_scope_publishes_one_deterministic_handoff_without_closure() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway

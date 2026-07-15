@@ -220,8 +220,6 @@ class ReconcilePreexecutionCancellation:
             )
         )
         if isinstance(proof, MaterializedExecutionScope):
-            if intent is None:
-                raise RuntimeError("materialized cancellation reconciliation requires intent")
             handoff = build_cancel_handoff(
                 intent=intent,
                 source_batch_version=authority.source_batch_version,
