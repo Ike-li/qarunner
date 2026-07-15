@@ -30,6 +30,13 @@ from qarunner.application.ports.facts import (
     VersionedFactCommand,
     VersionedFactStore,
 )
+from qarunner.application.ports.handoff import (
+    HandoffDeliveryMetadata,
+    HandoffEventBlocked,
+    HandoffEventConflict,
+    HandoffPoisonAlert,
+    MaterializedScopeHandoffConsumer,
+)
 from qarunner.application.ports.ids import OpaqueIdGenerator
 from qarunner.application.ports.preexecution_proof import (
     ExecutionChildInventory,
@@ -70,6 +77,11 @@ __all__ = [
     "ExecutionChildInventory",
     "FactCommitResult",
     "FactKey",
+    "HandoffEventBlocked",
+    "HandoffDeliveryMetadata",
+    "HandoffEventConflict",
+    "HandoffPoisonAlert",
+    "MaterializedScopeHandoffConsumer",
     "OpaqueIdGenerator",
     "PortContractError",
     "PreexecutionProofGateway",
