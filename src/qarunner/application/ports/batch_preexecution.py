@@ -7,7 +7,11 @@ from typing import Protocol, runtime_checkable
 from qarunner.application.handoff import BatchMaterializedScopeHandoff
 from qarunner.application.ports.common import ReplayResult
 from qarunner.domain.batch import Batch, BatchRejection
-from qarunner.domain.cancellation import BatchCancellationIntent, BatchCancellationScope
+from qarunner.domain.cancellation import (
+    BatchCancellationIntent,
+    BatchCancellationScope,
+    CancellationSource,
+)
 from qarunner.domain.digest import Digest
 
 
@@ -19,6 +23,14 @@ class AuthorityPermissionDenied(RuntimeError):
     """The current caller has no permission on the requested object."""
 
 
+class InternalAuthorityRetired(RuntimeError):
+    """An internal reconciler or phase-owner capability is no longer current."""
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 class AuthorityStateConflict(RuntimeError):
     """The requested phase/reconciler authority is no longer current."""
 
@@ -28,12 +40,27 @@ class AuthorityStateConflict(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class AuthorityProjectionStamp:
+    """Current local projection position; maximum freshness window remains policy-owned."""
+
+    source: str
+    projection_version: int
+    revocation_watermark: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class BatchCancellationAuthority:
     """Server-derived facts required to materialize a cancellation intent."""
 
+    batch_id: str
+    project_id: str
     suite_revision_id: str
+    actor_id: str
+    source: CancellationSource
     authorization_digest: Digest
     scope: BatchCancellationScope
+    projection: AuthorityProjectionStamp
     recorded_at: datetime
 
 
@@ -49,16 +76,6 @@ class BatchCancellationSideEffect:
 class BatchClosureSideEffect:
     batch_id: str
     basis_digest: Digest
-
-
-@dataclass(frozen=True, slots=True)
-class AuthorityProjectionStamp:
-    """Current local projection position; maximum freshness window remains policy-owned."""
-
-    source: str
-    projection_version: int
-    revocation_watermark: int
-    expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,9 +112,7 @@ class BatchRejectionAuthority:
 class BatchPreexecutionGateway(Protocol):
     """Narrow authority and persistence boundary for pre-execution Batch work."""
 
-    async def require_cancel_authority(
-        self, *, project_id: str, actor_id: str
-    ) -> BatchCancellationAuthority:
+    async def require_cancel_authority(self, *, batch_id: str) -> BatchCancellationAuthority:
         """Require live authority without exposing any stored command identity."""
 
     async def get_batch_for_update(self, *, batch_id: str) -> Batch:

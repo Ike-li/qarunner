@@ -160,6 +160,117 @@ async def test_superseded_rejection_epoch_returns_state_conflict_before_batch_re
 
 
 @pytest.mark.asyncio
+async def test_retired_phase_owner_returns_state_conflict_before_batch_read_or_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    batch, rejection = _batch_and_rejection()
+    state = InMemoryBatchPreexecutionGateway(batch=batch, rejection_authority_current=False)
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as captured:
+        await RecordPreexecutionRejection(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            RecordPreexecutionRejectionCommand(
+                rejection=rejection,
+                phase_owner_id="retired-phase-owner",
+                rejection_epoch=1,
+            )
+        )
+
+    assert captured.value.http_status == 409
+    assert captured.value.reason == "phase_owner_authority_retired"
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+async def test_expired_rejection_projection_fails_before_batch_read_or_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+        TemporarilyUnavailable,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    batch, rejection = _batch_and_rejection()
+    expired_at = datetime(2026, 7, 15, 6, tzinfo=UTC)
+    state = InMemoryBatchPreexecutionGateway(
+        batch=batch,
+        authority_checked_at=expired_at,
+        authority_expires_at=expired_at,
+    )
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(TemporarilyUnavailable):
+        await RecordPreexecutionRejection(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            RecordPreexecutionRejectionCommand(
+                rejection=rejection,
+                phase_owner_id="coordinator-001",
+                rejection_epoch=1,
+            )
+        )
+
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+async def test_rejection_source_binding_drift_fails_before_batch_read_or_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    batch, rejection = _batch_and_rejection()
+    stale = replace(rejection, source_batch_version=rejection.source_batch_version - 1)
+    state = InMemoryBatchPreexecutionGateway(batch=batch)
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as captured:
+        await RecordPreexecutionRejection(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            RecordPreexecutionRejectionCommand(
+                rejection=stale,
+                phase_owner_id="coordinator-001",
+                rejection_epoch=1,
+            )
+        )
+
+    assert captured.value.reason == "source_binding_superseded"
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
 async def test_zero_child_rejection_atomically_closes_batch_and_exact_replays() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway

@@ -6,6 +6,191 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_cancel_authority_binds_batch_and_server_derived_identity() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        RequestBatchCancellation,
+        RequestBatchCancellationCommand,
+    )
+    from qarunner.domain import Batch, BatchState, CancellationSource
+
+    source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    gateway = InMemoryBatchPreexecutionGateway(batch=source)
+
+    accepted = await RequestBatchCancellation(gateway=gateway).execute(
+        RequestBatchCancellationCommand(
+            batch_id=source.id,
+            expected_batch_version=source.version,
+            idempotency_key="cancel-001",
+            reason="stop before execution starts",
+        )
+    )
+
+    assert accepted.batch_id == source.id
+    assert accepted.project_id == "project-001"
+    assert accepted.actor_id == "user-001"
+    assert accepted.source is CancellationSource.USER_REQUEST
+    assert gateway.last_cancel_authority.projection.source == "local-authority-projection"
+    assert gateway.last_cancel_authority.projection.projection_version == 7
+    assert gateway.last_cancel_authority.projection.revocation_watermark == 11
+
+
+@pytest.mark.asyncio
+async def test_cancel_authority_expiry_fails_before_batch_read_or_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        RequestBatchCancellation,
+        TemporarilyUnavailable,
+    )
+    from qarunner.domain import Batch, BatchState
+
+    source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    intent = _intent(batch_id=source.id, source_batch_version=source.version)
+    requested = source.request_cancel(intent=intent, expected_version=source.version)
+    instant = datetime(2026, 7, 15, 6, tzinfo=UTC)
+    gateway = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        authority_checked_at=instant,
+        authority_expires_at=instant,
+    )
+
+    with pytest.raises(TemporarilyUnavailable):
+        await RequestBatchCancellation(gateway=gateway).execute(_command(intent=intent))
+
+    assert gateway.batch_reads == 0
+    assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gateway_changes",
+    [
+        {"authority_projection_version": 6},
+        {"authority_revocation_watermark": 10},
+    ],
+)
+async def test_stale_cancel_projection_position_fails_closed_before_replay(
+    gateway_changes: dict[str, int],
+) -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        RequestBatchCancellation,
+        TemporarilyUnavailable,
+    )
+    from qarunner.domain import Batch, BatchState
+
+    source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    intent = _intent(batch_id=source.id, source_batch_version=source.version)
+    requested = source.request_cancel(intent=intent, expected_version=source.version)
+    gateway = InMemoryBatchPreexecutionGateway(batch=requested, **gateway_changes)
+
+    with pytest.raises(TemporarilyUnavailable):
+        await RequestBatchCancellation(gateway=gateway).execute(_command(intent=intent))
+
+    assert gateway.batch_reads == 0
+    assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("project_id", "project-attacker"),
+        ("actor_id", "user-attacker"),
+        ("source", "policy_enforcement"),
+    ],
+)
+def test_cancel_command_rejects_server_derived_identity_fields(field: str, value: str) -> None:
+    from qarunner.application.batch_preexecution import RequestBatchCancellationCommand
+
+    values = {
+        "batch_id": "batch-001",
+        "expected_batch_version": 3,
+        "idempotency_key": "cancel-001",
+        "reason": "stop before execution starts",
+        field: value,
+    }
+
+    with pytest.raises(TypeError):
+        RequestBatchCancellationCommand(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_cancel_authority_rejects_cross_batch_ownership_before_read() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        ObjectForbidden,
+        RequestBatchCancellation,
+        RequestBatchCancellationCommand,
+    )
+    from qarunner.domain import Batch, BatchState
+
+    owned = Batch(id="batch-owned", state=BatchState.COLLECTING, version=3)
+    gateway = InMemoryBatchPreexecutionGateway(batch=owned)
+
+    with pytest.raises(ObjectForbidden):
+        await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-other",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+
+    assert gateway.authority_checks == 1
+    assert gateway.batch_reads == 0
+    assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
+async def test_cancel_replay_rejects_superseded_authority_scope() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        RequestBatchCancellation,
+    )
+    from qarunner.domain import (
+        Batch,
+        BatchCancellationScope,
+        BatchCancellationScopeKind,
+        BatchState,
+        canonical_digest,
+    )
+
+    source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
+    intent = _intent(batch_id=source.id, source_batch_version=source.version)
+    requested = source.request_cancel(intent=intent, expected_version=source.version)
+    drifted_scope = BatchCancellationScope(
+        kind=BatchCancellationScopeKind.PRE_PLAN,
+        preplan_scope_digest=canonical_digest(
+            schema_version="qep.test-batch-cancel.v1",
+            payload={"label": "superseded-preplan-scope"},
+        ),
+        manifest_digest=None,
+        shard_plan_version=None,
+        shard_plan_digest=None,
+        canonical_run_set_digest=None,
+    )
+    gateway = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        authority_scope=drifted_scope,
+    )
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await RequestBatchCancellation(gateway=gateway).execute(_command(intent=intent))
+
+    assert caught.value.reason == "cancel_authority_binding_superseded"
+    assert gateway.batch_reads == 1
+    assert gateway.batch is requested
+    assert gateway.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
 async def test_authority_unavailable_blocks_exact_replay_without_exposing_stored_intent() -> None:
     """Live authority fails closed before stored replay and stale Batch CAS."""
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
@@ -61,11 +246,8 @@ async def test_authority_unavailable_blocks_exact_replay_without_exposing_stored
     handler = RequestBatchCancellation(gateway=gateway)
     command = RequestBatchCancellationCommand(
         batch_id=source.id,
-        project_id=intent.project_id,
         expected_batch_version=source.version,
         idempotency_key=intent.idempotency_key,
-        source=intent.source,
-        actor_id=intent.actor_id,
         reason=intent.reason,
     )
 
@@ -209,17 +391,14 @@ async def test_new_cancel_intent_atomically_publishes_batch_audit_and_outbox() -
         RequestBatchCancellation,
         RequestBatchCancellationCommand,
     )
-    from qarunner.domain import Batch, BatchState, CancellationSource
+    from qarunner.domain import Batch, BatchState
 
     source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
     gateway = InMemoryBatchPreexecutionGateway(batch=source)
     command = RequestBatchCancellationCommand(
         batch_id=source.id,
-        project_id="project-001",
         expected_batch_version=source.version,
         idempotency_key="cancel-001",
-        source=CancellationSource.USER_REQUEST,
-        actor_id="user-001",
         reason="stop before execution starts",
     )
 
@@ -227,7 +406,7 @@ async def test_new_cancel_intent_atomically_publishes_batch_audit_and_outbox() -
 
     assert accepted is gateway.batch.cancellation_intent
     assert accepted.batch_id == source.id
-    assert accepted.project_id == command.project_id
+    assert accepted.project_id == "project-001"
     assert accepted.source_batch_version == source.version
     assert gateway.batch.state is source.state
     assert gateway.batch.version == source.version + 1
@@ -246,7 +425,7 @@ async def test_publication_failure_leaves_batch_audit_and_outbox_unchanged() -> 
         RequestBatchCancellation,
         RequestBatchCancellationCommand,
     )
-    from qarunner.domain import Batch, BatchState, CancellationSource
+    from qarunner.domain import Batch, BatchState
 
     source = Batch(id="batch-001", state=BatchState.COLLECTING, version=3)
     gateway = InMemoryBatchPreexecutionGateway(
@@ -255,11 +434,8 @@ async def test_publication_failure_leaves_batch_audit_and_outbox_unchanged() -> 
     )
     command = RequestBatchCancellationCommand(
         batch_id=source.id,
-        project_id="project-001",
         expected_batch_version=source.version,
         idempotency_key="cancel-001",
-        source=CancellationSource.USER_REQUEST,
-        actor_id="user-001",
         reason="stop before execution starts",
     )
 
@@ -340,10 +516,7 @@ def _command(*, intent):
 
     return RequestBatchCancellationCommand(
         batch_id=intent.batch_id,
-        project_id=intent.project_id,
         expected_batch_version=intent.source_batch_version,
         idempotency_key=intent.idempotency_key,
-        source=intent.source,
-        actor_id=intent.actor_id,
         reason=intent.reason,
     )

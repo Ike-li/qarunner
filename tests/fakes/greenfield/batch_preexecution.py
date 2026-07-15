@@ -14,6 +14,7 @@ from qarunner.application.ports.batch_preexecution import (
     BatchClosureSideEffect,
     BatchRejectionAuthority,
     BatchRejectionSideEffect,
+    InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import ReplayResult
 from qarunner.domain.batch import Batch, BatchRejection
@@ -21,6 +22,7 @@ from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationScope,
     BatchCancellationScopeKind,
+    CancellationSource,
 )
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import IdempotencyConflict
@@ -38,8 +40,14 @@ class InMemoryBatchPreexecutionGateway:
         publication_error: Exception | None = None,
         current_closure_epoch: int = 1,
         current_rejection_epoch: int = 1,
+        closure_authority_current: bool = True,
+        rejection_authority_current: bool = True,
         authority_checked_at: datetime = datetime(2026, 7, 15, 6, tzinfo=UTC),
         authority_expires_at: datetime = datetime(2026, 7, 16, 6, tzinfo=UTC),
+        authority_projection_version: int = 7,
+        authority_revocation_watermark: int = 11,
+        required_projection_version: int = 7,
+        required_revocation_watermark: int = 11,
         authority_scope: BatchCancellationScope | None = None,
     ) -> None:
         self.batch = batch
@@ -48,8 +56,14 @@ class InMemoryBatchPreexecutionGateway:
         self.publication_error = publication_error
         self.current_closure_epoch = current_closure_epoch
         self.current_rejection_epoch = current_rejection_epoch
+        self.closure_authority_current = closure_authority_current
+        self.rejection_authority_current = rejection_authority_current
         self.authority_checked_at = authority_checked_at
         self.authority_expires_at = authority_expires_at
+        self.authority_projection_version = authority_projection_version
+        self.authority_revocation_watermark = authority_revocation_watermark
+        self.required_projection_version = required_projection_version
+        self.required_revocation_watermark = required_revocation_watermark
         self.authority_checks = 0
         self.closure_authority_checks = 0
         self.rejection_authority_checks = 0
@@ -74,8 +88,13 @@ class InMemoryBatchPreexecutionGateway:
         self.not_executed_facts: tuple[object, ...] = ()
         self.run_outcomes: tuple[object, ...] = ()
         self.quarantined_handoffs: tuple[Digest, ...] = ()
+        projection = self._projection_stamp()
         self._authority = BatchCancellationAuthority(
+            batch_id=batch.id,
+            project_id="project-001",
             suite_revision_id="suite-revision-001",
+            actor_id="user-001",
+            source=CancellationSource.USER_REQUEST,
             authorization_digest=canonical_digest(
                 schema_version="qep.test-batch-cancel.v1",
                 payload={"label": "cancel-authorization"},
@@ -95,17 +114,21 @@ class InMemoryBatchPreexecutionGateway:
                     canonical_run_set_digest=None,
                 )
             ),
+            projection=projection,
             recorded_at=datetime(2026, 7, 14, 6, tzinfo=UTC),
         )
+        self.last_cancel_authority = self._authority
 
-    async def require_cancel_authority(
-        self, *, project_id: str, actor_id: str
-    ) -> BatchCancellationAuthority:
-        del project_id, actor_id
+    async def require_cancel_authority(self, *, batch_id: str) -> BatchCancellationAuthority:
         self.authority_checks += 1
         if not self.authority_available:
             raise AuthorityProjectionUnavailable
+        self._require_current_projection()
+        if self.authority_expires_at <= self.authority_checked_at:
+            raise AuthorityProjectionUnavailable
         if not self.authority_allowed:
+            raise AuthorityPermissionDenied
+        if batch_id != self._authority.batch_id:
             raise AuthorityPermissionDenied
         return self._authority
 
@@ -139,8 +162,11 @@ class InMemoryBatchPreexecutionGateway:
         self.closure_authority_checks += 1
         if not self.authority_available:
             raise AuthorityProjectionUnavailable
+        self._require_current_projection()
         if self.authority_expires_at <= self.authority_checked_at:
             raise AuthorityProjectionUnavailable
+        if not self.closure_authority_current:
+            raise InternalAuthorityRetired(reason="reconciler_authority_retired")
         if not self.authority_allowed:
             raise AuthorityPermissionDenied
         if closure_epoch != self.current_closure_epoch:
@@ -208,8 +234,11 @@ class InMemoryBatchPreexecutionGateway:
         self.rejection_authority_checks += 1
         if not self.authority_available:
             raise AuthorityProjectionUnavailable
+        self._require_current_projection()
         if self.authority_expires_at <= self.authority_checked_at:
             raise AuthorityProjectionUnavailable
+        if not self.rejection_authority_current:
+            raise InternalAuthorityRetired(reason="phase_owner_authority_retired")
         if not self.authority_allowed:
             raise AuthorityPermissionDenied
         if rejection_epoch != self.current_rejection_epoch:
@@ -243,10 +272,17 @@ class InMemoryBatchPreexecutionGateway:
     def _projection_stamp(self) -> AuthorityProjectionStamp:
         return AuthorityProjectionStamp(
             source="local-authority-projection",
-            projection_version=7,
-            revocation_watermark=11,
+            projection_version=self.authority_projection_version,
+            revocation_watermark=self.authority_revocation_watermark,
             expires_at=self.authority_expires_at,
         )
+
+    def _require_current_projection(self) -> None:
+        if (
+            self.authority_projection_version < self.required_projection_version
+            or self.authority_revocation_watermark < self.required_revocation_watermark
+        ):
+            raise AuthorityProjectionUnavailable
 
     async def publish_preexecution_closure(self, *, batch: Batch) -> None:
         assert batch.preexecution_closure_basis is not None

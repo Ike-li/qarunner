@@ -447,6 +447,49 @@ async def test_closure_source_binding_drift_returns_state_conflict_before_proof(
 
 
 @pytest.mark.asyncio
+async def test_retired_reconciler_returns_state_conflict_before_batch_read_or_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, intent = _requested_batch()
+    state = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        closure_authority_current=False,
+    )
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as captured:
+        await ReconcilePreexecutionCancellation(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id=intent.project_id,
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="retired-reconciler",
+                closure_epoch=1,
+            )
+        )
+
+    assert captured.value.http_status == 409
+    assert captured.value.reason == "reconciler_authority_retired"
+    assert state.closure_authority_checks == 1
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+    assert state.audit_records == ()
+    assert state.semantic_outbox == ()
+
+
+@pytest.mark.asyncio
 async def test_planned_zero_child_cancel_builds_authoritative_typed_item_coverage() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway

@@ -10,6 +10,7 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionUnavailable,
     AuthorityStateConflict,
     BatchPreexecutionGateway,
+    InternalAuthorityRetired,
 )
 from qarunner.application.preexecution_proof import (
     MaterializedExecutionScope,
@@ -17,7 +18,7 @@ from qarunner.application.preexecution_proof import (
     ProvePreexecutionClosureCommand,
 )
 from qarunner.domain.batch import BatchPreexecutionTerminalKind, BatchRejection
-from qarunner.domain.cancellation import BatchCancellationIntent, CancellationSource
+from qarunner.domain.cancellation import BatchCancellationIntent
 from qarunner.domain.digest import canonical_digest
 from qarunner.domain.errors import BatchCancellationConflict, IdempotencyConflict
 
@@ -61,11 +62,8 @@ class RequestBatchCancellationCommand:
     """Caller-controlled identity for a Batch cancellation request."""
 
     batch_id: str
-    project_id: str
     expected_batch_version: int
     idempotency_key: str
-    source: CancellationSource
-    actor_id: str
     reason: str
 
 
@@ -77,10 +75,7 @@ class RequestBatchCancellation:
 
     async def execute(self, command: RequestBatchCancellationCommand) -> BatchCancellationIntent:
         try:
-            authority = await self._gateway.require_cancel_authority(
-                project_id=command.project_id,
-                actor_id=command.actor_id,
-            )
+            authority = await self._gateway.require_cancel_authority(batch_id=command.batch_id)
         except AuthorityProjectionUnavailable:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
@@ -93,8 +88,8 @@ class RequestBatchCancellation:
                 "batch_id": command.batch_id,
                 "source_batch_version": command.expected_batch_version,
                 "idempotency_key": command.idempotency_key,
-                "source": command.source.value,
-                "actor_id": command.actor_id,
+                "source": authority.source.value,
+                "actor_id": authority.actor_id,
                 "reason": command.reason,
             },
         )
@@ -116,23 +111,33 @@ class RequestBatchCancellation:
                 received_key=command.idempotency_key,
             )
         if stored is not None and (
+            stored.batch_id != authority.batch_id
+            or stored.project_id != authority.project_id
+            or stored.suite_revision_id != authority.suite_revision_id
+            or stored.source is not authority.source
+            or stored.actor_id != authority.actor_id
+            or stored.authorization_digest != authority.authorization_digest
+            or stored.scope != authority.scope
+        ):
+            raise PreexecutionStateConflict(reason="cancel_authority_binding_superseded")
+        if stored is not None and (
             stored.batch_id == command.batch_id
-            and stored.project_id == command.project_id
+            and stored.project_id == authority.project_id
             and stored.source_batch_version == command.expected_batch_version
             and stored.idempotency_key == command.idempotency_key
-            and stored.source is command.source
-            and stored.actor_id == command.actor_id
+            and stored.source is authority.source
+            and stored.actor_id == authority.actor_id
             and stored.reason == command.reason
         ):
             return stored
         intent = BatchCancellationIntent(
             batch_id=command.batch_id,
-            project_id=command.project_id,
+            project_id=authority.project_id,
             suite_revision_id=authority.suite_revision_id,
             source_batch_version=command.expected_batch_version,
             idempotency_key=command.idempotency_key,
-            source=command.source,
-            actor_id=command.actor_id,
+            source=authority.source,
+            actor_id=authority.actor_id,
             reason=command.reason,
             authorization_digest=authority.authorization_digest,
             scope=authority.scope,
@@ -182,6 +187,8 @@ class ReconcilePreexecutionCancellation:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
             raise ObjectForbidden() from None
+        except InternalAuthorityRetired as error:
+            raise PreexecutionStateConflict(reason=error.reason) from None
         except AuthorityStateConflict as error:
             raise PreexecutionStateConflict(reason=error.reason) from None
         batch = await self._gateway.get_batch_for_update(batch_id=command.batch_id)
@@ -261,6 +268,8 @@ class RecordPreexecutionRejection:
             raise TemporarilyUnavailable() from None
         except AuthorityPermissionDenied:
             raise ObjectForbidden() from None
+        except InternalAuthorityRetired as error:
+            raise PreexecutionStateConflict(reason=error.reason) from None
         except AuthorityStateConflict as error:
             raise PreexecutionStateConflict(reason=error.reason) from None
         batch = await self._gateway.get_batch_for_update(batch_id=command.rejection.batch_id)
