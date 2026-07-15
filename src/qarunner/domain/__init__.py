@@ -89,6 +89,12 @@ from qarunner.domain.run import (
     Run,
     RunState,
 )
+from qarunner.domain.run_finalization import (
+    RunDisposition,
+    RunFinalizationState,
+    RunOutcome,
+    RunPhase,
+)
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownAdjudicationDecision,
@@ -165,6 +171,10 @@ __all__ = [
     "ManifestItem",
     "PlannedShard",
     "Run",
+    "RunDisposition",
+    "RunFinalizationState",
+    "RunOutcome",
+    "RunPhase",
     "RunState",
     "RetryIntent",
     "RetryNotAllowed",
