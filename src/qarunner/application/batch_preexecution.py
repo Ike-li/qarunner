@@ -156,11 +156,16 @@ class ReconcilePreexecutionCancellation:
         self._proof = proof
 
     async def execute(self, command: ReconcilePreexecutionCancellationCommand):
-        authority = await self._gateway.require_closure_authority(
-            batch_id=command.batch_id,
-            reconciler_id=command.reconciler_id,
-            closure_epoch=command.closure_epoch,
-        )
+        try:
+            authority = await self._gateway.require_closure_authority(
+                batch_id=command.batch_id,
+                reconciler_id=command.reconciler_id,
+                closure_epoch=command.closure_epoch,
+            )
+        except AuthorityProjectionUnavailable:
+            raise TemporarilyUnavailable() from None
+        except AuthorityPermissionDenied:
+            raise ObjectForbidden() from None
         batch = await self._gateway.get_batch_for_update(batch_id=command.batch_id)
         proof = await self._proof.execute(
             ProvePreexecutionClosureCommand(

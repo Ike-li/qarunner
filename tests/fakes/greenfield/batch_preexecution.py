@@ -119,6 +119,10 @@ class InMemoryBatchPreexecutionGateway:
         closure_epoch: int,
     ) -> BatchClosureAuthority:
         self.closure_authority_checks += 1
+        if not self.authority_available:
+            raise AuthorityProjectionUnavailable
+        if not self.authority_allowed:
+            raise AuthorityPermissionDenied
         return BatchClosureAuthority(
             authority_digest=canonical_digest(
                 schema_version="qep.test-closure-authority.v1",

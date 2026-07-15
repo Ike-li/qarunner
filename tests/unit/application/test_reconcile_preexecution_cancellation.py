@@ -280,6 +280,56 @@ async def test_materialized_handoff_publication_failure_is_atomic() -> None:
     assert state.semantic_outbox == ()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gateway_options", "expected_problem"),
+    [
+        ({"authority_available": False}, "TemporarilyUnavailable"),
+        ({"authority_allowed": False}, "ObjectForbidden"),
+    ],
+)
+async def test_closure_authority_failure_precedes_batch_read_proof_and_replay(
+    gateway_options: dict[str, bool],
+    expected_problem: str,
+) -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application import batch_preexecution as application
+    from qarunner.application.batch_preexecution import (
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+
+    requested, intent = _requested_batch()
+    state = InMemoryBatchPreexecutionGateway(batch=requested, **gateway_options)
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=False,
+        run_ids=("run-001",),
+    )
+
+    with pytest.raises(getattr(application, expected_problem)):
+        await ReconcilePreexecutionCancellation(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id=intent.project_id,
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert state.closure_authority_checks == 1
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+    assert state.handoffs == {}
+
+
 def _requested_batch():
     from qarunner.domain import (
         Batch,
