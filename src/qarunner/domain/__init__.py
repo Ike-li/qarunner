@@ -29,6 +29,13 @@ from qarunner.domain.cancellation import (
     TrustedCancellationStop,
 )
 from qarunner.domain.digest import Digest, canonical_digest
+from qarunner.domain.duplicate_risk_acceptance import (
+    DuplicateRiskAcceptance,
+    DuplicateRiskAcceptanceConsumption,
+    DuplicateRiskAcceptanceRequest,
+    DuplicateRiskReplay,
+    consume_duplicate_risk_acceptance,
+)
 from qarunner.domain.errors import (
     AdjudicationConflict,
     ArtifactValidationError,
@@ -210,6 +217,10 @@ __all__ = [
     "CancellationSource",
     "CancellationConflict",
     "Digest",
+    "DuplicateRiskAcceptance",
+    "DuplicateRiskAcceptanceConsumption",
+    "DuplicateRiskAcceptanceRequest",
+    "DuplicateRiskReplay",
     "DomainValidationError",
     "EventConflict",
     "EvidenceConflict",
@@ -298,6 +309,7 @@ __all__ = [
     "WorkEstimate",
     "WorkerAuthority",
     "canonical_digest",
+    "consume_duplicate_risk_acceptance",
     "build_evidence_manifest",
     "select_latest_authorized_complete_attempt",
 ]
