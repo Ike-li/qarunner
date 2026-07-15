@@ -29,6 +29,14 @@ from qarunner.application.ports.facts import (
     VersionedFactStore,
 )
 from qarunner.application.ports.ids import OpaqueIdGenerator
+from qarunner.application.ports.preexecution_proof import (
+    ExecutionChildInventory,
+    PreexecutionProofGateway,
+    PreexecutionTaskGeneration,
+    PreexecutionTaskKey,
+    SealedTaskInventory,
+    TrustedTaskStop,
+)
 from qarunner.application.ports.secrets import (
     SecretBroker,
     SecretDeliveryLease,
@@ -52,15 +60,21 @@ __all__ = [
     "ExecutionStopControl",
     "ExecutionStopReceipt",
     "ExecutionStopRequest",
+    "ExecutionChildInventory",
     "FactCommitResult",
     "FactKey",
     "OpaqueIdGenerator",
     "PortContractError",
+    "PreexecutionProofGateway",
+    "PreexecutionTaskGeneration",
+    "PreexecutionTaskKey",
     "ReplayResult",
     "SecretBroker",
     "SecretDeliveryLease",
     "SecretRequest",
+    "SealedTaskInventory",
     "UtcClock",
+    "TrustedTaskStop",
     "VerifiedEvidenceInputs",
     "VersionedFactCommand",
     "VersionedFactStore",
