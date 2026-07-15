@@ -1,6 +1,13 @@
 """Application-facing ports for the greenfield control plane."""
 
 from qarunner.application.ports.audit import AuditLog, AuditRecord
+from qarunner.application.ports.batch_preexecution import (
+    AuthorityPermissionDenied,
+    AuthorityProjectionUnavailable,
+    BatchCancellationAuthority,
+    BatchCancellationSideEffect,
+    BatchPreexecutionGateway,
+)
 from qarunner.application.ports.clock import UtcClock
 from qarunner.application.ports.common import PortContractError, ReplayResult
 from qarunner.application.ports.evidence import (
@@ -32,8 +39,13 @@ from qarunner.application.ports.transactions import ApplicationUnitOfWork
 __all__ = [
     "ApplicationUnitOfWork",
     "AttemptEventLog",
+    "AuthorityPermissionDenied",
+    "AuthorityProjectionUnavailable",
     "AuditLog",
     "AuditRecord",
+    "BatchCancellationAuthority",
+    "BatchCancellationSideEffect",
+    "BatchPreexecutionGateway",
     "EvidenceManifestIndex",
     "EvidenceVerificationRequest",
     "EvidenceVerifier",
