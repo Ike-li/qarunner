@@ -18,6 +18,7 @@
 8. 在继续完整状态模型实现前，五方必须逐项关闭哪些冲突和不确定性？
 9. 八项决议关闭后，状态、命令、聚合、持久化和迁移必须遵守哪份实现契约？
 10. 001F 纯领域/Fake 子切片取证后，生产 authority、proof、UoW、API、恢复和授权边界如何关闭？
+11. 001G/001H 开工前，multi-item retry、effective result、unknown 与重试授权如何具名签署？
 
 ## 2. 文档顺序与约束
 
@@ -35,6 +36,7 @@
 | 9 | [M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md) | Implementation Decision Reference | PRD/DD/当前实现与测试的冲突、八项 implementation-level 决议、依赖与实施边界；不新增上游需求 |
 | 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合、对应实现合同，以及未签的 `STATE-DEC-009/010` 后续决策门 |
 | 11 | [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md) | Implementation Boundary Decision Reference | 001F 生产 authority/proof/UoW/API/recovery 的九项已签 `DECIDED` implementation-boundary 决议、Evidence 门禁，以及与 001G/001H 的 fail-closed handoff 边界；签署不等于实施或生产授权 |
+| 12 | [STATE-DEC-009/010 决策与签署包](12_STATE_DEC_009_010_DECISION_PACKET.md) | Implementation Decision Packet | 001G/001H 必需的 retry scope、effective resolution、unknown lineage、policy、SLA 与 authority 可判定选项；当前 `PROPOSED/UNSIGNED` |
 | 执行入口 | [长期 Goal Prompt](GOAL_PROMPT.md) | Codex Goal | 读取后持续执行 M0～M8 |
 
 ## 3. “独立设计”的含义
@@ -70,14 +72,16 @@
 - `STATE-DEC-001`～`STATE-DEC-008` 的五方 implementation-level 决议已关闭，获批组合与实现
   边界见[M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md)；这不表示 `T-M0-STATE-001`、Schema、
   API、数据库或生产实现已经完成。
-- `STATE-DEC-009/010` 是签署后发现的下游歧义，当前均为 `PROPOSED/UNSIGNED`。只有
-  `T-M0-STATE-001F` 的 M0 contract 状态升级为 `VERIFIED` 后，才可另建决议包具名签署并进入
-  001G；001H 还必须等待 001G immutable Run facts。签署前不得实现其 proposed 答案。
-- 001F 纯领域/Fake 子切片状态为 `VERIFIED`，对应
-  `EV-M0-BATCH-PREEXECUTION-DOMAIN-001F` Evidence 已记录并可定位；第 11 号文档中的九项
+- `STATE-DEC-009/010` 是签署后发现的下游歧义，当前均为 `PROPOSED/UNSIGNED`。
+  `T-M0-STATE-001F` 的 M0 contract 已 `VERIFIED`，并已建立第 12 号决策包；逐项选择与具名
+  签署后才可进入 001G，001H 还必须等待 001G immutable Run facts。签署前不得实现其
+  proposed 答案。
+- 001F 纯领域/Fake 子切片及其 `EV-M0-BATCH-PREEXECUTION-DOMAIN-001F` Evidence
+  已记录并可定位；第 11 号文档中的九项
   `STATE-001F-PROD-DEC-001～009` Option A 已由用户明确授权的 `Ike-li` 代表
   PROD/DEV/QA/SEC/OPS 具名签署并全部转为 `DECIDED`，签署记录、UTC 与适用 baseline 见该文档
-  §12.2。这只关闭 implementation-boundary 决策，不把 `T-M0-STATE-001F` 升级为 `VERIFIED`。
+  §12.2。这些签署本身只关闭 implementation-boundary 决策，不单独证明
+  `T-M0-STATE-001F` 实现完成；后续 M0 closing 证据见下一条。
 - 001F deterministic M0 contract 已 `VERIFIED`：Domain/APP-AUTH/HANDOFF/PROOF/API-MIG 四包 closing
   Evidence 共同绑定 contract SHA `b59507762bb405c7befba3cb2138dbf1ea3f25b1`；联合定向 159 passed，
   完整 Docker 2092 passed、1 skipped、9 deselected，100% 行/分支覆盖。该结论不包含真实 API、

@@ -850,6 +850,9 @@ RED → 最小 GREEN → 重构推进，不得在实现前或仅凭本文标记�
 §4.5 的具体 policy/role 字段及 §6.1 的 retry scope/effective selection 只是上述 proposed baseline 的
 字段完整性草案；不得因它们出现在本契约中就视为签署。`001F` 不依赖这两项，可在既有授权边界
 内继续；任何 001G/001H 实现必须先新建决议包、具名签署并记录 UTC。
+可判定选项、参数、残余风险与签署表已建立于
+[`12_STATE_DEC_009_010_DECISION_PACKET.md`](12_STATE_DEC_009_010_DECISION_PACKET.md)；该包当前仍为
+`PROPOSED/UNSIGNED`。
 
 ### 11.2 其他剩余风险
 
