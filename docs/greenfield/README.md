@@ -34,9 +34,9 @@
 | 7 | [需求追踪矩阵](07_REQUIREMENTS_TRACEABILITY.md) | RTM | 需求、设计、实施、测试和发布证据 |
 | 8 | [实施状态账本](08_IMPLEMENTATION_STATUS.md) | Execution Ledger | 当前切片、commit、测试证据、风险和下一步 |
 | 9 | [M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md) | Implementation Decision Reference | PRD/DD/当前实现与测试的冲突、八项 implementation-level 决议、依赖与实施边界；不新增上游需求 |
-| 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合、对应实现合同，以及未签的 `STATE-DEC-009/010` 后续决策门 |
+| 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合，以及已签 `STATE-DEC-009/010` 的 001G/001H 实现合同 |
 | 11 | [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md) | Implementation Boundary Decision Reference | 001F 生产 authority/proof/UoW/API/recovery 的九项已签 `DECIDED` implementation-boundary 决议、Evidence 门禁，以及与 001G/001H 的 fail-closed handoff 边界；签署不等于实施或生产授权 |
-| 12 | [STATE-DEC-009/010 决策与签署包](12_STATE_DEC_009_010_DECISION_PACKET.md) | Implementation Decision Packet | 001G/001H 必需的 retry scope、effective resolution、unknown lineage、policy、SLA 与 authority 可判定选项；当前 `PROPOSED/UNSIGNED` |
+| 12 | [STATE-DEC-009/010 决策与签署包](12_STATE_DEC_009_010_DECISION_PACKET.md) | Implementation Decision Packet | 001G/001H 必需的 retry scope、effective resolution、unknown lineage、policy、SLA 与 authority；已于 `2026-07-15T17:04:11Z` 五方具名签署为 `DECIDED` |
 | 执行入口 | [长期 Goal Prompt](GOAL_PROMPT.md) | Codex Goal | 读取后持续执行 M0～M8 |
 
 ## 3. “独立设计”的含义
@@ -72,10 +72,10 @@
 - `STATE-DEC-001`～`STATE-DEC-008` 的五方 implementation-level 决议已关闭，获批组合与实现
   边界见[M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md)；这不表示 `T-M0-STATE-001`、Schema、
   API、数据库或生产实现已经完成。
-- `STATE-DEC-009/010` 是签署后发现的下游歧义，当前均为 `PROPOSED/UNSIGNED`。
-  `T-M0-STATE-001F` 的 M0 contract 已 `VERIFIED`，并已建立第 12 号决策包；逐项选择与具名
-  签署后才可进入 001G，001H 还必须等待 001G immutable Run facts。签署前不得实现其
-  proposed 答案。
+- `STATE-DEC-009/010` 已由 `Ike-li` 代表五方签署为 `DECIDED`，效力覆盖
+  `M0-STATE-V1` 全链契约；只解锁 001G M0 contract slice，001H 仍等待 001G immutable Run facts。
+  `T-M0-STATE-001F` 的 M0 contract 已 `VERIFIED`；第 12 号决策包已逐项选择并具名签署，
+  现在可进入 001G M0 contract slice，001H 还必须等待 001G immutable Run facts。
 - 001F 纯领域/Fake 子切片及其 `EV-M0-BATCH-PREEXECUTION-DOMAIN-001F` Evidence
   已记录并可定位；第 11 号文档中的九项
   `STATE-001F-PROD-DEC-001～009` Option A 已由用户明确授权的 `Ike-li` 代表

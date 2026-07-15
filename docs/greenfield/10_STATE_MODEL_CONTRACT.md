@@ -3,8 +3,7 @@
 > 文档编号：QEP-STATE-MODEL-CONTRACT-001<br>
 > 版本：V0.1.0<br>
 > 文档类型：Implementation Contract Reference<br>
-> 状态：`DECIDED`（仅 `STATE-DEC-001`～`008` 已签范围）；本文另隔离记录
-> `STATE-DEC-009/010` 的 `PROPOSED/UNSIGNED` 附录；runtime 尚未激活<br>
+> 状态：`DECIDED`（`STATE-DEC-001`～`010` 已签合同范围）；runtime 尚未激活<br>
 > 决议输入：`STATE-DEC-001`～`STATE-DEC-008` 五方确认<br>
 > 基线 commit：`967c1e8`<br>
 > 首次生效版本：`M0-STATE-V1`（契约/兼容 epoch，不是产品发布号）<br>
@@ -22,9 +21,9 @@
 
 本文件把[M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md)中获批的
 `B / A+X / B / C / A / B / A / B` 固化为一份可在八项已签范围内驱动 TDD、Schema 设计、
-迁移和故障测试的实现契约。`001F` 可直接据此实施；`001G/001H` 中依赖
-`STATE-DEC-009/010` 的部分在具名签署前只能驱动 RED/schema-validation 计划，不构成
-runtime 实现授权。在该边界内，实现者应能仅凭本文件确定：
+迁移和故障测试的实现契约。`001F` 已验证，`STATE-DEC-009/010` 已签并解锁 001G M0 contract
+slice；001H 仍等待 001G immutable Run facts。该签署不构成 runtime 实现授权。在该边界内，
+实现者应能仅凭本文件确定：
 
 - Batch 的 canonical 状态、边和命令归属；
 - Run phase、执行事实、disposition 与 outcome 的正交关系；
@@ -244,9 +243,8 @@ Schema decision，不能仅凭 adjudication 字符串关闭 Run。review SLA 到
 `test_failed` 与 `infra_failed` 使用不同 policy family，禁止一个 generic retry flag 跨越两类权限：
 
 本节冻结“必须显式版本化、分权且 fail closed”的 Schema envelope；具体 retry scope、per-item
-effective-result 规则、角色集、次数/预算值与 review SLA 尚未包含在八项签署中，分别受
-`STATE-DEC-009/010` 阻断。在两项新决议关闭前，下表只能用于写 RED/schema-validation 计划，不能
-激活任何 retry 或 duplicate-risk 权限。
+effective-result 规则、角色集、次数/预算值与 review SLA 已由 `STATE-DEC-009/010` 签署。
+下表用于 001G/001H M0 contract slices，不能激活任何 runtime retry 或 duplicate-risk 权限。
 
 | Schema | 规范字段 | 最低 authority |
 |---|---|---|
@@ -387,15 +385,14 @@ Case result、platform terminal、cancellation/unknown fact 或 adjudication-sup
 - 任一 item 的 authority chain 含 `attempt_unknown` 时，仍保留后来真实的 effective outcome，但
   `aggregation_class` 固定为 `unknown_lineage` 并引用 lineage digest；不得丢失实际 retry 结果，也
   不得让它进入 passed/failed 计数；
-- `PROPOSED/UNSIGNED — STATE-DEC-009`：候选安全默认是，只有可信 per-item
-  execution-boundary proof 才能缩小 unknown 影响范围，否则标记该 Attempt 可能覆盖的
-  全部 item。该规则仅可写 RED/schema-validation 计划；决议签署前 runtime 必须保持
-  unresolved，不得用此候选默认关闭 Run/Batch；
+- `DECIDED — STATE-DEC-009`：unknown lineage 为 per-item sticky；未裁决时 Run 必须保持
+  `running/review_required` 且 outcome=null，不得关闭 Run/Batch；不能证明 item 隔离时必须通过
+  versioned policy 显式扩大污染范围；
 - `not_executed` 只来自没有 materialize Run 的 §7 scope-item fact，不得出现在 Run resolution set；
 - RunOutcome 是 Run 级 policy/audit 结果，必须与同一 basis 中的 resolution set 相容，但 Batch
   `P/T/I/C/U` 只能逐 entry 统计，禁止按 RunOutcome × item_count 推导。mixed per-item set 如何映射
-  scalar RunOutcome 也是 `STATE-DEC-009` 的显式输入，决议前不得用隐式 worst/latest/majority 规则
-  关闭 Run。
+  scalar RunOutcome 只作审计投影，裁决后按 `infra_failed > test_failed > cancelled > passed`；
+  不得用其他隐式 worst/latest/majority 规则关闭 Run。
 
 Batch 还必须持久 `qep.batch-item-resolution-set.v1`，使六类计数能从单一 canonical
 entry set 逐字节重放：
@@ -432,7 +429,7 @@ v1 是最小 Suite policy。字段级契约如下：
 | `policy_version` | 非 bool 的正整数；同 policy 单调递增 |
 | `suite_id` | 必须与 Batch 的 frozen Suite identity 一致 |
 | `max_test_failed_items` | 非 bool、非负整数；只作用于 final effective `test_failed` |
-| `allow_authorized_retry_pass` | bool；只允许完整、连续、非 unknown 的授权 retry chain 按 DEC-009 将来获签的 effective-selection 规则满足 item；决议前不得激活 |
+| `allow_authorized_retry_pass` | bool；只允许完整、连续、非 unknown 的授权 retry chain 按 DEC-009 已签 latest-authorized-complete effective-selection 规则满足 item；runtime activation 前不得启用 |
 | `allowed_test_failure_selector_digest` | 可空；非空时绑定版本化 per-item allow-list，不接受运行时自由表达式 |
 | `result_mapping_schema/version/digest` | 必填；把受支持的 raw Case outcome（含显式 skipped 规则）映射为 v1 item resolution；未知值 fail closed |
 | `approval_record_digest` | 必填；绑定获授权的 policy 审批记录 |
@@ -806,8 +803,8 @@ RED → 最小 GREEN → 重构推进，不得在实现前或仅凭本文标记�
 | Test contract | 状态 | Decision coverage | 首批 RED case family | 完成门禁 |
 |---|---|---|---|---|
 | `T-M0-STATE-001F` | `VERIFIED`（仅 deterministic M0） | DEC-001/002 | canonical Batch long path；非法/吸收边；逐 phase rejection；reason Schema；六个 preterminal phase cancel intent 与零 materialized-Run closure；in-flight task stop；cancel-vs-phase CAS；legacy generic cancel 禁止 | Domain/APP-AUTH/HANDOFF/PROOF/API-MIG 共同绑定 `b595077`；159 个联合定向测试、完整 Docker 2092 passed/1 skipped、100% 行/分支。`GATE-IMP-003=OPEN`，production `NO-GO` |
-| `T-M0-STATE-001G` | `PLANNED/DRAFT` | DEC-003/004/005；DEC-009/010 待签 | Run phase/outcome/disposition cross-product；passed/test/infra retry gate；四种 unknown adjudication；Run basis；completed/cancel/unknown 双向竞态；exact replay/stale authority；legacy cancelled backfill | DEC-009/010 先关闭；domain/model + persistence integration + API projection + crash tests；100% 行/分支门禁；Evidence 文档 |
-| `T-M0-STATE-001H` | `PLANNED/DRAFT` | DEC-006/007/008；DEC-009/010 待签 | policy value/digest；exhaustive per-item truth table；denominator/property tests；cancel fanout/commit races；Batch basis canonicalization；stale snapshot；UoW crash/outbox/reconcile；migration/rollback | DEC-009/010 先关闭；property/model + real DB concurrency/fault injection + API/E2E；100% 行/分支门禁；Evidence 文档 |
+| `T-M0-STATE-001G` | `READY` | DEC-003/004/005/009/010 | Run phase/outcome/disposition cross-product；passed/test/infra retry gate；四种 unknown adjudication；Run basis；completed/cancel/unknown 双向竞态；exact replay/stale authority；legacy cancelled backfill | 先取证 M0 domain/model/ports/Fakes/API-Schema contract slice；umbrella 的 persistence/API/crash Evidence 后续独立关闭 |
+| `T-M0-STATE-001H` | `PLANNED/DRAFT` | DEC-006/007/008/009/010；等待 001G immutable Run facts | policy value/digest；exhaustive per-item truth table；denominator/property tests；cancel fanout/commit races；Batch basis canonicalization；stale snapshot；UoW crash/outbox/reconcile；migration/rollback | 001G facts 形成后取证 M0 property/model/ports/Fakes/API-Schema；real DB/fault/API/E2E 后续独立关闭 |
 
 ### 10.1 必测边界清单
 
@@ -830,29 +827,27 @@ RED → 最小 GREEN → 重构推进，不得在实现前或仅凭本文标记�
 八项决议已关闭，只解除设计选择 blocker。实现仍必须按依赖推进：
 
 1. `001F` 先形成 Batch vocabulary、rejection/cancel command 的 RED；
-2. `001G` 开工前先关闭下表 `STATE-DEC-009/010`，再在 canonical vocabulary 上实现 Run 分层
-   模型、per-item resolution 与竞态；
+2. `STATE-DEC-009/010` 已关闭；下一步在 canonical vocabulary 上实施 `001G` M0 Run 分层
+   模型、per-item resolution 与竞态 contract slice；
 3. `001H` 依赖前两者的 immutable facts 及 `STATE-DEC-009/010`，再完成 Batch policy、fanout、
    basis 和生产 UoW；
 4. 每条子契约独立获得 Evidence 后，才能重新评估 `T-M0-STATE-001` 是否完整；
 5. API、DB、Worker、migration 和生产并发仍各自需要对应实施/发布门禁。
 
-### 11.1 新发现且未签署的后续决议
+### 11.1 已签署的后续决议
 
-下列两项是在八项签署后通过对抗复核发现的下游歧义，不追溯修改 `STATE-DEC-001`～`008` 的
-签署结果，也不属于本文件 `DECIDED` 状态的已批准范围：
+下列两项是在八项签署后通过对抗复核发现并完成五方签署的下游决议，不追溯修改
+`STATE-DEC-001`～`008` 的签署结果：
 
-| Decision ID | 状态 | 必须回答 | 当前 proposed baseline（未批准） | 阻断 |
+| Decision ID | 状态 | 已签选择 | 已签合同 | 实施边界 |
 |---|---|---|---|---|
-| `STATE-DEC-009` | `PROPOSED/UNSIGNED` | 多 item Run 是整 Run retry、失败 item/atomic-group retry，还是由 Suite policy 选择；original/effective precedence、unknown 污染范围与 mixed RunOutcome 如何定义 | A：完整 immutable Run item set 重跑；每 item original 永不改写，effective 取最后一个获授权完整 Attempt；unknown lineage sticky；RunOutcome 不参与 Batch 计数 | `001G`、`001H` |
-| `STATE-DEC-010` | `PROPOSED/UNSIGNED` | test/infra retry 的次数、reason/scope、预算和批准角色；unknown review SLA；duplicate-risk authority、scope、有效期、single-use 与职责分离 | A：Suite/platform policy 分离、默认 no-retry、最小权限；unknown 永不自动 retry；duplicate-risk 精确绑定单次 Run/Attempt/fence/item-set/SUT | `001G`、`001H` |
+| `STATE-DEC-009` | `DECIDED` | A/A/A/A | 完整 immutable Run item set；latest authorized complete Attempt；per-item sticky；unresolved unknown 时 outcome=null，裁决后 `infra_failed > test_failed > cancelled > passed` 审计投影 | 解锁 001G M0 contract；001H 等待 001G facts |
+| `STATE-DEC-010` | `DECIDED` | A/A/A/A/A/A/A/A/A | test 0/1、infra 0/2；exact allowlist/selector；三重显式预算；职责分离；24h review；independent Reviewer；1h single-use 双职责 duplicate authority；intent pin + commit-start revalidate | 不授权 runtime/production |
 
-§4.5 的具体 policy/role 字段及 §6.1 的 retry scope/effective selection 只是上述 proposed baseline 的
-字段完整性草案；不得因它们出现在本契约中就视为签署。`001F` 不依赖这两项，可在既有授权边界
-内继续；任何 001G/001H 实现必须先新建决议包、具名签署并记录 UTC。
-可判定选项、参数、残余风险与签署表已建立于
-[`12_STATE_DEC_009_010_DECISION_PACKET.md`](12_STATE_DEC_009_010_DECISION_PACKET.md)；该包当前仍为
-`PROPOSED/UNSIGNED`。
+精确参数、拒绝理由、残余风险接受与五方签署见
+[`12_STATE_DEC_009_010_DECISION_PACKET.md`](12_STATE_DEC_009_010_DECISION_PACKET.md)，baseline
+`098d09e014ee65e098beaf8d62bd2fc67da50ee6`，UTC `2026-07-15T17:04:11Z`。效力覆盖
+`M0-STATE-V1` 全链契约，但 `GATE-IMP-003=OPEN`、production `NO-GO`。
 
 ### 11.2 其他剩余风险
 

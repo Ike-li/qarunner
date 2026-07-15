@@ -6,7 +6,7 @@
 > 日期：2026-07-14<br>
 > 上游：[MVP PRD](01_MVP_REQUIREMENTS.md)、[企业 PRD](02_ENTERPRISE_REQUIREMENTS.md)、[架构设计](03_ARCHITECTURE_DESIGN.md)、[状态模型决议包](09_STATE_MODEL_DECISION_PACKET.md)、[状态模型规范契约](10_STATE_MODEL_CONTRACT.md)<br>
 > 已批准范围：`STATE-DEC-001`～`STATE-DEC-008` 的状态模型语义；本详细设计其余内容仍为草稿<br>
-> 未批准范围：`STATE-DEC-009/010` 仍为 `PROPOSED/UNSIGNED`；retry scope、effective precedence、mixed RunOutcome 与具体 retry/unknown authority 不得视为已签<br>
+> 已签合同范围：`STATE-DEC-009/010=DECIDED`，适用于 `M0-STATE-V1` 全链契约；不构成真实 API/DB/Worker、migration、deployment、production runtime activation 授权<br>
 > 设计原则：本文件先于现有代码对比冻结，不以现有类、表或 API 为前提
 
 ---
@@ -268,17 +268,17 @@ commit 后 cancel
 - `passed` 默认产生 `closed_no_retry`。`test_failed`、`infra_failed` 或 unknown 只有在存在匹配
   Attempt/fence/item scope 的显式版本化 policy/adjudication authority 时才可进入 `retry_queued`；
   Suite authority 无权越过平台安全 gate。具体 retry scope、次数、预算、批准角色与 unknown review
-  SLA 仍受 `STATE-DEC-009/010` 阻断，未签前不得激活对应 retry 权限。
+  SLA 已由 `STATE-DEC-009/010` 冻结；当前只用于 M0 contract slice，不激活 runtime retry 权限。
 - 未 adjudicate unknown 必须保持 phase=`running`、disposition=`review_required`、outcome 为空；
   Batch 也保持 `running`，不得先冻结 start commit。unknown 经 adjudication 关闭，或风险批准 retry
   且新 Attempt 再次关闭 Run 后，Batch 才可进入 `finalizing`。哪个 item scope 继承 Run-level unknown
-  仍由 `STATE-DEC-009` 决定；一旦某 item 的权威链含 unknown，其 `unknown_lineage` 即保持粘性，
+  已签为 per-item sticky；一旦某 item 的权威链含 unknown，其 `unknown_lineage` 即保持粘性，
   不能被后来 effective outcome 清除。
 - 批准 retry 只创建可审计 RetryIntent，并同时把 disposition 与 phase 置为 `retry_queued`；
   后续 Assignment commit-start 才创建 Attempt N+1。retry 不复用工作区、不覆盖旧 Evidence，
   也不增加 Batch original denominator。
 - Attempt N+1 覆盖完整 immutable Run item set、失败 item/atomic group 还是其他 subset，以及多个
-  Attempt 的 effective resolution precedence，均是 `STATE-DEC-009` 的 `PROPOSED/UNSIGNED` 输入；
+  Attempt 的 effective resolution precedence 已签为最后获授权且完整 finalize 的 Attempt；
   当前设计不得预选 full-run 或 selective retry，也不得默认 latest wins。
 - `retry_queued` 的 prestart cancel 保留 immutable Attempt/RetryIntent 历史，并由 cancel intent 阻止
   继续 offer 或消费该 retry；关闭 Run 时必须原子清空 pending RetryIntent pointer，不能删除或改写
@@ -294,7 +294,8 @@ commit 后 cancel
   entry 同时保存不可改写的 original resolution、获授权后的实际 effective resolution，以及独立
   sticky unknown-lineage 引用。缺项、重复项、跨 Run item 或未知 result mapping 均阻止 Run 关闭。
 - RunOutcome 只表达 Run 级 policy/audit 结果；Batch 不读取它作为 item 计数。mixed per-item
-  resolution set 如何映射 scalar RunOutcome 仍由 `STATE-DEC-009` 阻断，未签前禁止使用
+  resolution set 的 scalar RunOutcome 仅作审计投影；unresolved unknown 时为空，裁决后使用
+  `infra_failed > test_failed > cancelled > passed`，禁止使用
   worst/latest/majority 等隐式规则。
 
 ### 3.5 Worker 状态
@@ -504,7 +505,7 @@ LIMIT :n;
    orchestration phase → `closed` 并清理 current pointer。若为 `retry_queued`，只写 RetryIntent、
    disposition 和 phase=`retry_queued`，不能在 finalize 中创建 Attempt N+1。
    closed 分支还必须冻结与 Run item set 一一覆盖的 original/effective resolution set；mixed set 到
-   scalar RunOutcome 的规则在 `STATE-DEC-009` 签署前不得隐式推导。
+   scalar RunOutcome 必须严格使用 `STATE-DEC-009` 已签规则，不得隐式推导其他优先级。
 5. Batch reconciler 从一致版本快照验证 canonical Run set、逐 Run basis/ordered item-resolution
    entries、original denominator、cancel/unknown-lineage/not_executed facts 与 Suite policy。每个
    Manifest item 必须唯一引用 Run resolution 或 not-executed fact；只有 completeness proof 成立时，
@@ -567,8 +568,8 @@ intent 只作为 `cancel_requested_before_completion` 审计事实，迟到 canc
 | `POST /batches/{id}:cancel` | owner/admin | 幂等记录 cancel intent 并返回 fanout/收敛状态，不承诺即时 cancelled |
 | `GET /batches/{id}/events` | object reader | SSE 状态/有限日志事件，支持 Last-Event-ID |
 | `GET /runs/{id}` | object reader | Run phase/disposition/outcome/basis、Attempt 列表和时间线 |
-| `POST /runs/{id}:retry` | signed policy-authorized actor（DEC-010 待签） | 按策略记录 RetryIntent；后续 commit-start 才创建新 Attempt |
-| `POST /attempts/{id}:adjudicate` | signed review-authority actor（DEC-010 待签） | unknown 人工裁决；必须给理由和 authority digest |
+| `POST /runs/{id}:retry` | Suite owner（test）或 platform operator（infra）；临时例外不得自批 | 按策略记录 RetryIntent；后续 commit-start 重验 current authority 后才创建新 Attempt |
+| `POST /attempts/{id}:adjudicate` | independent Reviewer；不得由原执行者单独裁决 | unknown 人工裁决；必须给理由和 authority digest |
 | `GET /attempts/{id}/artifacts` | object reader | Artifact 元数据 |
 | `POST /artifacts/{id}:download-url` | object reader | 生成短期、单对象下载授权 |
 | `POST /schedules` | maintainer | 创建 schedule/时区/misfire |
@@ -1003,8 +1004,10 @@ Evidence Manifest 是 canonical JSON，至少包含：
 - Retry 聚合至少保留：每 item original outcome、每次 retry outcome、实际 effective outcome、
   flaky/unknown-lineage 维度和策略版本。Batch 只能逐 item entry 计数，禁止
   `RunOutcome × item_count`。
-- Full-run、failed-item/atomic-group 或其他 subset retry scope，以及 mixed item resolutions 到
-  scalar RunOutcome 的映射，仍是 `STATE-DEC-009` 的 `PROPOSED/UNSIGNED` 输入。
+- `STATE-DEC-009` 已签署 full immutable Run item-set retry、latest authorized complete
+  Attempt effective precedence 和 per-item sticky unknown lineage。Mixed item resolutions 只生成审计
+  scalar；未裁决 unknown 保持 `running/review_required` 且 `outcome=null`，裁决后按
+  `infra_failed > test_failed > cancelled > passed` 投影。Batch 仍只能逐 item 聚合。
 
 ---
 
@@ -1303,7 +1306,7 @@ review SLA 与 duplicate-risk authority 由 `STATE-DEC-010` 决定。两项均�
 `STATE-DEC-004` 冻结。`passed` 默认 `closed_no_retry`；其他 fact 只有获签且 scope 匹配的
 policy/adjudication authority 才能创建 RetryIntent，且任何处置都不能改写原
 `attempt_unknown` fact。实际 effective outcome 与 sticky unknown lineage 分开保存；具体 authority、
-retry scope/precedence 与 mixed RunOutcome 在 `STATE-DEC-009/010` 签署前不得推定。
+retry scope/precedence 与 mixed RunOutcome 必须严格使用 `STATE-DEC-009/010` 已签合同。
 
 ### 10.8 自动扩缩
 
@@ -1540,13 +1543,13 @@ Unknown review 页面必须显示下列事实；可访问/可裁决角色由 `ST
 - 已上传 Artifact 和缺失证据；
 - Suite 幂等声明、环境负责人意见和重复执行风险。
 
-以下仅是候选 adjudication 意图；具体可用集合、角色、scope、SLA、single-use 与 retry 参数仍受
-`STATE-DEC-009/010` 阻断：
+以下 adjudication 意图受 `STATE-DEC-009/010` 已签角色、scope、SLA、single-use 与 retry 参数约束；
+这里只定义 M0 contract，不激活 runtime 权限：
 
 - `confirm_stopped_then_retry`：有外部证据证明旧执行停止；若后续决议批准，只创建 RetryIntent，
   由 commit-start 再创建新 Attempt。
 - `accept_duplicate_risk_then_retry`：由 `STATE-DEC-010` 冻结的 authority 显式接受；高价值审计，
-  不得在签署前把“业务负责人”当作已批准 runtime 角色。
+  必须由 Suite owner + independent Reviewer 双职责批准，TTL=1h 且 single-use。
 - `mark_infra_failed_no_retry`：保持原事实，不再执行。
 - `mark_completed_from_verified_evidence`：仅当完整受信证据能证明终态，不能靠测试自报文本。
 
@@ -1749,8 +1752,8 @@ policy 聚合。该关闭只冻结语义；数据库并发、reconciler、API/UI
 
 | Decision ID | 状态 | 待冻结内容 | 阻断边界 |
 |---|---|---|---|
-| `STATE-DEC-009` | `PROPOSED/UNSIGNED` | full-run、failed-item/atomic-group 或其他 immutable subset retry；original/effective precedence；unknown 污染范围；mixed resolution set 到 scalar RunOutcome | Run per-item retry/resolution 与 Batch 聚合实现；不阻断 pre-execution vocabulary/closure |
-| `STATE-DEC-010` | `PROPOSED/UNSIGNED` | retry 次数、reason/scope、预算、批准角色；unknown review SLA；duplicate-risk authority 的 scope、有效期、single-use 和职责分离 | retry/unknown runtime authority 与相关 Batch policy；不阻断 pre-execution vocabulary/closure |
+| `STATE-DEC-009` | `DECIDED` | A/A/A/A；完整 Run retry、latest authorized complete Attempt、per-item sticky、审计 scalar | 解锁 001G M0 contract slice；不授权 runtime/production |
+| `STATE-DEC-010` | `DECIDED` | A/A/A/A/A/A/A/A/A；完整参数以签署包第 6.3 节为准 | 解锁 001G M0 contract slice；001H 等待 immutable Run facts；不授权 runtime/production |
 
 两项完成具名签署并记录 UTC 前，本文相应字段、表格和候选规则只用于评审与 RED 测试计划；不得
 据此修改 API、数据库、Worker payload、migration，或关闭任何实现/发布门禁。
@@ -1767,7 +1770,7 @@ policy 聚合。该关闭只冻结语义；数据库并发、reconciler、API/UI
 - [x] 资源估算、嵌套并发、SUT Lease、公平性和自动扩缩职责明确。
 - [x] 安全、故障、恢复、观测和 TDD 验证路径明确。
 - [x] `STATE-DEC-001`～`008` 的五方批准语义已同步；批准范围不等于本详细设计整体基线化。
-- [ ] `STATE-DEC-009/010` 尚为 `PROPOSED/UNSIGNED`；相关 Run/Batch retry、resolution 和 policy 实现不得启动。
+- [x] `STATE-DEC-009/010` 已五方具名签署；可启动 001G M0 contract slice，`GATE-IMP-003=OPEN`、production `NO-GO`。
 - [ ] 产品、技术、QA、安全和运维批准全部未决事项或阻断例外。
 - [ ] API/Worker/OpenAPI/JSON Schema、数据库 DDL 和沙箱模板完成实现级评审。
 - [ ] 现有代码差距分析完成；在此之前不因实现方便修改本设计基线。
