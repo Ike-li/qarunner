@@ -535,3 +535,79 @@ async def test_planned_scope_requires_complete_unique_authoritative_inventory(
 
     assert gateway.snapshot_assemblies == 0
     assert gateway.quarantined_batches == (("batch-001",) if planned_inventory_present else ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("item_keys", "issuer_id", "item_count"),
+    [
+        (("case-002", "case-001"), "coordinator-001", 2),
+        (("",), "coordinator-001", 1),
+        (("case-001",), "untrusted-writer", 1),
+        (("case-001",), "coordinator-001", 2),
+    ],
+)
+async def test_planned_scope_quarantines_noncanonical_or_untrusted_inventory(
+    item_keys: tuple[str, ...],
+    issuer_id: str,
+    item_count: int,
+) -> None:
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.preexecution_proof import (
+        IntegrityFailure,
+        ProvePreexecutionClosure,
+        ProvePreexecutionClosureCommand,
+        canonical_materialized_run_set_digest,
+    )
+    from qarunner.domain import (
+        BatchCancellationScope,
+        BatchCancellationScopeKind,
+        BatchPreexecutionTerminalKind,
+        canonical_digest,
+    )
+
+    def digest(label: str):
+        return canonical_digest(
+            schema_version="qep.test-planned-proof-integrity.v1",
+            payload={"label": label},
+        )
+
+    scope = BatchCancellationScope(
+        kind=BatchCancellationScopeKind.FROZEN_PLAN,
+        preplan_scope_digest=None,
+        manifest_digest=digest("manifest"),
+        shard_plan_version=2,
+        shard_plan_digest=digest("plan"),
+        canonical_run_set_digest=canonical_materialized_run_set_digest(
+            batch_id="batch-001",
+            run_ids=(),
+        ),
+    )
+    gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        planned_manifest_id="manifest-001",
+        planned_manifest_digest=scope.manifest_digest,
+        planned_item_keys=item_keys,
+        planned_shard_plan_id="plan-001",
+        planned_shard_plan_version=2,
+        planned_shard_plan_digest=scope.shard_plan_digest,
+        planned_issuer_id=issuer_id,
+        planned_item_count_override=item_count,
+    )
+
+    with pytest.raises(IntegrityFailure):
+        await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=3,
+                scope=scope,
+                terminal_kind=BatchPreexecutionTerminalKind.REJECTION,
+                command_digest=digest("rejection"),
+            )
+        )
+
+    assert gateway.quarantined_batches == ("batch-001",)
+    assert gateway.snapshot_assemblies == 0

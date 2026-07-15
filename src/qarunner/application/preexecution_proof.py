@@ -177,7 +177,9 @@ class ProvePreexecutionClosure:
                 )
                 or planned_inventory.item_count != len(item_keys)
                 or not item_keys
+                or planned_inventory.manifest_item_keys != item_keys
                 or len(set(item_keys)) != len(item_keys)
+                or any(not isinstance(key, str) or not key for key in item_keys)
                 or command.terminal_kind is None
                 or command.command_digest is None
             ):

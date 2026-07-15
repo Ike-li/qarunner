@@ -508,7 +508,7 @@ async def test_planned_zero_child_cancel_builds_authoritative_typed_item_coverag
         inventory_sealed=True,
         planned_manifest_id="manifest-001",
         planned_manifest_digest=scope.manifest_digest,
-        planned_item_keys=("case-002", "case-001"),
+        planned_item_keys=("case-001", "case-002"),
         planned_shard_plan_id="plan-001",
         planned_shard_plan_version=scope.shard_plan_version,
         planned_shard_plan_digest=scope.shard_plan_digest,

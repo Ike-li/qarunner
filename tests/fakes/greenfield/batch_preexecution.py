@@ -40,6 +40,7 @@ class InMemoryBatchPreexecutionGateway:
         current_rejection_epoch: int = 1,
         authority_checked_at: datetime = datetime(2026, 7, 15, 6, tzinfo=UTC),
         authority_expires_at: datetime = datetime(2026, 7, 16, 6, tzinfo=UTC),
+        authority_scope: BatchCancellationScope | None = None,
     ) -> None:
         self.batch = batch
         self.authority_available = authority_available
@@ -79,16 +80,20 @@ class InMemoryBatchPreexecutionGateway:
                 schema_version="qep.test-batch-cancel.v1",
                 payload={"label": "cancel-authorization"},
             ),
-            scope=BatchCancellationScope(
-                kind=BatchCancellationScopeKind.PRE_PLAN,
-                preplan_scope_digest=canonical_digest(
-                    schema_version="qep.test-batch-cancel.v1",
-                    payload={"label": "preplan-scope"},
-                ),
-                manifest_digest=None,
-                shard_plan_version=None,
-                shard_plan_digest=None,
-                canonical_run_set_digest=None,
+            scope=(
+                authority_scope
+                if authority_scope is not None
+                else BatchCancellationScope(
+                    kind=BatchCancellationScopeKind.PRE_PLAN,
+                    preplan_scope_digest=canonical_digest(
+                        schema_version="qep.test-batch-cancel.v1",
+                        payload={"label": "preplan-scope"},
+                    ),
+                    manifest_digest=None,
+                    shard_plan_version=None,
+                    shard_plan_digest=None,
+                    canonical_run_set_digest=None,
+                )
             ),
             recorded_at=datetime(2026, 7, 14, 6, tzinfo=UTC),
         )

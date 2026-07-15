@@ -247,6 +247,102 @@ async def test_rejection_handoff_publication_failure_rolls_back_before_state_con
     assert state.semantic_outbox == ()
 
 
+@pytest.mark.asyncio
+async def test_planned_admission_rejection_builds_rejection_bound_item_coverage() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        RecordPreexecutionRejection,
+        RecordPreexecutionRejectionCommand,
+    )
+    from qarunner.application.preexecution_proof import (
+        ProvePreexecutionClosure,
+        canonical_materialized_run_set_digest,
+    )
+    from qarunner.domain import (
+        Batch,
+        BatchCancellationScope,
+        BatchCancellationScopeKind,
+        BatchPreexecutionScopeKind,
+        BatchPreexecutionTerminalKind,
+        BatchRejection,
+        BatchRejectionReasonClass,
+        BatchRejectionStage,
+        BatchState,
+        canonical_digest,
+    )
+
+    def digest(label: str):
+        return canonical_digest(
+            schema_version="qep.test-planned-rejection.v1",
+            payload={"label": label},
+        )
+
+    scope = BatchCancellationScope(
+        kind=BatchCancellationScopeKind.FROZEN_PLAN,
+        preplan_scope_digest=None,
+        manifest_digest=digest("manifest"),
+        shard_plan_version=2,
+        shard_plan_digest=digest("plan"),
+        canonical_run_set_digest=canonical_materialized_run_set_digest(
+            batch_id="batch-001",
+            run_ids=(),
+        ),
+    )
+    batch = Batch(id="batch-001", state=BatchState.AWAITING_ADMISSION, version=3)
+    rejection = BatchRejection(
+        rejection_id="rejection-admission-001",
+        batch_id=batch.id,
+        source_batch_version=batch.version,
+        stage=BatchRejectionStage.ADMISSION,
+        reason_class=BatchRejectionReasonClass.CAPACITY_REJECTED,
+        reason_code="capacity_unavailable",
+        input_digest=digest("input"),
+        authority_digest=digest("admission-authority"),
+        recorded_at=datetime(2026, 7, 15, 6, tzinfo=UTC),
+    )
+    state = InMemoryBatchPreexecutionGateway(batch=batch, authority_scope=scope)
+    proof_gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        planned_manifest_id="manifest-001",
+        planned_manifest_digest=scope.manifest_digest,
+        planned_item_keys=("case-001", "case-002"),
+        planned_shard_plan_id="plan-001",
+        planned_shard_plan_version=scope.shard_plan_version,
+        planned_shard_plan_digest=scope.shard_plan_digest,
+    )
+
+    closed = await RecordPreexecutionRejection(
+        gateway=state,
+        proof=ProvePreexecutionClosure(gateway=proof_gateway),
+    ).execute(
+        RecordPreexecutionRejectionCommand(
+            rejection=rejection,
+            phase_owner_id="admission-001",
+            rejection_epoch=1,
+        )
+    )
+
+    basis = closed.preexecution_closure_basis
+    snapshot = proof_gateway.published_snapshots[-1]
+    assert basis is not None
+    assert basis.scope_kind is BatchPreexecutionScopeKind.PLANNED_UNMATERIALIZED
+    assert tuple(item.manifest_item_key for item in snapshot.scope_items) == (
+        "case-001",
+        "case-002",
+    )
+    assert all(
+        item.terminal_kind is BatchPreexecutionTerminalKind.REJECTION
+        and item.rejection_fact_digest == rejection.digest
+        and item.batch_cancellation_intent_digest is None
+        for item in snapshot.scope_items
+    )
+    assert state.run_resolutions == ()
+    assert state.not_executed_facts == ()
+    assert state.run_outcomes == ()
+
+
 def _batch_and_rejection():
     from qarunner.domain import (
         Batch,

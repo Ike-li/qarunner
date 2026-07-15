@@ -50,6 +50,8 @@ class InMemoryPreexecutionProofGateway:
         planned_shard_plan_id: str | None = None,
         planned_shard_plan_version: int | None = None,
         planned_shard_plan_digest: Digest | None = None,
+        planned_issuer_id: str = "coordinator-001",
+        planned_item_count_override: int | None = None,
     ) -> None:
         self.inventory_sealed = inventory_sealed
         self.task_generations = task_generations
@@ -79,6 +81,8 @@ class InMemoryPreexecutionProofGateway:
         self.planned_shard_plan_id = planned_shard_plan_id
         self.planned_shard_plan_version = planned_shard_plan_version
         self.planned_shard_plan_digest = planned_shard_plan_digest
+        self.planned_issuer_id = planned_issuer_id
+        self.planned_item_count_override = planned_item_count_override
         self.child_scans = 0
         self.inventory_reads = 0
         self.stop_reads = 0
@@ -187,9 +191,13 @@ class InMemoryPreexecutionProofGateway:
             shard_plan_id=self.planned_shard_plan_id,
             shard_plan_version=self.planned_shard_plan_version,
             shard_plan_digest=self.planned_shard_plan_digest,
-            item_count=len(self.planned_item_keys),
+            item_count=(
+                len(self.planned_item_keys)
+                if self.planned_item_count_override is None
+                else self.planned_item_count_override
+            ),
             manifest_item_keys=self.planned_item_keys,
-            issuer_id="coordinator-001",
+            issuer_id=self.planned_issuer_id,
             sealed_at=datetime(2026, 7, 15, 6, 3, tzinfo=UTC),
         )
 
