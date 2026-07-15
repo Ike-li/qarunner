@@ -9,6 +9,11 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionUnavailable,
     BatchPreexecutionGateway,
 )
+from qarunner.application.preexecution_proof import (
+    MaterializedExecutionScope,
+    ProvePreexecutionClosure,
+    ProvePreexecutionClosureCommand,
+)
 from qarunner.domain.cancellation import BatchCancellationIntent, CancellationSource
 from qarunner.domain.digest import canonical_digest
 from qarunner.domain.errors import BatchCancellationConflict, IdempotencyConflict
@@ -124,3 +129,50 @@ class RequestBatchCancellation:
         )
         await self._gateway.publish_cancellation(batch=requested, intent=intent)
         return intent
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcilePreexecutionCancellationCommand:
+    batch_id: str
+    project_id: str
+    suite_revision_id: str
+    expected_batch_version: int
+    reconciler_id: str
+    closure_epoch: int
+
+
+class ReconcilePreexecutionCancellation:
+    """Close a pending intent only from current authority and zero-child proof."""
+
+    def __init__(
+        self,
+        *,
+        gateway: BatchPreexecutionGateway,
+        proof: ProvePreexecutionClosure,
+    ) -> None:
+        self._gateway = gateway
+        self._proof = proof
+
+    async def execute(self, command: ReconcilePreexecutionCancellationCommand):
+        await self._gateway.require_closure_authority(
+            batch_id=command.batch_id,
+            reconciler_id=command.reconciler_id,
+            closure_epoch=command.closure_epoch,
+        )
+        batch = await self._gateway.get_batch_for_update(batch_id=command.batch_id)
+        proof = await self._proof.execute(
+            ProvePreexecutionClosureCommand(
+                batch_id=command.batch_id,
+                project_id=command.project_id,
+                suite_revision_id=command.suite_revision_id,
+                source_batch_version=command.expected_batch_version,
+            )
+        )
+        if isinstance(proof, MaterializedExecutionScope):
+            return proof
+        closed = batch.finalize_unmaterialized_cancel(
+            snapshot=proof,
+            expected_version=command.expected_batch_version,
+        )
+        await self._gateway.publish_preexecution_closure(batch=closed)
+        return closed

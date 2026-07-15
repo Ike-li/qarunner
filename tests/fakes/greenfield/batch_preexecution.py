@@ -7,6 +7,7 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionUnavailable,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
+    BatchClosureSideEffect,
 )
 from qarunner.domain.batch import Batch
 from qarunner.domain.cancellation import (
@@ -33,9 +34,10 @@ class InMemoryBatchPreexecutionGateway:
         self.authority_allowed = authority_allowed
         self.publication_error = publication_error
         self.authority_checks = 0
+        self.closure_authority_checks = 0
         self.batch_reads = 0
-        self.audit_records: tuple[BatchCancellationSideEffect, ...] = ()
-        self.semantic_outbox: tuple[BatchCancellationSideEffect, ...] = ()
+        self.audit_records: tuple[BatchCancellationSideEffect | BatchClosureSideEffect, ...] = ()
+        self.semantic_outbox: tuple[BatchCancellationSideEffect | BatchClosureSideEffect, ...] = ()
         self._authority = BatchCancellationAuthority(
             suite_revision_id="suite-revision-001",
             authorization_digest=canonical_digest(
@@ -79,6 +81,28 @@ class InMemoryBatchPreexecutionGateway:
         side_effect = BatchCancellationSideEffect(
             batch_id=batch.id,
             intent_digest=intent.digest,
+        )
+        self.batch = batch
+        self.audit_records += (side_effect,)
+        self.semantic_outbox += (side_effect,)
+
+    async def require_closure_authority(
+        self,
+        *,
+        batch_id: str,
+        reconciler_id: str,
+        closure_epoch: int,
+    ) -> None:
+        del batch_id, reconciler_id, closure_epoch
+        self.closure_authority_checks += 1
+
+    async def publish_preexecution_closure(self, *, batch: Batch) -> None:
+        assert batch.preexecution_closure_basis is not None
+        if self.batch is batch:
+            return
+        side_effect = BatchClosureSideEffect(
+            batch_id=batch.id,
+            basis_digest=batch.preexecution_closure_basis.digest,
         )
         self.batch = batch
         self.audit_records += (side_effect,)

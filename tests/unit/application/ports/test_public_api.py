@@ -9,6 +9,7 @@ from qarunner.application.ports import (
     AuthorityProjectionUnavailable,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
+    BatchClosureSideEffect,
     BatchPreexecutionGateway,
     EvidenceManifestIndex,
     EvidenceVerificationRequest,
@@ -29,11 +30,14 @@ from qarunner.application.ports import (
     SecretBroker,
     SecretDeliveryLease,
     SecretRequest,
+    TaskLedgerPosition,
     TrustedTaskStop,
     UtcClock,
     VerifiedEvidenceInputs,
     VersionedFactCommand,
     VersionedFactStore,
+    ZeroChildSnapshotInputs,
+    canonical_task_set_digest,
 )
 
 
@@ -47,6 +51,7 @@ def test_application_ports_are_available_from_the_public_facade() -> None:
         AuditRecord,
         BatchCancellationAuthority,
         BatchCancellationSideEffect,
+        BatchClosureSideEffect,
         BatchPreexecutionGateway,
         EvidenceManifestIndex,
         EvidenceVerificationRequest,
@@ -69,9 +74,12 @@ def test_application_ports_are_available_from_the_public_facade() -> None:
         SecretRequest,
         UtcClock,
         TrustedTaskStop,
+        TaskLedgerPosition,
         VerifiedEvidenceInputs,
         VersionedFactCommand,
         VersionedFactStore,
+        ZeroChildSnapshotInputs,
+        canonical_task_set_digest,
     )
 
     assert all(

@@ -91,14 +91,16 @@ async def test_explicitly_sealed_empty_inventory_proves_task_completeness() -> N
         )
     )
 
+    from qarunner.domain import BatchPreexecutionSnapshot
+
+    assert isinstance(proof, BatchPreexecutionSnapshot)
     assert proof.batch_id == "batch-001"
-    assert proof.ledger_version == 1
-    assert proof.high_watermark == 0
-    assert proof.task_count == 0
-    assert proof.stop_fact_digests == ()
+    assert proof.source_batch_version == 4
+    assert proof.task_stop_fact_digests == ()
     assert gateway.child_scans == 1
     assert gateway.inventory_reads == 1
     assert gateway.stop_reads == 1
+    assert gateway.snapshot_assemblies == 1
 
 
 @pytest.mark.asyncio
@@ -287,8 +289,8 @@ async def test_all_prior_and_current_generations_with_trusted_stops_are_complete
     from qarunner.application.preexecution_proof import (
         ProvePreexecutionClosure,
         ProvePreexecutionClosureCommand,
-        VerifiedTaskCompleteness,
     )
+    from qarunner.domain import BatchPreexecutionSnapshot
 
     generations = (
         (2, "collection", "source-001", 1),
@@ -309,6 +311,162 @@ async def test_all_prior_and_current_generations_with_trusted_stops_are_complete
         )
     )
 
-    assert isinstance(result, VerifiedTaskCompleteness)
-    assert result.task_count == 2
-    assert len(result.stop_fact_digests) == 2
+    assert isinstance(result, BatchPreexecutionSnapshot)
+    assert len(result.task_stop_fact_digests) == 2
+    assert gateway.snapshot_assemblies == 1
+
+
+@pytest.mark.asyncio
+async def test_task_set_digest_is_rebuilt_from_stable_ordered_keys() -> None:
+    """A signed-looking seal cannot substitute a digest for different ledger content."""
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.preexecution_proof import (
+        IntegrityFailure,
+        ProvePreexecutionClosure,
+        ProvePreexecutionClosureCommand,
+    )
+    from qarunner.domain import canonical_digest
+
+    gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        task_set_digest_override=canonical_digest(
+            schema_version="qep.preexecution-task-set.v1",
+            payload={"tasks": []},
+        ),
+        task_generations=((2, "collection", "source-001", 1),),
+        stopped_generations=((2, "collection", "source-001", 1),),
+    )
+
+    with pytest.raises(IntegrityFailure):
+        await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=4,
+            )
+        )
+
+    assert gateway.stop_reads == 0
+    assert gateway.quarantined_batches == ("batch-001",)
+
+
+@pytest.mark.asyncio
+async def test_stale_task_seal_cannot_survive_a_new_ledger_generation() -> None:
+    """A changed ledger version/high-watermark invalidates the previous sealed view."""
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.preexecution_proof import (
+        ClosureNotReady,
+        ProvePreexecutionClosure,
+        ProvePreexecutionClosureCommand,
+    )
+
+    gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        ledger_version=1,
+        high_watermark=0,
+        current_ledger_version=2,
+        current_high_watermark=1,
+    )
+
+    with pytest.raises(ClosureNotReady):
+        await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=4,
+            )
+        )
+
+    assert gateway.ledger_position_reads == 1
+    assert gateway.stop_reads == 0
+    assert gateway.quarantined_batches == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ledger_version", "high_watermark"),
+    [
+        pytest.param(0, 0, id="zero-version"),
+        pytest.param(True, 0, id="bool-version"),
+        pytest.param(1, -1, id="negative-high-watermark"),
+        pytest.param(1, True, id="bool-high-watermark"),
+    ],
+)
+async def test_invalid_task_seal_position_is_integrity_failure(
+    ledger_version: int,
+    high_watermark: int,
+) -> None:
+    """Malformed persisted seal positions cannot become a retryable empty proof."""
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.preexecution_proof import (
+        IntegrityFailure,
+        ProvePreexecutionClosure,
+        ProvePreexecutionClosureCommand,
+    )
+
+    gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        ledger_version=ledger_version,
+        high_watermark=high_watermark,
+    )
+
+    with pytest.raises(IntegrityFailure):
+        await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=4,
+            )
+        )
+
+    assert gateway.quarantined_batches == ("batch-001",)
+    assert gateway.stop_reads == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("child_field", "value"),
+    [
+        pytest.param("assignment_ids", ("assignment-orphan",), id="assignment"),
+        pytest.param("start_commit_ids", ("commit-orphan",), id="start-commit"),
+        pytest.param("attempt_ids", ("attempt-orphan",), id="attempt"),
+        pytest.param("fences", (1,), id="fence"),
+        pytest.param("retry_intent_ids", ("retry-orphan",), id="retry-intent"),
+    ],
+)
+async def test_each_orphan_execution_authority_is_quarantined(
+    child_field: str,
+    value: tuple[object, ...],
+) -> None:
+    """Every execution authority requires a materialized Run lineage."""
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.preexecution_proof import (
+        IntegrityFailure,
+        ProvePreexecutionClosure,
+        ProvePreexecutionClosureCommand,
+    )
+
+    gateway = InMemoryPreexecutionProofGateway(
+        inventory_sealed=True,
+        **{child_field: value},
+    )
+
+    with pytest.raises(IntegrityFailure):
+        await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=4,
+            )
+        )
+
+    assert gateway.quarantined_batches == ("batch-001",)
+    assert gateway.inventory_reads == 0

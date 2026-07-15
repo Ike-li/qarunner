@@ -2,8 +2,12 @@
 
 from dataclasses import dataclass
 
-from qarunner.application.ports.preexecution_proof import PreexecutionProofGateway
-from qarunner.domain.digest import Digest
+from qarunner.application.ports.preexecution_proof import (
+    PreexecutionProofGateway,
+    ZeroChildSnapshotInputs,
+    canonical_task_set_digest,
+)
+from qarunner.domain.batch import BatchPreexecutionSnapshot
 
 
 class ClosureNotReady(RuntimeError):
@@ -35,18 +39,6 @@ class ProvePreexecutionClosureCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class VerifiedTaskCompleteness:
-    """Verified ledger/stop equality ready for later absence assembly."""
-
-    batch_id: str
-    ledger_version: int
-    high_watermark: int
-    task_count: int
-    task_set_digest: Digest
-    stop_fact_digests: tuple[Digest, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class MaterializedExecutionScope:
     """Proof branch requiring an execution-path handoff, never zero-child closure."""
 
@@ -62,7 +54,7 @@ class ProvePreexecutionClosure:
 
     async def execute(
         self, command: ProvePreexecutionClosureCommand
-    ) -> VerifiedTaskCompleteness | MaterializedExecutionScope:
+    ) -> BatchPreexecutionSnapshot | MaterializedExecutionScope:
         children = await self._gateway.scan_execution_children(batch_id=command.batch_id)
         orphan_authority = not children.run_ids and any(
             (
@@ -84,6 +76,26 @@ class ProvePreexecutionClosure:
         inventory = await self._gateway.read_sealed_task_inventory(batch_id=command.batch_id)
         if inventory is None:
             raise ClosureNotReady
+        invalid_position = (
+            isinstance(inventory.ledger_version, bool)
+            or not isinstance(inventory.ledger_version, int)
+            or inventory.ledger_version < 1
+            or isinstance(inventory.high_watermark, bool)
+            or not isinstance(inventory.high_watermark, int)
+            or inventory.high_watermark < 0
+            or isinstance(inventory.task_count, bool)
+            or not isinstance(inventory.task_count, int)
+            or inventory.task_count < 0
+        )
+        if invalid_position:
+            await self._gateway.quarantine_integrity_failure(batch_id=command.batch_id)
+            raise IntegrityFailure
+        position = await self._gateway.read_current_task_ledger_position(batch_id=command.batch_id)
+        if (
+            position.ledger_version != inventory.ledger_version
+            or position.high_watermark != inventory.high_watermark
+        ):
+            raise ClosureNotReady
         issuer_trusted = await self._gateway.is_trusted_inventory_issuer(
             issuer_id=inventory.issuer_id
         )
@@ -100,6 +112,7 @@ class ProvePreexecutionClosure:
             inventory.task_count != len(task_keys)
             or len(set(task_keys)) != len(task_keys)
             or task_keys != tuple(sorted(task_keys))
+            or inventory.task_set_digest != canonical_task_set_digest(task_keys)
         ):
             await self._gateway.quarantine_integrity_failure(batch_id=command.batch_id)
             raise IntegrityFailure
@@ -116,11 +129,15 @@ class ProvePreexecutionClosure:
         stop_keys = tuple(stop.key for stop in stops)
         if task_keys != stop_keys:
             raise ClosureNotReady
-        return VerifiedTaskCompleteness(
-            batch_id=inventory.batch_id,
-            ledger_version=inventory.ledger_version,
-            high_watermark=inventory.high_watermark,
-            task_count=inventory.task_count,
-            task_set_digest=inventory.task_set_digest,
-            stop_fact_digests=tuple(stop.digest for stop in stops),
+        return await self._gateway.assemble_zero_child_snapshot(
+            inputs=ZeroChildSnapshotInputs(
+                batch_id=inventory.batch_id,
+                project_id=inventory.project_id,
+                suite_revision_id=inventory.suite_revision_id,
+                source_batch_version=command.source_batch_version,
+                ledger_version=inventory.ledger_version,
+                high_watermark=inventory.high_watermark,
+                task_set_digest=inventory.task_set_digest,
+                stop_fact_digests=tuple(stop.digest for stop in stops),
+            )
         )

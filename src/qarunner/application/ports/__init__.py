@@ -6,6 +6,7 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionUnavailable,
     BatchCancellationAuthority,
     BatchCancellationSideEffect,
+    BatchClosureSideEffect,
     BatchPreexecutionGateway,
 )
 from qarunner.application.ports.clock import UtcClock
@@ -35,7 +36,10 @@ from qarunner.application.ports.preexecution_proof import (
     PreexecutionTaskGeneration,
     PreexecutionTaskKey,
     SealedTaskInventory,
+    TaskLedgerPosition,
     TrustedTaskStop,
+    ZeroChildSnapshotInputs,
+    canonical_task_set_digest,
 )
 from qarunner.application.ports.secrets import (
     SecretBroker,
@@ -53,6 +57,7 @@ __all__ = [
     "AuditRecord",
     "BatchCancellationAuthority",
     "BatchCancellationSideEffect",
+    "BatchClosureSideEffect",
     "BatchPreexecutionGateway",
     "EvidenceManifestIndex",
     "EvidenceVerificationRequest",
@@ -73,9 +78,12 @@ __all__ = [
     "SecretDeliveryLease",
     "SecretRequest",
     "SealedTaskInventory",
+    "TaskLedgerPosition",
     "UtcClock",
     "TrustedTaskStop",
     "VerifiedEvidenceInputs",
     "VersionedFactCommand",
     "VersionedFactStore",
+    "ZeroChildSnapshotInputs",
+    "canonical_task_set_digest",
 ]

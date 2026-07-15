@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from qarunner.domain.digest import Digest
+from qarunner.domain.batch import BatchPreexecutionSnapshot
+from qarunner.domain.digest import Digest, canonical_digest
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -15,6 +16,24 @@ class PreexecutionTaskKey:
     task_kind: str
     task_key: str
     generation: int
+
+
+def canonical_task_set_digest(keys: tuple[PreexecutionTaskKey, ...]) -> Digest:
+    """Bind an authoritative seal to stable business-ordered task generations."""
+    return canonical_digest(
+        schema_version="qep.preexecution-task-set.v1",
+        payload={
+            "tasks": [
+                {
+                    "phase_ordinal": key.phase_ordinal,
+                    "task_kind": key.task_kind,
+                    "task_key": key.task_key,
+                    "generation": key.generation,
+                }
+                for key in keys
+            ]
+        },
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +84,24 @@ class SealedTaskInventory:
     tasks: tuple[PreexecutionTaskGeneration, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class TaskLedgerPosition:
+    ledger_version: int
+    high_watermark: int
+
+
+@dataclass(frozen=True, slots=True)
+class ZeroChildSnapshotInputs:
+    batch_id: str
+    project_id: str
+    suite_revision_id: str
+    source_batch_version: int
+    ledger_version: int
+    high_watermark: int
+    task_set_digest: Digest
+    stop_fact_digests: tuple[Digest, ...]
+
+
 @runtime_checkable
 class PreexecutionProofGateway(Protocol):
     """Read proof facts under the dedicated Batch-local command boundary."""
@@ -73,6 +110,8 @@ class PreexecutionProofGateway(Protocol):
 
     async def read_sealed_task_inventory(self, *, batch_id: str) -> SealedTaskInventory | None: ...
 
+    async def read_current_task_ledger_position(self, *, batch_id: str) -> TaskLedgerPosition: ...
+
     async def read_trusted_task_stops(self, *, batch_id: str) -> tuple[TrustedTaskStop, ...]: ...
 
     async def is_trusted_inventory_issuer(self, *, issuer_id: str) -> bool: ...
@@ -80,3 +119,7 @@ class PreexecutionProofGateway(Protocol):
     async def is_trusted_stop_issuer(self, *, issuer_id: str) -> bool: ...
 
     async def quarantine_integrity_failure(self, *, batch_id: str) -> None: ...
+
+    async def assemble_zero_child_snapshot(
+        self, *, inputs: ZeroChildSnapshotInputs
+    ) -> BatchPreexecutionSnapshot: ...

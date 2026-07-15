@@ -35,6 +35,12 @@ class BatchCancellationSideEffect:
     intent_digest: Digest
 
 
+@dataclass(frozen=True, slots=True)
+class BatchClosureSideEffect:
+    batch_id: str
+    basis_digest: Digest
+
+
 @runtime_checkable
 class BatchPreexecutionGateway(Protocol):
     """Narrow authority and persistence boundary for pre-execution Batch work."""
@@ -49,3 +55,13 @@ class BatchPreexecutionGateway(Protocol):
 
     async def publish_cancellation(self, *, batch: Batch, intent: BatchCancellationIntent) -> None:
         """Atomically publish Batch, audit, and semantic outbox facts."""
+
+    async def require_closure_authority(
+        self,
+        *,
+        batch_id: str,
+        reconciler_id: str,
+        closure_epoch: int,
+    ) -> None: ...
+
+    async def publish_preexecution_closure(self, *, batch: Batch) -> None: ...
