@@ -100,8 +100,12 @@ from qarunner.domain.run_finalization import (
     RunFinalizationState,
     RunItemKey,
     RunItemResolution,
+    RunItemResolutionSet,
     RunOutcome,
     RunPhase,
+    VerifiedAttemptItemResolution,
+    VerifiedAttemptResolutionSet,
+    select_latest_authorized_complete_attempt,
 )
 from qarunner.domain.unknown import (
     UnknownAdjudication,
@@ -189,6 +193,9 @@ __all__ = [
     "RunFinalizationState",
     "RunItemKey",
     "RunItemResolution",
+    "RunItemResolutionSet",
+    "VerifiedAttemptItemResolution",
+    "VerifiedAttemptResolutionSet",
     "RunOutcome",
     "RunPhase",
     "RunState",
@@ -224,4 +231,5 @@ __all__ = [
     "WorkerAuthority",
     "canonical_digest",
     "build_evidence_manifest",
+    "select_latest_authorized_complete_attempt",
 ]

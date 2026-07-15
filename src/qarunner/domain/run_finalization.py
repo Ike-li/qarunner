@@ -6,7 +6,8 @@ import enum
 from dataclasses import dataclass
 
 from qarunner.domain.digest import Digest, canonical_digest
-from qarunner.domain.errors import DomainValidationError
+from qarunner.domain.errors import AttemptUnknownReviewRequired, DomainValidationError
+from qarunner.domain.unknown import UnknownAdjudicationDecision
 
 
 class RunPhase(enum.StrEnum):
@@ -176,6 +177,7 @@ class EffectiveItemResolution:
     retry_decision_digest: Digest | None
     retry_authority_digest: Digest | None
     adjudication_digest: Digest | None
+    adjudication_decision: UnknownAdjudicationDecision | None = None
 
     def __post_init__(self) -> None:
         entity = "effective_item_resolution"
@@ -187,19 +189,47 @@ class EffectiveItemResolution:
         retry_fields = ("retry_intent_digest", "retry_decision_digest", "retry_authority_digest")
         if self.source_kind is EffectiveSourceKind.ORIGINAL:
             _validate_optional_attempt_identity(entity, self)
-            _forbid_present(entity, self, *retry_fields, "adjudication_digest")
+            _forbid_present(
+                entity, self, *retry_fields, "adjudication_digest", "adjudication_decision"
+            )
         elif self.source_kind is EffectiveSourceKind.AUTHORIZED_RETRY:
             _require_attempt_identity(entity, self)
             for field in retry_fields:
                 _require_digest(entity, field, getattr(self, field))
+            if (self.adjudication_digest is None) != (self.adjudication_decision is None):
+                _invalid(entity, "adjudication_digest", "decision_all_or_none")
             if self.adjudication_digest is not None:
                 _require_digest(entity, "adjudication_digest", self.adjudication_digest)
+                if (
+                    not isinstance(self.adjudication_decision, UnknownAdjudicationDecision)
+                    or not self.adjudication_decision.permits_retry
+                ):
+                    _invalid(entity, "adjudication_decision", "does_not_permit_retry")
         else:
             _require_attempt_identity(entity, self)
             _forbid_present(entity, self, *retry_fields)
             _require_digest(entity, "adjudication_digest", self.adjudication_digest)
-            if self.outcome is not RunOutcome.INFRA_FAILED:
+            if (
+                self.adjudication_decision
+                is UnknownAdjudicationDecision.MARK_INFRA_FAILED_NO_RETRY
+            ):
+                if self.outcome is not RunOutcome.INFRA_FAILED:
+                    _invalid(entity, "outcome", "infra_adjudication_requires_infra")
+                _forbid_present(
+                    entity,
+                    self,
+                    "evidence_root_digest",
+                    "result_mapping_schema",
+                    "result_mapping_version",
+                    "result_mapping_digest",
+                )
+            elif (
+                self.adjudication_decision
+                is UnknownAdjudicationDecision.MARK_COMPLETED_FROM_VERIFIED_EVIDENCE
+            ):
                 _require_digest(entity, "evidence_root_digest", self.evidence_root_digest)
+            else:
+                _invalid(entity, "adjudication_decision", "invalid_for_resolution")
 
     def canonical_payload(self) -> dict[str, object]:
         payload = _resolution_payload(self, execution_field="outcome")
@@ -278,6 +308,266 @@ class RunItemResolution:
             schema_version="qep.run-item-resolution-set.v1",
             payload={"projection_kind": "item", **self.canonical_payload()},
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RunItemResolutionSet:
+    """Closed Run's canonical, complete, ordered per-item resolution basis."""
+
+    batch_id: str
+    run_id: str
+    source_run_version: int
+    manifest_digest: Digest
+    shard_plan_digest: Digest
+    run_item_set_digest: Digest
+    attempt_chain_digest: Digest
+    retry_chain_digest: Digest | None
+    adjudication_chain_digest: Digest | None
+    entries: tuple[RunItemResolution, ...]
+
+    def __post_init__(self) -> None:
+        entity = "run_item_resolution_set"
+        _require_string(entity, "batch_id", self.batch_id)
+        _require_string(entity, "run_id", self.run_id)
+        _require_nonnegative_int(entity, "source_run_version", self.source_run_version)
+        for field in (
+            "manifest_digest",
+            "shard_plan_digest",
+            "run_item_set_digest",
+            "attempt_chain_digest",
+        ):
+            _require_digest(entity, field, getattr(self, field))
+        for field in ("retry_chain_digest", "adjudication_chain_digest"):
+            value = getattr(self, field)
+            if value is not None:
+                _require_digest(entity, field, value)
+        if not isinstance(self.entries, tuple) or not self.entries:
+            _invalid(entity, "entries", "invalid")
+        if any(not isinstance(entry, RunItemResolution) for entry in self.entries):
+            _invalid(entity, "entries", "invalid")
+        keys = tuple(entry.item_key for entry in self.entries)
+        if len(set(keys)) != len(keys):
+            _invalid(entity, "entries", "duplicate_key")
+        if keys != tuple(sorted(keys)):
+            _invalid(entity, "entries", "not_ordered")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        expected_item_keys: tuple[RunItemKey, ...],
+        entries: tuple[RunItemResolution, ...],
+        **envelope: object,
+    ) -> RunItemResolutionSet:
+        if not isinstance(expected_item_keys, tuple) or any(
+            not isinstance(key, RunItemKey) for key in expected_item_keys
+        ):
+            _invalid("run_item_resolution_set", "expected_item_keys", "invalid")
+        if not isinstance(entries, tuple) or any(
+            not isinstance(entry, RunItemResolution) for entry in entries
+        ):
+            _invalid("run_item_resolution_set", "entries", "invalid")
+        entry_keys = tuple(entry.item_key for entry in entries)
+        if len(set(entry_keys)) != len(entry_keys):
+            _invalid("run_item_resolution_set", "entries", "duplicate_key")
+        if set(entry_keys) != set(expected_item_keys) or len(expected_item_keys) != len(
+            set(expected_item_keys)
+        ):
+            _invalid("run_item_resolution_set", "entries", "key_set_mismatch")
+        return cls(entries=tuple(sorted(entries, key=lambda entry: entry.item_key)), **envelope)
+
+    @property
+    def item_count(self) -> int:
+        return len(self.entries)
+
+    def _envelope_payload(self) -> dict[str, object]:
+        return {
+            "batch_id": self.batch_id,
+            "run_id": self.run_id,
+            "source_run_version": self.source_run_version,
+            "manifest_digest": self.manifest_digest.value,
+            "shard_plan_digest": self.shard_plan_digest.value,
+            "run_item_set_digest": self.run_item_set_digest.value,
+        }
+
+    @property
+    def original_resolution_set_digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.run-item-resolution-set.v1",
+            payload={
+                **self._envelope_payload(),
+                "projection_kind": "original_set",
+                "entries": [
+                    {
+                        "item_key": entry.item_key.canonical_payload(),
+                        "original": entry.original.canonical_payload(),
+                    }
+                    for entry in self.entries
+                ],
+            },
+        )
+
+    @property
+    def effective_resolution_set_digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.run-item-resolution-set.v1",
+            payload={
+                **self._envelope_payload(),
+                "projection_kind": "effective_set",
+                "entries": [
+                    {
+                        "item_key": entry.item_key.canonical_payload(),
+                        "effective": entry.effective.canonical_payload(),
+                    }
+                    for entry in self.entries
+                ],
+            },
+        )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            **self._envelope_payload(),
+            "attempt_chain_digest": self.attempt_chain_digest.value,
+            "retry_chain_digest": _digest_value(self.retry_chain_digest),
+            "adjudication_chain_digest": _digest_value(self.adjudication_chain_digest),
+            "entries": [
+                {
+                    **entry.canonical_payload(),
+                    "item_resolution_digest": entry.item_resolution_digest.value,
+                }
+                for entry in self.entries
+            ],
+            "item_count": self.item_count,
+            "original_resolution_set_digest": self.original_resolution_set_digest.value,
+            "effective_resolution_set_digest": self.effective_resolution_set_digest.value,
+        }
+
+    @property
+    def resolution_set_digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.run-item-resolution-set.v1", payload=self.canonical_payload()
+        )
+
+    @property
+    def audit_outcome(self) -> RunOutcome:
+        precedence = {
+            RunOutcome.PASSED: 0,
+            RunOutcome.CANCELLED: 1,
+            RunOutcome.TEST_FAILED: 2,
+            RunOutcome.INFRA_FAILED: 3,
+        }
+        return max((entry.effective.outcome for entry in self.entries), key=precedence.__getitem__)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedAttemptItemResolution:
+    item_key: RunItemKey
+    effective: EffectiveItemResolution
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.item_key, RunItemKey):
+            _invalid("verified_attempt_item_resolution", "item_key", "invalid")
+        if not isinstance(self.effective, EffectiveItemResolution):
+            _invalid("verified_attempt_item_resolution", "effective", "invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedAttemptResolutionSet:
+    """Verified observations for one full-Run authorized Attempt target."""
+
+    attempt_id: str
+    attempt_no: int
+    attempt_fence: int
+    attempt_item_set_digest: Digest
+    items: tuple[VerifiedAttemptItemResolution, ...]
+
+    def __post_init__(self) -> None:
+        entity = "verified_attempt_resolution_set"
+        _require_string(entity, "attempt_id", self.attempt_id)
+        _require_positive_int(entity, "attempt_no", self.attempt_no)
+        _require_positive_int(entity, "attempt_fence", self.attempt_fence)
+        _require_digest(entity, "attempt_item_set_digest", self.attempt_item_set_digest)
+        if not isinstance(self.items, tuple) or any(
+            not isinstance(item, VerifiedAttemptItemResolution) for item in self.items
+        ):
+            _invalid(entity, "items", "invalid")
+        keys = tuple(item.item_key for item in self.items)
+        if len(keys) != len(set(keys)):
+            _invalid(entity, "items", "duplicate_key")
+        for item in self.items:
+            effective = item.effective
+            if effective.source_kind is not EffectiveSourceKind.AUTHORIZED_RETRY:
+                _invalid(entity, "items", "not_authorized_retry")
+            if (
+                effective.attempt_id != self.attempt_id
+                or effective.attempt_no != self.attempt_no
+                or effective.attempt_fence != self.attempt_fence
+                or effective.attempt_item_set_digest != self.attempt_item_set_digest
+            ):
+                _invalid(entity, "items", "attempt_identity_mismatch")
+        authority_triples = {
+            (
+                item.effective.retry_intent_digest,
+                item.effective.retry_decision_digest,
+                item.effective.retry_authority_digest,
+            )
+            for item in self.items
+        }
+        if len(authority_triples) > 1:
+            _invalid(entity, "items", "retry_authority_mismatch")
+
+
+def select_latest_authorized_complete_attempt(
+    *,
+    expected_item_keys: tuple[RunItemKey, ...],
+    run_item_set_digest: Digest,
+    original_attempt_no: int,
+    original_attempt_fence: int,
+    attempts: tuple[VerifiedAttemptResolutionSet, ...],
+    run_id: str,
+) -> VerifiedAttemptResolutionSet:
+    """Validate a continuous full-Run authority chain and select its latest complete fact set."""
+    entity = "authorized_retry_selection"
+    if (
+        not isinstance(expected_item_keys, tuple)
+        or not expected_item_keys
+        or any(not isinstance(key, RunItemKey) for key in expected_item_keys)
+        or len(set(expected_item_keys)) != len(expected_item_keys)
+    ):
+        _invalid(entity, "expected_item_keys", "invalid")
+    _require_string(entity, "run_id", run_id)
+    _require_digest(entity, "run_item_set_digest", run_item_set_digest)
+    _require_positive_int(entity, "original_attempt_no", original_attempt_no)
+    _require_positive_int(entity, "original_attempt_fence", original_attempt_fence)
+    if not isinstance(attempts, tuple) or not attempts:
+        _invalid(entity, "attempts", "invalid")
+    expected_no = original_attempt_no + 1
+    previous_fence = original_attempt_fence
+    complete: list[VerifiedAttemptResolutionSet] = []
+    expected_keys = set(expected_item_keys)
+    for attempt in attempts:
+        if not isinstance(attempt, VerifiedAttemptResolutionSet):
+            _invalid(entity, "attempts", "invalid")
+        if attempt.attempt_no != expected_no or attempt.attempt_fence <= previous_fence:
+            _invalid(entity, "attempts", "continuous_chain_required")
+        if attempt.attempt_item_set_digest != run_item_set_digest:
+            _invalid(entity, "attempt_item_set_digest", "full_run_item_set_required")
+        item_keys = {item.item_key for item in attempt.items}
+        if not item_keys <= expected_keys:
+            _invalid(entity, "items", "cross_run_item")
+        if item_keys == expected_keys:
+            complete.append(attempt)
+        expected_no += 1
+        previous_fence = attempt.attempt_fence
+    if not complete:
+        latest = attempts[-1]
+        raise AttemptUnknownReviewRequired(
+            run_id=run_id,
+            attempt_id=latest.attempt_id,
+            fence=latest.attempt_fence,
+            reason="no_authorized_complete_attempt",
+        )
+    return complete[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,6 +675,11 @@ def _require_string(entity: str, field: str, value: object) -> None:
 
 def _require_positive_int(entity: str, field: str, value: object) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        _invalid(entity, field, "invalid")
+
+
+def _require_nonnegative_int(entity: str, field: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         _invalid(entity, field, "invalid")
 
 

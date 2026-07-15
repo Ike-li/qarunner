@@ -61,8 +61,17 @@ def _effective(kind="ORIGINAL", outcome="PASSED", **changes):
         "retry_decision_digest": None,
         "retry_authority_digest": None,
         "adjudication_digest": None,
+        "adjudication_decision": None,
     }
     values.update(changes)
+    if values["adjudication_digest"] is not None and values["adjudication_decision"] is None:
+        from qarunner.domain import UnknownAdjudicationDecision
+
+        values["adjudication_decision"] = (
+            UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY
+            if values["source_kind"] is EffectiveSourceKind.AUTHORIZED_RETRY
+            else UnknownAdjudicationDecision.MARK_INFRA_FAILED_NO_RETRY
+        )
     return EffectiveItemResolution(**values)
 
 
@@ -331,6 +340,8 @@ def test_unknown_authorized_retry_may_carry_adjudication_and_sticky_lineage() ->
 
 
 def test_unknown_adjudication_enforces_authority_and_outcome_evidence() -> None:
+    from qarunner.domain import UnknownAdjudicationDecision
+
     value = _effective(
         kind="UNKNOWN_ADJUDICATION",
         outcome="INFRA_FAILED",
@@ -340,10 +351,52 @@ def test_unknown_adjudication_enforces_authority_and_outcome_evidence() -> None:
     assert value.outcome.value == "infra_failed"
     with pytest.raises(ValueError, match="evidence_root_digest"):
         replace(
-            value, outcome=__import__("qarunner.domain", fromlist=["RunOutcome"]).RunOutcome.PASSED
+            value,
+            outcome=__import__("qarunner.domain", fromlist=["RunOutcome"]).RunOutcome.PASSED,
+            adjudication_decision=(
+                UnknownAdjudicationDecision.MARK_COMPLETED_FROM_VERIFIED_EVIDENCE
+            ),
         )
     with pytest.raises(ValueError, match="retry"):
         replace(value, retry_intent_digest=_digest("retry"))
+
+
+def test_adjudication_digest_and_typed_decision_are_bound_together() -> None:
+    from qarunner.domain import UnknownAdjudicationDecision
+
+    with pytest.raises(ValueError, match="all_or_none"):
+        _effective(
+            kind="AUTHORIZED_RETRY",
+            retry_intent_digest=_digest("intent"),
+            retry_decision_digest=_digest("decision"),
+            retry_authority_digest=_digest("authority"),
+            adjudication_decision=UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY,
+        )
+    with pytest.raises(ValueError, match="does_not_permit_retry"):
+        _effective(
+            kind="AUTHORIZED_RETRY",
+            retry_intent_digest=_digest("intent"),
+            retry_decision_digest=_digest("decision"),
+            retry_authority_digest=_digest("authority"),
+            adjudication_digest=_digest("adjudication"),
+            adjudication_decision=UnknownAdjudicationDecision.MARK_INFRA_FAILED_NO_RETRY,
+        )
+    with pytest.raises(ValueError, match="infra_adjudication_requires_infra"):
+        _effective(
+            kind="UNKNOWN_ADJUDICATION",
+            outcome="PASSED",
+            adjudication_digest=_digest("adjudication"),
+            evidence_root_digest=None,
+            adjudication_decision=UnknownAdjudicationDecision.MARK_INFRA_FAILED_NO_RETRY,
+        )
+    with pytest.raises(ValueError, match="invalid_for_resolution"):
+        _effective(
+            kind="UNKNOWN_ADJUDICATION",
+            outcome="INFRA_FAILED",
+            adjudication_digest=_digest("adjudication"),
+            evidence_root_digest=None,
+            adjudication_decision=UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY,
+        )
 
 
 def test_unadjudicated_unknown_cannot_construct_a_resolution() -> None:
