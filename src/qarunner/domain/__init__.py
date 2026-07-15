@@ -138,6 +138,18 @@ from qarunner.domain.unknown import (
     UnknownReason,
     UnknownSource,
 )
+from qarunner.domain.unknown_review import (
+    UnknownReviewActor,
+    UnknownReviewAuditFact,
+    UnknownReviewAuditKind,
+    UnknownReviewEvaluation,
+    UnknownReviewNotification,
+    UnknownReviewNotificationKind,
+    UnknownReviewRequest,
+    UnknownReviewRole,
+    UnknownReviewStatus,
+    evaluate_unknown_review,
+)
 from qarunner.domain.worker import (
     WORKER_TERMINAL_STATES,
     WORKER_TRANSITIONS,
@@ -148,6 +160,16 @@ from qarunner.domain.worker import (
 )
 
 __all__ = [
+    "UnknownReviewActor",
+    "UnknownReviewAuditFact",
+    "UnknownReviewAuditKind",
+    "UnknownReviewEvaluation",
+    "UnknownReviewNotification",
+    "UnknownReviewNotificationKind",
+    "UnknownReviewRequest",
+    "UnknownReviewRole",
+    "UnknownReviewStatus",
+    "evaluate_unknown_review",
     "AdjudicationConflict",
     "Attempt",
     "AttemptEvent",
