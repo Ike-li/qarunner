@@ -53,7 +53,7 @@ async def test_verified_zero_child_proof_atomically_closes_cancelled_batch() -> 
         recorded_at=datetime(2026, 7, 15, 6, tzinfo=UTC),
     )
     requested = source.request_cancel(intent=intent, expected_version=source.version)
-    state = InMemoryBatchPreexecutionGateway(batch=requested)
+    state = InMemoryBatchPreexecutionGateway(batch=requested, authority_scope=intent.scope)
     proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
     handler = ReconcilePreexecutionCancellation(
         gateway=state,
@@ -447,6 +447,61 @@ async def test_closure_source_binding_drift_returns_state_conflict_before_proof(
 
 
 @pytest.mark.asyncio
+async def test_closure_scope_binding_drift_returns_state_conflict_before_replay() -> None:
+    from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
+    from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
+
+    from qarunner.application.batch_preexecution import (
+        PreexecutionStateConflict,
+        ReconcilePreexecutionCancellation,
+        ReconcilePreexecutionCancellationCommand,
+    )
+    from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+    from qarunner.domain import (
+        BatchCancellationScope,
+        BatchCancellationScopeKind,
+        canonical_digest,
+    )
+
+    requested, intent = _requested_batch()
+    drifted_scope = BatchCancellationScope(
+        kind=BatchCancellationScopeKind.PRE_PLAN,
+        preplan_scope_digest=canonical_digest(
+            schema_version="qep.test-cancel-scope.v1",
+            payload={"label": "drifted"},
+        ),
+        manifest_digest=None,
+        shard_plan_version=None,
+        shard_plan_digest=None,
+        canonical_run_set_digest=None,
+    )
+    state = InMemoryBatchPreexecutionGateway(
+        batch=requested,
+        authority_scope=drifted_scope,
+    )
+    proof_gateway = InMemoryPreexecutionProofGateway(inventory_sealed=True)
+
+    with pytest.raises(PreexecutionStateConflict) as caught:
+        await ReconcilePreexecutionCancellation(
+            gateway=state,
+            proof=ProvePreexecutionClosure(gateway=proof_gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id=requested.id,
+                project_id=intent.project_id,
+                suite_revision_id=intent.suite_revision_id,
+                expected_batch_version=requested.version,
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert caught.value.reason == "source_binding_superseded"
+    assert state.batch_reads == 0
+    assert proof_gateway.child_scans == 0
+
+
+@pytest.mark.asyncio
 async def test_retired_reconciler_returns_state_conflict_before_batch_read_or_replay() -> None:
     from tests.fakes.greenfield.batch_preexecution import InMemoryBatchPreexecutionGateway
     from tests.fakes.greenfield.preexecution_proof import InMemoryPreexecutionProofGateway
@@ -546,7 +601,7 @@ async def test_planned_zero_child_cancel_builds_authoritative_typed_item_coverag
         recorded_at=datetime(2026, 7, 15, 6, tzinfo=UTC),
     )
     requested = source.request_cancel(intent=intent, expected_version=source.version)
-    state = InMemoryBatchPreexecutionGateway(batch=requested)
+    state = InMemoryBatchPreexecutionGateway(batch=requested, authority_scope=scope)
     proof_gateway = InMemoryPreexecutionProofGateway(
         inventory_sealed=True,
         planned_manifest_id="manifest-001",

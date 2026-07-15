@@ -17,9 +17,13 @@ from qarunner.application.preexecution_proof import (
     ProvePreexecutionClosure,
     ProvePreexecutionClosureCommand,
 )
-from qarunner.domain.batch import BatchPreexecutionTerminalKind, BatchRejection
+from qarunner.domain.batch import (
+    BatchPreexecutionTerminalKind,
+    BatchRejection,
+    BatchRejectionReasonClass,
+)
 from qarunner.domain.cancellation import BatchCancellationIntent
-from qarunner.domain.digest import canonical_digest
+from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import BatchCancellationConflict, IdempotencyConflict
 
 
@@ -228,7 +232,11 @@ class ReconcilePreexecutionCancellation:
 
 @dataclass(frozen=True, slots=True)
 class RecordPreexecutionRejectionCommand:
-    rejection: BatchRejection
+    batch_id: str
+    rejection_id: str
+    reason_class: BatchRejectionReasonClass
+    reason_code: str
+    input_digest: Digest
     phase_owner_id: str
     rejection_epoch: int
 
@@ -259,10 +267,9 @@ class RecordPreexecutionRejection:
     async def execute(self, command: RecordPreexecutionRejectionCommand):
         try:
             authority = await self._gateway.require_rejection_authority(
-                batch_id=command.rejection.batch_id,
+                batch_id=command.batch_id,
                 phase_owner_id=command.phase_owner_id,
                 rejection_epoch=command.rejection_epoch,
-                source_batch_version=command.rejection.source_batch_version,
             )
         except AuthorityProjectionUnavailable:
             raise TemporarilyUnavailable() from None
@@ -272,31 +279,48 @@ class RecordPreexecutionRejection:
             raise PreexecutionStateConflict(reason=error.reason) from None
         except AuthorityStateConflict as error:
             raise PreexecutionStateConflict(reason=error.reason) from None
-        batch = await self._gateway.get_batch_for_update(batch_id=command.rejection.batch_id)
+        rejection = BatchRejection(
+            rejection_id=command.rejection_id,
+            batch_id=authority.batch_id,
+            source_batch_version=authority.source_batch_version,
+            stage=authority.stage,
+            reason_class=command.reason_class,
+            reason_code=command.reason_code,
+            input_digest=command.input_digest,
+            authority_digest=authority.authority_digest,
+            recorded_at=authority.recorded_at,
+        )
+        batch = await self._gateway.get_batch_for_update(batch_id=authority.batch_id)
         stored = batch.rejection_fact
-        if stored is not None and stored.rejection_id == command.rejection.rejection_id:
-            if stored.digest != command.rejection.digest:
+        if stored is not None and stored.rejection_id == rejection.rejection_id:
+            if stored.digest != rejection.digest:
                 raise IdempotencyConflict(
                     scope=f"batch:{batch.id}:rejection",
                     key=stored.rejection_id,
                     stored_digest=stored.digest,
-                    received_digest=command.rejection.digest,
+                    received_digest=rejection.digest,
                 )
+            basis = batch.preexecution_closure_basis
+            if basis is None or not _basis_matches_authority_scope(
+                basis=basis,
+                scope=authority.scope,
+            ):
+                raise PreexecutionStateConflict(reason="rejection_authority_binding_superseded")
             return batch
         proof = await self._proof.execute(
             ProvePreexecutionClosureCommand(
-                batch_id=command.rejection.batch_id,
+                batch_id=authority.batch_id,
                 project_id=authority.project_id,
                 suite_revision_id=authority.suite_revision_id,
-                source_batch_version=command.rejection.source_batch_version,
+                source_batch_version=authority.source_batch_version,
                 scope=authority.scope,
                 terminal_kind=BatchPreexecutionTerminalKind.REJECTION,
-                command_digest=command.rejection.digest,
+                command_digest=rejection.digest,
             )
         )
         if isinstance(proof, MaterializedExecutionScope):
             handoff = build_rejection_conflict_handoff(
-                rejection=command.rejection,
+                rejection=rejection,
                 project_id=authority.project_id,
                 suite_revision_id=authority.suite_revision_id,
                 preplan_scope_digest=authority.scope.preplan_scope_digest,
@@ -310,12 +334,23 @@ class RecordPreexecutionRejection:
             published = await self._gateway.publish_materialized_handoff(handoff=handoff)
             raise RejectionMaterializedConflict(handoff=published.value)
         closed = batch.reject_preexecution(
-            rejection=command.rejection,
+            rejection=rejection,
             snapshot=proof,
-            expected_version=command.rejection.source_batch_version,
+            expected_version=authority.source_batch_version,
         )
         await self._gateway.publish_preexecution_rejection(
             batch=closed,
-            rejection=command.rejection,
+            rejection=rejection,
         )
         return closed
+
+
+def _basis_matches_authority_scope(*, basis, scope) -> bool:
+    return (
+        basis.scope_kind.value == scope.kind.value
+        and basis.preplan_scope_digest == scope.preplan_scope_digest
+        and basis.manifest_digest == scope.manifest_digest
+        and basis.shard_plan_version == scope.shard_plan_version
+        and basis.shard_plan_digest == scope.shard_plan_digest
+        and basis.canonical_run_set_digest == scope.canonical_run_set_digest
+    )

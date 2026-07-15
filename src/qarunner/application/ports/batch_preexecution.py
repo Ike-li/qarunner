@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from qarunner.application.handoff import BatchMaterializedScopeHandoff
 from qarunner.application.ports.common import ReplayResult
-from qarunner.domain.batch import Batch, BatchRejection
+from qarunner.domain.batch import Batch, BatchRejection, BatchRejectionStage
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationScope,
@@ -100,11 +100,15 @@ class BatchClosureAuthority:
 class BatchRejectionAuthority:
     """Server-derived phase ownership and scope for a rejection command."""
 
+    batch_id: str
     project_id: str
     suite_revision_id: str
+    source_batch_version: int
+    stage: BatchRejectionStage
     authority_digest: Digest
     scope: BatchCancellationScope
     projection: AuthorityProjectionStamp
+    recorded_at: datetime
     write_epoch: int
 
 
@@ -138,7 +142,6 @@ class BatchPreexecutionGateway(Protocol):
         batch_id: str,
         phase_owner_id: str,
         rejection_epoch: int,
-        source_batch_version: int,
     ) -> BatchRejectionAuthority: ...
 
     async def publish_materialized_handoff(

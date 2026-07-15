@@ -17,7 +17,7 @@ from qarunner.application.ports.batch_preexecution import (
     InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import ReplayResult
-from qarunner.domain.batch import Batch, BatchRejection
+from qarunner.domain.batch import Batch, BatchRejection, BatchRejectionStage, BatchState
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationScope,
@@ -176,6 +176,7 @@ class InMemoryBatchPreexecutionGateway:
             project_id != intent.project_id
             or suite_revision_id != intent.suite_revision_id
             or source_batch_version != intent.source_batch_version + 1
+            or self._authority.scope != intent.scope
         ):
             raise AuthorityStateConflict(reason="source_binding_superseded")
         projection = self._projection_stamp()
@@ -229,7 +230,6 @@ class InMemoryBatchPreexecutionGateway:
         batch_id: str,
         phase_owner_id: str,
         rejection_epoch: int,
-        source_batch_version: int,
     ) -> BatchRejectionAuthority:
         self.rejection_authority_checks += 1
         if not self.authority_available:
@@ -241,20 +241,27 @@ class InMemoryBatchPreexecutionGateway:
             raise InternalAuthorityRetired(reason="phase_owner_authority_retired")
         if not self.authority_allowed:
             raise AuthorityPermissionDenied
+        if batch_id != self.batch.id:
+            raise AuthorityPermissionDenied
         if rejection_epoch != self.current_rejection_epoch:
             raise AuthorityStateConflict(reason="phase_epoch_superseded")
+        stored = self.batch.rejection_fact
         current_source_version = (
-            self.batch.version
-            if self.batch.rejection_fact is None
-            else self.batch.rejection_fact.source_batch_version
+            self.batch.version if stored is None else stored.source_batch_version
         )
-        if source_batch_version != current_source_version:
-            raise AuthorityStateConflict(reason="source_binding_superseded")
         projection = self._projection_stamp()
-        return BatchRejectionAuthority(
-            project_id="project-001",
-            suite_revision_id=self._authority.suite_revision_id,
-            authority_digest=canonical_digest(
+        stage = (
+            {
+                BatchState.VALIDATING: BatchRejectionStage.VALIDATION,
+                BatchState.COLLECTING: BatchRejectionStage.COLLECTION,
+                BatchState.PLANNING: BatchRejectionStage.PLANNING,
+                BatchState.AWAITING_ADMISSION: BatchRejectionStage.ADMISSION,
+            }[self.batch.state]
+            if stored is None
+            else stored.stage
+        )
+        authority_digest = (
+            canonical_digest(
                 schema_version="qep.test-rejection-authority.v1",
                 payload={
                     "batch_id": batch_id,
@@ -263,11 +270,25 @@ class InMemoryBatchPreexecutionGateway:
                     "revocation_watermark": projection.revocation_watermark,
                     "write_epoch": self.current_rejection_epoch,
                 },
-            ),
+            )
+            if stored is None
+            else stored.authority_digest
+        )
+        assert authority_digest is not None
+        authority = BatchRejectionAuthority(
+            batch_id=batch_id,
+            project_id="project-001",
+            suite_revision_id=self._authority.suite_revision_id,
+            source_batch_version=current_source_version,
+            stage=stage,
+            authority_digest=authority_digest,
             scope=self._authority.scope,
             projection=projection,
+            recorded_at=self.authority_checked_at if stored is None else stored.recorded_at,
             write_epoch=self.current_rejection_epoch,
         )
+        self.last_rejection_authority = authority
+        return authority
 
     def _projection_stamp(self) -> AuthorityProjectionStamp:
         return AuthorityProjectionStamp(
