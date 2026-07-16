@@ -8,7 +8,13 @@ from enum import StrEnum
 from qarunner.domain.batch import BatchState
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import DomainValidationError
-from qarunner.domain.run_finalization import RunItemKey
+from qarunner.domain.run_finalization import (
+    RunFinalizationBasis,
+    RunItemKey,
+    RunItemResolution,
+    RunItemResolutionSet,
+    TerminalInputKind,
+)
 
 _SCHEMA_VERSION = "qep.batch-success-policy.v1"
 _EXECUTION_TERMINALS = frozenset(
@@ -43,6 +49,67 @@ class BatchItemResolution:
     not_executed_fact_digest: Digest | None
     cancellation_scope_item_digest: Digest | None
     classification: BatchItemClassification
+
+    @classmethod
+    def from_run_resolution(
+        cls,
+        *,
+        basis: RunFinalizationBasis,
+        resolution_set: RunItemResolutionSet,
+        resolution: RunItemResolution,
+    ) -> BatchItemResolution:
+        entity = "batch_item_resolution"
+        if not isinstance(basis, RunFinalizationBasis):
+            _invalid(entity, "basis", "invalid")
+        if not isinstance(resolution_set, RunItemResolutionSet):
+            _invalid(entity, "resolution_set", "invalid")
+        if not isinstance(resolution, RunItemResolution):
+            _invalid(entity, "resolution", "invalid")
+        if (
+            basis.batch_id != resolution_set.batch_id
+            or basis.run_id != resolution_set.run_id
+            or basis.source_run_version != resolution_set.source_run_version
+            or basis.manifest_digest != resolution_set.manifest_digest
+            or basis.shard_plan_digest != resolution_set.shard_plan_digest
+            or basis.run_item_set_digest != resolution_set.run_item_set_digest
+            or basis.item_resolution_set_digest != resolution_set.resolution_set_digest
+            or basis.original_resolution_set_digest
+            != resolution_set.original_resolution_set_digest
+            or basis.effective_resolution_set_digest
+            != resolution_set.effective_resolution_set_digest
+            or basis.item_count != resolution_set.item_count
+            or basis.outcome is not resolution_set.audit_outcome
+            or basis.attempt_chain_digest
+            != (
+                None
+                if basis.terminal_input_kind is TerminalInputKind.PRESTART_CANCEL
+                else resolution_set.attempt_chain_digest
+            )
+            or basis.retry_chain_digest != resolution_set.retry_chain_digest
+            or basis.adjudication_chain_digest != resolution_set.adjudication_chain_digest
+        ):
+            _invalid(entity, "resolution_set", "basis_mismatch")
+        matching = tuple(
+            entry
+            for entry in resolution_set.entries
+            if entry.item_key == resolution.item_key
+            and entry.item_resolution_digest == resolution.item_resolution_digest
+        )
+        if matching != (resolution,):
+            _invalid(entity, "resolution", "not_in_resolution_set")
+        return cls(
+            item_key=resolution.item_key,
+            source_kind=BatchItemSourceKind.RUN_RESOLUTION,
+            source_run_id=resolution_set.run_id,
+            source_run_version=resolution_set.source_run_version,
+            source_run_basis_digest=basis.basis_digest,
+            source_run_item_resolution_set_digest=resolution_set.resolution_set_digest,
+            source_item_resolution_digest=resolution.item_resolution_digest,
+            not_executed_fact_schema=None,
+            not_executed_fact_digest=None,
+            cancellation_scope_item_digest=None,
+            classification=BatchItemClassification(resolution.aggregation_class.value),
+        )
 
     def __post_init__(self) -> None:
         entity = "batch_item_resolution"

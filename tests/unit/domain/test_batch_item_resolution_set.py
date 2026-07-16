@@ -304,3 +304,161 @@ def test_direct_set_construction_enforces_nonempty_typed_unique_canonical_entrie
 def test_not_executed_requires_cancellation_scope_item_v1_schema() -> None:
     with pytest.raises(ValueError, match="not_executed_fact_schema"):
         replace(_not_executed_entry(0), not_executed_fact_schema="qep.other-fact.v1")
+
+
+def test_run_source_is_derived_from_bound_immutable_run_facts() -> None:
+    from qarunner.domain import (
+        BatchItemClassification,
+        BatchItemResolution,
+        BatchItemSourceKind,
+    )
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_finalization_basis import resolution_set
+
+    resolved = resolution_set()
+    basis = bound_basis(resolved)
+    entry = BatchItemResolution.from_run_resolution(
+        basis=basis,
+        resolution_set=resolved,
+        resolution=resolved.entries[0],
+    )
+
+    assert entry == BatchItemResolution(
+        item_key=resolved.entries[0].item_key,
+        source_kind=BatchItemSourceKind.RUN_RESOLUTION,
+        source_run_id=resolved.run_id,
+        source_run_version=resolved.source_run_version,
+        source_run_basis_digest=basis.basis_digest,
+        source_run_item_resolution_set_digest=resolved.resolution_set_digest,
+        source_item_resolution_digest=resolved.entries[0].item_resolution_digest,
+        not_executed_fact_schema=None,
+        not_executed_fact_digest=None,
+        cancellation_scope_item_digest=None,
+        classification=BatchItemClassification.PASSED,
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["original_resolution_set_digest", "effective_resolution_set_digest"],
+)
+def test_run_source_rejects_basis_projection_digest_mismatch(field) -> None:
+    from qarunner.domain import BatchItemResolution
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_finalization_basis import resolution_set
+
+    resolved = resolution_set()
+    with pytest.raises(ValueError, match="basis_mismatch"):
+        BatchItemResolution.from_run_resolution(
+            basis=replace(bound_basis(resolved), **{field: _digest(field)}),
+            resolution_set=resolved,
+            resolution=resolved.entries[0],
+        )
+
+
+def test_run_source_rejects_basis_outcome_incompatible_with_item_set() -> None:
+    from qarunner.domain import AttemptExecutionFact, BatchItemResolution, RunOutcome
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_finalization_basis import resolution_set
+
+    resolved = resolution_set()
+    with pytest.raises(ValueError, match="basis_mismatch"):
+        BatchItemResolution.from_run_resolution(
+            basis=bound_basis(
+                resolved,
+                outcome=RunOutcome.TEST_FAILED,
+                final_attempt_state=AttemptExecutionFact.TEST_FAILED,
+            ),
+            resolution_set=resolved,
+            resolution=resolved.entries[0],
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("batch_id", "batch-other"),
+        ("run_id", "run-other"),
+        ("source_run_version", 9),
+        ("manifest_digest", _digest("other-manifest")),
+        ("shard_plan_digest", _digest("other-plan")),
+        ("run_item_set_digest", _digest("other-items")),
+        ("item_resolution_set_digest", _digest("other-resolution-set")),
+        ("item_count", 2),
+        ("attempt_chain_digest", _digest("other-attempt-chain")),
+        ("retry_chain_digest", _digest("other-retry-chain")),
+        ("adjudication_chain_digest", _digest("other-adjudication-chain")),
+    ],
+)
+def test_run_source_rejects_every_basis_to_set_binding_mismatch(field, value) -> None:
+    from qarunner.domain import BatchItemResolution
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_finalization_basis import resolution_set
+
+    resolved = resolution_set()
+    with pytest.raises(ValueError, match="basis_mismatch"):
+        BatchItemResolution.from_run_resolution(
+            basis=replace(bound_basis(resolved), **{field: value}),
+            resolution_set=resolved,
+            resolution=resolved.entries[0],
+        )
+
+
+@pytest.mark.parametrize("field", ["basis", "resolution_set", "resolution"])
+def test_run_source_rejects_untyped_immutable_inputs(field) -> None:
+    from qarunner.domain import BatchItemResolution
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_finalization_basis import resolution_set
+
+    resolved = resolution_set()
+    values = {
+        "basis": bound_basis(resolved),
+        "resolution_set": resolved,
+        "resolution": resolved.entries[0],
+    }
+    values[field] = object()
+    with pytest.raises(ValueError) as caught:
+        BatchItemResolution.from_run_resolution(**values)
+    assert caught.value.field == field
+
+
+def test_run_source_rejects_forged_or_cross_set_item_resolution() -> None:
+    from qarunner.domain import BatchItemResolution
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_finalization_basis import resolution_set
+    from tests.unit.domain.test_run_item_resolution_set import _entry
+
+    resolved = resolution_set()
+    for forged in (
+        replace(resolved.entries[0], item_key=replace(resolved.entries[0].item_key, item_index=9)),
+        _entry(0, "TEST_FAILED"),
+        _entry(1),
+    ):
+        with pytest.raises(ValueError, match="not_in_resolution_set"):
+            BatchItemResolution.from_run_resolution(
+                basis=bound_basis(resolved),
+                resolution_set=resolved,
+                resolution=forged,
+            )
+
+
+def test_run_source_preserves_unknown_lineage_over_effective_passed_outcome() -> None:
+    from qarunner.domain import BatchItemClassification, BatchItemResolution
+    from tests.unit.application.test_finalize_run import bound_basis
+    from tests.unit.domain.test_run_item_resolution_set import _entry, _set
+
+    unknown = _entry(0, unknown=True)
+    resolved = _set(
+        entries=(unknown,),
+        expected=(unknown.item_key,),
+        retry_chain_digest=_digest("retry-chain"),
+        adjudication_chain_digest=_digest("adjudication-chain"),
+    )
+    entry = BatchItemResolution.from_run_resolution(
+        basis=bound_basis(resolved),
+        resolution_set=resolved,
+        resolution=unknown,
+    )
+
+    assert unknown.effective.outcome.value == "passed"
+    assert entry.classification is BatchItemClassification.UNKNOWN_LINEAGE
