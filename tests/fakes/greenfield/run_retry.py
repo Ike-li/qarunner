@@ -3,6 +3,8 @@
 from qarunner.application.ports.batch_preexecution import AuthorityStateConflict
 from qarunner.application.ports.common import ReplayResult
 from qarunner.application.ports.run_retry import (
+    RetryQueuePublicationResult,
+    RetryQueueReceipt,
     RunRetryIdentityScope,
     RunRetryMutationSnapshot,
     RunRetryProjection,
@@ -44,6 +46,7 @@ class InMemoryRunRetryGateway:
         self.publication_attempts = self.publication_commits = 0
         self.intent_digests: dict[RunRetryIdentityScope, Digest] = {}
         self.projections: dict[RunRetryIdentityScope, RunRetryProjection] = {}
+        self.receipts: dict[RunRetryIdentityScope, RetryQueueReceipt] = {}
         self.decisions: dict[RunRetryIdentityScope, object] = {}
         self.reservations: dict[RunRetryIdentityScope, object] = {}
         self.audit_records: tuple[RunRetrySideEffect, ...] = ()
@@ -73,7 +76,10 @@ class InMemoryRunRetryGateway:
         self, *, identity_scope: RunRetryIdentityScope
     ) -> RunRetryProjection | None:
         self.stored_lookups += 1
-        return self.projections.get(identity_scope)
+        projection = self.projections.get(identity_scope)
+        if projection is None:
+            return None
+        return RetryQueuePublicationResult(projection, self.receipts.get(identity_scope))
 
     async def get_mutation_snapshot_for_update(self, *, run_id: str) -> RunRetryMutationSnapshot:
         self.snapshot_reads += 1
@@ -115,7 +121,9 @@ class InMemoryRunRetryGateway:
                     stored_digest=stored.decision_digest,
                     received_digest=decision_digest,
                 )
-            return ReplayResult(stored, True)
+            return ReplayResult(
+                RetryQueuePublicationResult(stored, self.receipts.get(scope)), True
+            )
         expected_authority = (
             self.unknown_authority
             if isinstance(publication, UnknownRetryPublication)
@@ -139,6 +147,7 @@ class InMemoryRunRetryGateway:
         decisions, reservations = dict(self.decisions), dict(self.reservations)
         audit, outbox = self.audit_records, self.semantic_outbox
         acceptances = dict(self.acceptance_consumptions)
+        receipts = dict(self.receipts)
         self._fault("intent")
         if publication.intent is not None:
             intents[scope] = publication.intent.digest
@@ -163,6 +172,27 @@ class InMemoryRunRetryGateway:
             and publication.reservation is not None
         ):
             reservations[scope] = publication.reservation
+        if publication.intent is not None:
+            receipts[scope] = RetryQueueReceipt(
+                publication.intent,
+                publication.reservation if isinstance(publication, RunRetryPublication) else None,
+                (
+                    acceptances.get(
+                        (
+                            publication.acceptance_request.scope,
+                            publication.acceptance_request.key,
+                        )
+                    )
+                    if isinstance(publication, UnknownRetryPublication)
+                    and publication.acceptance_request is not None
+                    else None
+                ),
+                decision_digest,
+                scope,
+                publication.projection.run.version,
+                publication.authority.writer_digest,
+                publication.authority.write_epoch,
+            )
         self._fault("audit")
         audit += (publication.side_effect,)
         self._fault("outbox")
@@ -172,8 +202,11 @@ class InMemoryRunRetryGateway:
         self.decisions, self.reservations = decisions, reservations
         self.audit_records, self.semantic_outbox = audit, outbox
         self.acceptance_consumptions = acceptances
+        self.receipts = receipts
         self.publication_commits += 1
-        return ReplayResult(publication.projection, False)
+        return ReplayResult(
+            RetryQueuePublicationResult(publication.projection, receipts.get(scope)), False
+        )
 
     def _fault(self, point: str) -> None:
         if self.fault_at == point:

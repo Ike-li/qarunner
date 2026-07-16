@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 from qarunner.application.ports.common import PortContractError, ReplayResult
 from qarunner.domain import (
     Digest,
+    DuplicateRiskAcceptanceConsumption,
     DuplicateRiskAcceptanceRequest,
     RetryIntent,
     Run,
@@ -23,6 +24,98 @@ from qarunner.domain.run_retry_policy import (
 )
 
 type RunRetryIdentityScope = tuple[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class RetryQueueReceipt:
+    intent: RetryIntent
+    reservation: RetryBudgetReservation | None
+    duplicate_acceptance_consumption: DuplicateRiskAcceptanceConsumption | None
+    queue_decision_digest: Digest
+    queue_identity_scope: RunRetryIdentityScope
+    queued_run_version: int
+    queue_writer_digest: Digest
+    queue_write_epoch: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.intent, RetryIntent):
+            _invalid("retry_queue_receipt", "intent", "invalid")
+        _digest("retry_queue_receipt", "queue_decision_digest", self.queue_decision_digest)
+        if (
+            not isinstance(self.queue_identity_scope, tuple)
+            or len(self.queue_identity_scope) != 2
+            or any(not isinstance(value, str) or not value for value in self.queue_identity_scope)
+        ):
+            _invalid("retry_queue_receipt", "queue_identity_scope", "invalid")
+        _nonnegative("retry_queue_receipt", "queued_run_version", self.queued_run_version)
+        _digest("retry_queue_receipt", "queue_writer_digest", self.queue_writer_digest)
+        _positive("retry_queue_receipt", "queue_write_epoch", self.queue_write_epoch)
+        authority = self.intent.authority
+        if isinstance(authority, UnknownAdjudicationRetryAuthority):
+            if self.reservation is not None:
+                _invalid("retry_queue_receipt", "reservation", "forbidden")
+            duplicate = (
+                authority.decision is UnknownAdjudicationDecision.ACCEPT_DUPLICATE_RISK_THEN_RETRY
+            )
+            if duplicate != isinstance(
+                self.duplicate_acceptance_consumption,
+                DuplicateRiskAcceptanceConsumption,
+            ):
+                _invalid(
+                    "retry_queue_receipt",
+                    "duplicate_acceptance_consumption",
+                    "decision_mismatch",
+                )
+        else:
+            if not isinstance(self.reservation, RetryBudgetReservation):
+                _invalid("retry_queue_receipt", "reservation", "required")
+            if self.duplicate_acceptance_consumption is not None:
+                _invalid(
+                    "retry_queue_receipt",
+                    "duplicate_acceptance_consumption",
+                    "forbidden",
+                )
+            if self.reservation.retry_intent_digest != self.intent.digest:
+                _invalid("retry_queue_receipt", "reservation", "binding_mismatch")
+            if self.reservation.decision_digest != self.queue_decision_digest:
+                _invalid("retry_queue_receipt", "queue_decision_digest", "binding_mismatch")
+
+    @property
+    def digest(self) -> Digest:
+        from qarunner.domain import canonical_digest
+
+        return canonical_digest(
+            schema_version="qep.retry-queue-receipt.v1",
+            payload={
+                "intent_digest": self.intent.digest.value,
+                "queue_identity_scope": list(self.queue_identity_scope),
+                "queued_run_version": self.queued_run_version,
+                "queue_writer_digest": self.queue_writer_digest.value,
+                "queue_write_epoch": self.queue_write_epoch,
+                "queue_decision_digest": self.queue_decision_digest.value,
+                "reservation_decision_digest": (
+                    self.reservation.decision_digest.value if self.reservation else None
+                ),
+                "consumption_digest": (
+                    self.duplicate_acceptance_consumption.digest.value
+                    if self.duplicate_acceptance_consumption
+                    else None
+                ),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RetryQueuePublicationResult:
+    projection: RunRetryProjection
+    receipt: RetryQueueReceipt | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.projection, RunRetryProjection):
+            _invalid("retry_queue_publication_result", "projection", "invalid")
+        retrying = self.projection.retry_intent_digest is not None
+        if retrying != isinstance(self.receipt, RetryQueueReceipt):
+            _invalid("retry_queue_publication_result", "receipt", "decision_mismatch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,7 +441,7 @@ class RunRetryGateway(Protocol):
     ) -> UnknownRetryWriteAuthority: ...
     async def lookup_stored(
         self, *, identity_scope: RunRetryIdentityScope
-    ) -> RunRetryProjection | None: ...
+    ) -> RetryQueuePublicationResult | None: ...
     async def get_mutation_snapshot_for_update(
         self, *, run_id: str
     ) -> RunRetryMutationSnapshot: ...
@@ -357,7 +450,7 @@ class RunRetryGateway(Protocol):
     ) -> UnknownRetryMutationSnapshot: ...
     async def publish_retry(
         self, *, publication: RetryPublication
-    ) -> ReplayResult[RunRetryProjection]: ...
+    ) -> ReplayResult[RetryQueuePublicationResult]: ...
 
 
 def _string(entity: str, field: str, value: object) -> None:

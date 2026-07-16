@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from qarunner.application.ports.batch_preexecution import AuthorityStateConflict
 from qarunner.application.ports.run_retry import (
     RetryBudgetReservation,
+    RetryQueueReceipt,
     RunRetryGateway,
     RunRetryProjection,
     RunRetryPublication,
@@ -52,6 +53,7 @@ class QueuePolicyRetryCommand:
 @dataclass(frozen=True, slots=True)
 class QueuePolicyRetryResult:
     projection: RunRetryProjection
+    receipt: RetryQueueReceipt | None
     replayed: bool
 
 
@@ -73,17 +75,27 @@ class QueuePolicyRetry:
             raise AuthorityStateConflict(reason="retry_authority_superseded")
         stored = await self._gateway.lookup_stored(identity_scope=command.identity_scope)
         if stored is not None:
+            stored_receipt = stored.receipt
             if (
-                stored.retry_intent_digest != decision.retry_intent_digest
-                or stored.decision_digest != decision.decision_digest
+                stored.projection.retry_intent_digest != decision.retry_intent_digest
+                or stored.projection.decision_digest != decision.decision_digest
+                or (intent is None) != (stored_receipt is None)
+                or (
+                    intent is not None
+                    and stored_receipt is not None
+                    and (
+                        stored_receipt.intent.digest != intent.digest
+                        or stored_receipt.queue_decision_digest != decision.decision_digest
+                    )
+                )
             ):
                 raise IdempotencyConflict(
                     scope=command.identity_scope[0],
                     key=command.identity_scope[1],
-                    stored_digest=stored.decision_digest,
+                    stored_digest=stored.projection.decision_digest,
                     received_digest=decision.decision_digest,
                 )
-            return QueuePolicyRetryResult(stored, True)
+            return QueuePolicyRetryResult(stored.projection, stored.receipt, True)
         snapshot = await self._gateway.get_mutation_snapshot_for_update(run_id=run_id)
         if snapshot.attempt_version != command.expected_attempt_version:
             raise VersionConflict(
@@ -120,7 +132,9 @@ class QueuePolicyRetry:
             RunRetrySideEffect(run_id, decision.decision_digest, decision.retry_intent_digest),
         )
         result = await self._gateway.publish_retry(publication=publication)
-        return QueuePolicyRetryResult(result.value, result.replayed)
+        return QueuePolicyRetryResult(
+            result.value.projection, result.value.receipt, result.replayed
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +171,7 @@ class QueueAdjudicatedRetryCommand:
 @dataclass(frozen=True, slots=True)
 class QueueAdjudicatedRetryResult:
     projection: RunRetryProjection
+    receipt: RetryQueueReceipt
     replayed: bool
 
 
@@ -179,16 +194,19 @@ class QueueAdjudicatedRetry:
         stored = await self._gateway.lookup_stored(identity_scope=command.identity_scope)
         if stored is not None:
             if (
-                stored.retry_intent_digest != intent.digest
-                or stored.decision_digest != authority.adjudication_digest
+                stored.projection.retry_intent_digest != intent.digest
+                or stored.projection.decision_digest != authority.adjudication_digest
+                or stored.receipt is None
+                or stored.receipt.intent.digest != intent.digest
+                or stored.receipt.queue_decision_digest != authority.adjudication_digest
             ):
                 raise IdempotencyConflict(
                     scope=command.identity_scope[0],
                     key=command.identity_scope[1],
-                    stored_digest=stored.decision_digest,
+                    stored_digest=stored.projection.decision_digest,
                     received_digest=authority.adjudication_digest,
                 )
-            return QueueAdjudicatedRetryResult(stored, True)
+            return QueueAdjudicatedRetryResult(stored.projection, stored.receipt, True)
         snapshot = await self._gateway.get_unknown_mutation_snapshot_for_update(
             run_id=intent.run_id
         )
@@ -220,7 +238,9 @@ class QueueAdjudicatedRetry:
             RunRetrySideEffect(intent.run_id, authority.adjudication_digest, intent.digest),
         )
         result = await self._gateway.publish_retry(publication=publication)
-        return QueueAdjudicatedRetryResult(result.value, result.replayed)
+        return QueueAdjudicatedRetryResult(
+            result.value.projection, result.value.receipt, result.replayed
+        )
 
 
 def _version(field: str, value: object) -> None:
