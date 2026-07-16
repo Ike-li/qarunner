@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import asyncpg
 
 from qarunner.errors import RunNotFound
-from qarunner.models import ReportRef, Run, RunStatus, TestSummary
+from qarunner.models import Credential, ReportRef, Run, RunStatus, TestSuite, TestSummary
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
@@ -49,6 +49,33 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             locked BOOLEAN NOT NULL DEFAULT FALSE,
             worker_node_id TEXT,
             profile_id TEXT
+        )
+        """,
+    ),
+    (
+        3,
+        """
+        CREATE TABLE suites (
+            name TEXT PRIMARY KEY,
+            source TEXT NOT NULL DEFAULT 'local',
+            repo_url TEXT,
+            ref TEXT,
+            credential_ref TEXT,
+            created_by TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
+        )
+        """,
+    ),
+    (
+        4,
+        """
+        CREATE TABLE credentials (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            enc_secret TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
         )
         """,
     ),
@@ -365,6 +392,111 @@ class PostgresStore:
                 locked,
                 run_id,
             )
+
+    async def save_suite(self, suite: TestSuite) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO suites (
+                    name, source, repo_url, ref, credential_ref, created_by, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (name) DO UPDATE SET
+                    source = excluded.source,
+                    repo_url = excluded.repo_url,
+                    ref = excluded.ref,
+                    credential_ref = excluded.credential_ref,
+                    created_by = excluded.created_by,
+                    created_at = excluded.created_at
+                """,
+                suite.name,
+                suite.source,
+                suite.repo_url,
+                suite.ref,
+                suite.credential_ref,
+                suite.created_by,
+                suite.created_at,
+            )
+
+    async def get_suite(self, name: str) -> TestSuite | None:
+        async with self._require_pool().acquire() as connection:
+            record = await connection.fetchrow(
+                """
+                SELECT name, source, repo_url, ref, credential_ref, created_by, created_at
+                FROM suites
+                WHERE name = $1
+                """,
+                name,
+            )
+        return None if record is None else TestSuite.model_validate(dict(record))
+
+    async def list_suites(self) -> list[TestSuite]:
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(
+                """
+                SELECT name, source, repo_url, ref, credential_ref, created_by, created_at
+                FROM suites
+                ORDER BY name
+                """
+            )
+        return [TestSuite.model_validate(dict(record)) for record in records]
+
+    async def delete_suite(self, name: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute("DELETE FROM suites WHERE name = $1", name)
+        return status == "DELETE 1"
+
+    async def save_credential(self, credential: Credential, encrypted_secret: str) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO credentials (id, name, type, enc_secret, created_by, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                credential.id,
+                credential.name,
+                credential.type,
+                encrypted_secret,
+                credential.created_by,
+                credential.created_at,
+            )
+
+    async def get_credential(self, credential_id: str) -> Credential | None:
+        async with self._require_pool().acquire() as connection:
+            record = await connection.fetchrow(
+                """
+                SELECT id, name, type, created_by, created_at
+                FROM credentials
+                WHERE id = $1
+                """,
+                credential_id,
+            )
+        return None if record is None else Credential.model_validate(dict(record))
+
+    async def get_credential_secret(self, credential_id: str) -> str | None:
+        async with self._require_pool().acquire() as connection:
+            secret = await connection.fetchval(
+                "SELECT enc_secret FROM credentials WHERE id = $1",
+                credential_id,
+            )
+        return None if secret is None else str(secret)
+
+    async def list_credentials(self) -> list[Credential]:
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(
+                """
+                SELECT id, name, type, created_by, created_at
+                FROM credentials
+                ORDER BY created_at
+                """
+            )
+        return [Credential.model_validate(dict(record)) for record in records]
+
+    async def delete_credential(self, credential_id: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                "DELETE FROM credentials WHERE id = $1", credential_id
+            )
+        return status == "DELETE 1"
 
     async def close(self) -> None:
         if self._pool is not None:

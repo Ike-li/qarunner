@@ -12,7 +12,7 @@ import pytest
 
 from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.errors import RunNotFound
-from qarunner.models import ReportRef, Run, RunStatus, TestSummary
+from qarunner.models import Credential, ReportRef, Run, RunStatus, TestSuite, TestSummary
 
 
 @pytest.fixture
@@ -210,6 +210,142 @@ async def test_lifecycle_save_preserves_a_concurrent_run_lock(store: PostgresSto
     persisted = await store.get(run.id)
     assert persisted.status is RunStatus.COMPLETED
     assert persisted.locked is True
+
+
+@pytest.mark.asyncio
+async def test_suite_round_trip_preserves_registration(store: PostgresStore) -> None:
+    suite = TestSuite(
+        name="postgres-suite",
+        source="git",
+        repo_url="https://example.com/qarunner-tests.git",
+        ref="main",
+        credential_ref="credential-1",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    await store.save_suite(suite)
+
+    assert await store.get_suite(suite.name) == suite
+
+
+@pytest.mark.asyncio
+async def test_suite_save_replaces_existing_registration(store: PostgresStore) -> None:
+    suite = TestSuite(
+        name="postgres-suite",
+        source="git",
+        repo_url="https://example.com/qarunner-tests.git",
+        ref="main",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    replacement = suite.model_copy(
+        update={"ref": "release", "credential_ref": "credential-2", "created_by": "bob"}
+    )
+
+    await store.save_suite(suite)
+    await store.save_suite(replacement)
+
+    assert await store.get_suite(suite.name) == replacement
+
+
+@pytest.mark.asyncio
+async def test_suite_list_is_name_ordered(store: PostgresStore) -> None:
+    base = TestSuite(
+        name="b-suite",
+        source="local",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_suite(base)
+    await store.save_suite(base.model_copy(update={"name": "a-suite"}))
+
+    assert [suite.name for suite in await store.list_suites()] == ["a-suite", "b-suite"]
+
+
+@pytest.mark.asyncio
+async def test_suite_delete_and_missing_lookup_report_absence(store: PostgresStore) -> None:
+    suite = TestSuite(
+        name="delete-suite",
+        source="local",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_suite(suite)
+
+    assert await store.delete_suite(suite.name) is True
+    assert await store.get_suite(suite.name) is None
+    assert await store.delete_suite(suite.name) is False
+    assert await store.get_suite("missing-suite") is None
+
+
+@pytest.mark.asyncio
+async def test_credential_metadata_and_ciphertext_have_separate_read_paths(
+    store: PostgresStore,
+) -> None:
+    credential = Credential(
+        id="credential-1",
+        name="git-token",
+        type="https_token",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    await store.save_credential(credential, "ENC(secret-payload)")
+
+    metadata = await store.get_credential(credential.id)
+    assert metadata == credential
+    assert metadata is not None
+    assert not hasattr(metadata, "secret")
+    assert "ENC(secret-payload)" not in metadata.model_dump_json()
+    assert await store.get_credential_secret(credential.id) == "ENC(secret-payload)"
+
+
+@pytest.mark.asyncio
+async def test_credential_list_is_created_ordered_and_contains_only_metadata(
+    store: PostgresStore,
+) -> None:
+    later = Credential(
+        id="credential-later",
+        name="later-token",
+        type="https_token",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, 1, tzinfo=UTC),
+    )
+    earlier = later.model_copy(
+        update={
+            "id": "credential-earlier",
+            "name": "earlier-token",
+            "created_at": datetime(2026, 7, 16, tzinfo=UTC),
+        }
+    )
+    await store.save_credential(later, "ENC(later-secret)")
+    await store.save_credential(earlier, "ENC(earlier-secret)")
+
+    credentials = await store.list_credentials()
+
+    assert credentials == [earlier, later]
+    serialized = "".join(credential.model_dump_json() for credential in credentials)
+    assert "ENC(" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_credential_delete_and_missing_reads_report_absence(store: PostgresStore) -> None:
+    credential = Credential(
+        id="credential-delete",
+        name="delete-token",
+        type="https_token",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_credential(credential, "ENC(delete-secret)")
+
+    assert await store.delete_credential(credential.id) is True
+    assert await store.get_credential(credential.id) is None
+    assert await store.get_credential_secret(credential.id) is None
+    assert await store.delete_credential(credential.id) is False
+    assert await store.get_credential("missing-credential") is None
+    assert await store.get_credential_secret("missing-credential") is None
 
 
 @pytest.mark.asyncio
