@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import cast
 
 from qarunner.domain.batch import BatchState
 from qarunner.domain.digest import Digest, canonical_digest
@@ -230,6 +231,32 @@ class BatchItemResolutionSet:
             _invalid(entity, "entries", "not_ordered")
         if keys != self.expected_item_keys:
             _invalid(entity, "entries", "manifest_coverage_mismatch")
+        run_sources: dict[str, tuple[int, Digest, Digest]] = {}
+        basis_owners: dict[Digest, str] = {}
+        resolution_set_owners: dict[Digest, str] = {}
+        item_digests: set[Digest] = set()
+        for entry in self.entries:
+            if entry.source_kind is not BatchItemSourceKind.RUN_RESOLUTION:
+                continue
+            run_id = cast(str, entry.source_run_id)
+            source = (
+                cast(int, entry.source_run_version),
+                cast(Digest, entry.source_run_basis_digest),
+                cast(Digest, entry.source_run_item_resolution_set_digest),
+            )
+            prior = run_sources.setdefault(run_id, source)
+            if prior != source:
+                _invalid(entity, "entries", "run_source_incoherent")
+            basis_owner = basis_owners.setdefault(source[1], run_id)
+            resolution_set_owner = resolution_set_owners.setdefault(source[2], run_id)
+            item_digest = cast(Digest, entry.source_item_resolution_digest)
+            if (
+                basis_owner != run_id
+                or resolution_set_owner != run_id
+                or item_digest in item_digests
+            ):
+                _invalid(entity, "entries", "run_source_overlap")
+            item_digests.add(item_digest)
 
     @classmethod
     def build(

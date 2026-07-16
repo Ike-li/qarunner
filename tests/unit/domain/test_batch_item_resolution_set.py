@@ -462,3 +462,58 @@ def test_run_source_preserves_unknown_lineage_over_effective_passed_outcome() ->
 
     assert unknown.effective.outcome.value == "passed"
     assert entry.classification is BatchItemClassification.UNKNOWN_LINEAGE
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_run_version", 4),
+        ("source_run_basis_digest", _digest("other-run-basis")),
+        ("source_run_item_resolution_set_digest", _digest("other-run-set")),
+    ],
+)
+def test_set_rejects_incoherent_provenance_for_items_from_the_same_run(field, value) -> None:
+    entries = (_run_entry(0), replace(_run_entry(1), **{field: value}))
+    with pytest.raises(ValueError, match="run_source_incoherent"):
+        _set(entries=entries)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "source_run_basis_digest",
+        "source_run_item_resolution_set_digest",
+        "source_item_resolution_digest",
+    ],
+)
+def test_set_rejects_reused_run_or_item_identity_across_distinct_sources(field) -> None:
+    first = _run_entry(0)
+    second = replace(
+        _run_entry(1),
+        source_run_id="run-2",
+        source_run_basis_digest=_digest("run-2-basis"),
+        source_run_item_resolution_set_digest=_digest("run-2-set"),
+    )
+    second = replace(second, **{field: getattr(first, field)})
+    with pytest.raises(ValueError, match="run_source_overlap"):
+        _set(entries=(first, second))
+
+
+def test_set_accepts_disjoint_runs_plus_not_executed_as_exact_manifest_union() -> None:
+    from qarunner.domain import RunItemKey
+
+    second_run = replace(
+        _run_entry(1, "test_failed"),
+        source_run_id="run-2",
+        source_run_version=8,
+        source_run_basis_digest=_digest("run-2-basis"),
+        source_run_item_resolution_set_digest=_digest("run-2-set"),
+    )
+    expected = tuple(RunItemKey("manifest-1", index) for index in range(3))
+    value = _set(
+        expected=expected,
+        entries=(_not_executed_entry(2), second_run, _run_entry(0)),
+    )
+
+    assert tuple(entry.item_key for entry in value.entries) == expected
+    assert (value.passed_count, value.test_failed_count, value.not_executed_count) == (1, 1, 1)
