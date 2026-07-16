@@ -54,6 +54,11 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     ),
 )
 _SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
+_ADMIN_MUTATION_LOCK_SQL = """
+SELECT pg_advisory_xact_lock(
+    hashtextextended('qarunner-admin-role-change:' || current_schema(), 0)
+)
+"""
 
 
 class PostgresStore:
@@ -134,6 +139,102 @@ class PostgresStore:
                 username,
             )
         return None if record is None else dict(record)
+
+    async def create_user(self, username: str, password_hash: str, role: str) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO users (username, password_hash, role, created_at, token_version)
+                VALUES ($1, $2, $3, $4, 0)
+                """,
+                username,
+                password_hash,
+                role,
+                datetime.now(UTC),
+            )
+
+    async def list_users(self) -> list[dict[str, object]]:
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(
+                "SELECT username, role, created_at FROM users ORDER BY username"
+            )
+        return [dict(record) for record in records]
+
+    async def update_password(self, username: str, password_hash: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                "UPDATE users SET password_hash = $1 WHERE username = $2",
+                password_hash,
+                username,
+            )
+        return status == "UPDATE 1"
+
+    async def increment_token_version(self, username: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                """
+                UPDATE users
+                SET token_version = token_version + 1
+                WHERE username = $1
+                """,
+                username,
+            )
+        return status == "UPDATE 1"
+
+    async def update_role(self, username: str, role: str) -> bool:
+        async with self._require_pool().acquire() as connection, connection.transaction():
+            await connection.execute(_ADMIN_MUTATION_LOCK_SQL)
+            exists = await connection.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)",
+                username,
+            )
+            await connection.execute(
+                """
+                UPDATE users
+                SET role = $1
+                WHERE username = $2
+                  AND (
+                    role <> 'admin'
+                    OR $1 = 'admin'
+                    OR (SELECT count(*) FROM users WHERE role = 'admin') > 1
+                  )
+                """,
+                role,
+                username,
+            )
+        return bool(exists)
+
+    async def delete_user(self, username: str) -> bool:
+        async with self._require_pool().acquire() as connection, connection.transaction():
+            await connection.execute(_ADMIN_MUTATION_LOCK_SQL)
+            status = await connection.execute(
+                """
+                DELETE FROM users
+                WHERE username = $1
+                  AND (
+                    role <> 'admin'
+                    OR (SELECT count(*) FROM users WHERE role = 'admin') > 1
+                  )
+                """,
+                username,
+            )
+        return status == "DELETE 1"
+
+    async def demote_if_not_last_admin(self, username: str, new_role: str) -> bool:
+        async with self._require_pool().acquire() as connection, connection.transaction():
+            await connection.execute(_ADMIN_MUTATION_LOCK_SQL)
+            status = await connection.execute(
+                """
+                UPDATE users
+                SET role = $1
+                WHERE username = $2
+                  AND role = 'admin'
+                  AND (SELECT count(*) FROM users WHERE role = 'admin') > 1
+                """,
+                new_role,
+                username,
+            )
+        return status == "UPDATE 1"
 
     async def save(self, run: Run) -> None:
         async with self._require_pool().acquire() as connection:

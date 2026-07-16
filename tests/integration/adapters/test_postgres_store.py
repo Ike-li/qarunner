@@ -110,6 +110,113 @@ async def test_lifecycle_save_preserves_a_concurrent_run_lock(store: PostgresSto
 
 
 @pytest.mark.asyncio
+async def test_user_create_and_list_round_trip(store: PostgresStore) -> None:
+    await store.create_user("alice", "alice-password-hash", "user")
+
+    alice = await store.get_user("alice")
+    assert alice is not None
+    assert alice["password_hash"] == "alice-password-hash"
+    assert alice["role"] == "user"
+    assert [user["username"] for user in await store.list_users()] == ["admin", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_password_update_reports_hit_and_miss(store: PostgresStore) -> None:
+    await store.create_user("alice", "old-hash", "user")
+
+    assert await store.update_password("alice", "new-hash") is True
+    assert await store.update_password("ghost", "new-hash") is False
+    assert (await store.get_user("alice"))["password_hash"] == "new-hash"
+
+
+@pytest.mark.asyncio
+async def test_token_version_increment_reports_hit_and_miss(store: PostgresStore) -> None:
+    await store.create_user("alice", "hash", "user")
+
+    assert await store.increment_token_version("alice") is True
+    assert await store.increment_token_version("ghost") is False
+    assert (await store.get_user("alice"))["token_version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_role_update_reports_hit_and_miss(store: PostgresStore) -> None:
+    await store.create_user("alice", "hash", "user")
+
+    assert await store.update_role("alice", "admin") is True
+    assert await store.update_role("ghost", "admin") is False
+    assert (await store.get_user("alice"))["role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_user_delete_reports_hit_and_miss(store: PostgresStore) -> None:
+    await store.create_user("alice", "hash", "user")
+
+    assert await store.delete_user("alice") is True
+    assert await store.delete_user("alice") is False
+    assert await store.get_user("alice") is None
+
+
+@pytest.mark.asyncio
+async def test_sole_admin_cannot_be_removed_or_demoted(store: PostgresStore) -> None:
+    assert await store.demote_if_not_last_admin("admin", "user") is False
+    assert await store.update_role("admin", "user") is True
+    assert await store.delete_user("admin") is False
+    assert (await store.get_user("admin"))["role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_admin_demotions_leave_one_admin(store: PostgresStore) -> None:
+    await store.create_user("second-admin", "hash", "admin")
+
+    results = await asyncio.gather(
+        store.demote_if_not_last_admin("admin", "user"),
+        store.demote_if_not_last_admin("second-admin", "user"),
+    )
+
+    assert sorted(results) == [False, True]
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_admin_deletes_leave_one_admin(store: PostgresStore) -> None:
+    await store.create_user("second-admin", "hash", "admin")
+
+    results = await asyncio.gather(
+        store.delete_user("admin"),
+        store.delete_user("second-admin"),
+    )
+
+    assert sorted(results) == [False, True]
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_and_demotion_leave_one_admin(store: PostgresStore) -> None:
+    await store.create_user("second-admin", "hash", "admin")
+
+    results = await asyncio.gather(
+        store.delete_user("admin"),
+        store.demote_if_not_last_admin("second-admin", "user"),
+    )
+
+    assert sorted(results) == [False, True]
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_role_update_and_delete_leave_one_admin(store: PostgresStore) -> None:
+    await store.create_user("second-admin", "hash", "admin")
+
+    results = await asyncio.gather(
+        store.update_role("admin", "user"),
+        store.delete_user("second-admin"),
+    )
+
+    assert results[0] is True  # update_role reports existence, not whether policy applied it
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+@pytest.mark.asyncio
 async def test_store_rejects_reads_before_initialization() -> None:
     store = PostgresStore(os.environ["QARUNNER_TEST_DATABASE_URL"])
 
