@@ -12,7 +12,15 @@ import pytest
 
 from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.errors import RunNotFound
-from qarunner.models import Credential, ReportRef, Run, RunStatus, TestSuite, TestSummary
+from qarunner.models import (
+    Credential,
+    ReportRef,
+    Run,
+    RunStatus,
+    TestProfile,
+    TestSuite,
+    TestSummary,
+)
 
 
 @pytest.fixture
@@ -346,6 +354,111 @@ async def test_credential_delete_and_missing_reads_report_absence(store: Postgre
     assert await store.delete_credential(credential.id) is False
     assert await store.get_credential("missing-credential") is None
     assert await store.get_credential_secret("missing-credential") is None
+
+
+@pytest.mark.asyncio
+async def test_profile_round_trip_preserves_execution_template(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="profile-1",
+        name="Regression",
+        description="Daily regression suite",
+        tests_path="suite/tests",
+        runner="playwright",
+        selected_files=["tests/login.spec.ts"],
+        selected_markers=["smoke"],
+        extra_args="--workers=2",
+        executor_mode="docker",
+        timeout=600,
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+        env={"TARGET": "staging"},
+        webhook_url="https://example.com/hooks/profile-1",
+    )
+
+    await store.save_profile(profile)
+
+    assert await store.get_profile(profile.id) == profile
+
+
+@pytest.mark.asyncio
+async def test_profile_save_replaces_existing_template(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="profile-update",
+        name="Original",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    replacement = profile.model_copy(
+        update={
+            "name": "Replacement",
+            "description": "updated",
+            "tests_path": "suite-b",
+            "runner": "playwright",
+            "selected_files": ["tests/new.spec.ts"],
+            "selected_markers": ["regression"],
+            "extra_args": "--trace=on",
+            "executor_mode": "subprocess",
+            "timeout": 120,
+            "created_by": "bob",
+            "created_at": datetime(2026, 7, 17, tzinfo=UTC),
+            "env": {"TARGET": "production"},
+            "webhook_url": "https://example.com/hooks/replacement",
+        }
+    )
+
+    await store.save_profile(profile)
+    await store.save_profile(replacement)
+
+    assert await store.get_profile(profile.id) == replacement
+
+
+@pytest.mark.asyncio
+async def test_profile_list_is_newest_first_and_optionally_path_filtered(
+    store: PostgresStore,
+) -> None:
+    older = TestProfile(
+        id="profile-older",
+        name="Older",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    newer = older.model_copy(
+        update={
+            "id": "profile-newer",
+            "name": "Newer",
+            "tests_path": "suite-b",
+            "created_at": datetime(2026, 7, 17, tzinfo=UTC),
+        }
+    )
+    await store.save_profile(older)
+    await store.save_profile(newer)
+
+    assert [profile.id for profile in await store.list_profiles()] == [
+        "profile-newer",
+        "profile-older",
+    ]
+    assert [profile.id for profile in await store.list_profiles(tests_path="suite-a")] == [
+        "profile-older"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_profile_delete_and_missing_lookup_report_absence(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="profile-delete",
+        name="Delete",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+
+    assert await store.delete_profile(profile.id) is True
+    assert await store.get_profile(profile.id) is None
+    assert await store.delete_profile(profile.id) is False
+    assert await store.get_profile("missing-profile") is None
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,15 @@ from datetime import UTC, datetime
 import asyncpg
 
 from qarunner.errors import RunNotFound
-from qarunner.models import Credential, ReportRef, Run, RunStatus, TestSuite, TestSummary
+from qarunner.models import (
+    Credential,
+    ReportRef,
+    Run,
+    RunStatus,
+    TestProfile,
+    TestSuite,
+    TestSummary,
+)
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
@@ -76,6 +84,27 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             enc_secret TEXT NOT NULL,
             created_by TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL
+        )
+        """,
+    ),
+    (
+        5,
+        """
+        CREATE TABLE test_profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            tests_path TEXT NOT NULL,
+            runner TEXT NOT NULL DEFAULT 'pytest',
+            selected_files_json JSONB NOT NULL DEFAULT '[]',
+            selected_markers_json JSONB NOT NULL DEFAULT '[]',
+            extra_args TEXT NOT NULL DEFAULT '',
+            executor_mode TEXT NOT NULL DEFAULT 'docker',
+            timeout INTEGER,
+            created_by TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            env_json JSONB NOT NULL DEFAULT '{}',
+            webhook_url TEXT
         )
         """,
     ),
@@ -498,6 +527,81 @@ class PostgresStore:
             )
         return status == "DELETE 1"
 
+    async def save_profile(self, profile: TestProfile) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO test_profiles (
+                    id, name, description, tests_path, runner, selected_files_json,
+                    selected_markers_json, extra_args, executor_mode, timeout, created_by,
+                    created_at, env_json, webhook_url
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12,
+                    $13::jsonb, $14
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    tests_path = excluded.tests_path,
+                    runner = excluded.runner,
+                    selected_files_json = excluded.selected_files_json,
+                    selected_markers_json = excluded.selected_markers_json,
+                    extra_args = excluded.extra_args,
+                    executor_mode = excluded.executor_mode,
+                    timeout = excluded.timeout,
+                    created_by = excluded.created_by,
+                    created_at = excluded.created_at,
+                    env_json = excluded.env_json,
+                    webhook_url = excluded.webhook_url
+                """,
+                profile.id,
+                profile.name,
+                profile.description,
+                profile.tests_path,
+                profile.runner,
+                json.dumps(profile.selected_files),
+                json.dumps(profile.selected_markers),
+                profile.extra_args,
+                profile.executor_mode,
+                profile.timeout,
+                profile.created_by,
+                profile.created_at,
+                json.dumps(profile.env),
+                profile.webhook_url,
+            )
+
+    async def get_profile(self, profile_id: str) -> TestProfile | None:
+        async with self._require_pool().acquire() as connection:
+            record = await connection.fetchrow(
+                "SELECT * FROM test_profiles WHERE id = $1", profile_id
+            )
+        return None if record is None else _record_to_profile(record)
+
+    async def list_profiles(self, tests_path: str | None = None) -> list[TestProfile]:
+        async with self._require_pool().acquire() as connection:
+            if tests_path:
+                records = await connection.fetch(
+                    """
+                    SELECT *
+                    FROM test_profiles
+                    WHERE tests_path = $1
+                    ORDER BY created_at DESC
+                    """,
+                    tests_path,
+                )
+            else:
+                records = await connection.fetch(
+                    "SELECT * FROM test_profiles ORDER BY created_at DESC"
+                )
+        return [_record_to_profile(record) for record in records]
+
+    async def delete_profile(self, profile_id: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                "DELETE FROM test_profiles WHERE id = $1", profile_id
+            )
+        return status == "DELETE 1"
+
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -533,4 +637,23 @@ def _record_to_run(record: asyncpg.Record) -> Run:
         locked=record["locked"],
         worker_node_id=record["worker_node_id"],
         profile_id=record["profile_id"],
+    )
+
+
+def _record_to_profile(record: asyncpg.Record) -> TestProfile:
+    return TestProfile(
+        id=record["id"],
+        name=record["name"],
+        description=record["description"],
+        tests_path=record["tests_path"],
+        runner=record["runner"],
+        selected_files=json.loads(record["selected_files_json"]),
+        selected_markers=json.loads(record["selected_markers_json"]),
+        extra_args=record["extra_args"],
+        executor_mode=record["executor_mode"],
+        timeout=record["timeout"],
+        created_by=record["created_by"],
+        created_at=record["created_at"],
+        env=json.loads(record["env_json"]),
+        webhook_url=record["webhook_url"],
     )
