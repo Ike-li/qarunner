@@ -57,7 +57,17 @@ from qarunner.application.ports.preexecution_proof import (
 from qarunner.application.ports.retry_commit_start import (
     RetryCommitMutationSnapshot,
     RetryCommitPublication,
+    RetryCommitSideEffect,
     RetryCommitStartGateway,
+    StoredRetryCommit,
+)
+from qarunner.application.ports.run_closed_handoff import (
+    RunClosedDeliveryMetadata,
+    RunClosedFactProvider,
+    RunClosedHandoffBlocked,
+    RunClosedHandoffConflict,
+    RunClosedHandoffConsumer,
+    RunClosedPoisonAlert,
 )
 from qarunner.application.ports.run_finalization import (
     FinalizeRunAuthority,
@@ -69,6 +79,7 @@ from qarunner.application.ports.run_finalization import (
 )
 from qarunner.application.ports.run_retry import (
     RetryBudgetReservation,
+    RetryQueuePublicationResult,
     RetryQueueReceipt,
     RunRetryGateway,
     RunRetryMutationSnapshot,
@@ -127,13 +138,22 @@ __all__ = [
     "ReplayResult",
     "RetryCommitMutationSnapshot",
     "RetryCommitPublication",
+    "RetryCommitSideEffect",
     "RetryCommitStartGateway",
+    "RetryQueuePublicationResult",
     "RetryQueueReceipt",
+    "StoredRetryCommit",
     "RunFinalizationGateway",
     "RunFinalizationMutationSnapshot",
     "RunFinalizationProjection",
     "RunFinalizationPublication",
     "RunFinalizationSideEffect",
+    "RunClosedFactProvider",
+    "RunClosedDeliveryMetadata",
+    "RunClosedHandoffBlocked",
+    "RunClosedHandoffConflict",
+    "RunClosedHandoffConsumer",
+    "RunClosedPoisonAlert",
     "RetryBudgetReservation",
     "RunRetryGateway",
     "RunRetryMutationSnapshot",

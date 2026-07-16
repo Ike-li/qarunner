@@ -73,6 +73,9 @@ def _basis_and_resolution():
     value = replace(
         basis(),
         source_run_version=4,
+        manifest_digest=resolution.manifest_digest,
+        shard_plan_digest=resolution.shard_plan_digest,
+        run_item_set_digest=resolution.run_item_set_digest,
         item_resolution_set_digest=resolution.resolution_set_digest,
         original_resolution_set_digest=resolution.original_resolution_set_digest,
         effective_resolution_set_digest=resolution.effective_resolution_set_digest,
@@ -83,6 +86,7 @@ def _basis_and_resolution():
 
 def _publication(**changes):
     from qarunner.application.ports import RunFinalizationPublication
+    from qarunner.application.run_closed_handoff import build_run_closed_handoff
 
     basis, resolution = _basis_and_resolution()
     projection = _projection(
@@ -95,6 +99,12 @@ def _publication(**changes):
         "resolution_set": resolution,
         "projection": projection,
         "side_effect": _side_effect(basis_digest=basis.basis_digest),
+        "handoff": build_run_closed_handoff(
+            basis=basis,
+            resolution_set=resolution,
+            authority_digest=_authority().authority_digest,
+            write_epoch=_authority().write_epoch,
+        ),
     }
     values.update(changes)
     return RunFinalizationPublication(**values)
@@ -190,7 +200,15 @@ def test_publication_binds_authority_projection_basis_and_side_effect() -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["authority", "expected_snapshot", "basis", "resolution_set", "projection", "side_effect"],
+    [
+        "authority",
+        "expected_snapshot",
+        "basis",
+        "resolution_set",
+        "projection",
+        "side_effect",
+        "handoff",
+    ],
 )
 def test_publication_rejects_untyped_members(field: str) -> None:
     valid = _publication()

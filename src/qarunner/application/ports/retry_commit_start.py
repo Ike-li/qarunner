@@ -1,7 +1,7 @@
 """Atomic port contracts for retry commit-start publication."""
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from qarunner.application.ports.common import PortContractError, ReplayResult
 from qarunner.application.ports.run_retry import (
@@ -41,11 +41,25 @@ class RetryCommitSideEffect:
     retry_intent_digest: Digest
     attempt_id: str
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.run_id, str) or not self.run_id.strip():
+            _invalid("retry_commit_side_effect", "run_id")
+        if not isinstance(self.retry_intent_digest, Digest):
+            _invalid("retry_commit_side_effect", "retry_intent_digest")
+        if not isinstance(self.attempt_id, str) or not self.attempt_id.strip():
+            _invalid("retry_commit_side_effect", "attempt_id")
+
 
 @dataclass(frozen=True, slots=True)
 class StoredRetryCommit:
     commit: CommitStartResult
     receipt_digest: Digest
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.commit, CommitStartResult):
+            _invalid("stored_retry_commit", "commit")
+        if not isinstance(self.receipt_digest, Digest):
+            _invalid("stored_retry_commit", "receipt_digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +104,7 @@ class RetryCommitPublication:
             _invalid("retry_commit_publication", "binding")
 
 
+@runtime_checkable
 class RetryCommitStartGateway(Protocol):
     async def require_current_authority(
         self, *, receipt: RetryQueueReceipt

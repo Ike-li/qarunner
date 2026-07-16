@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from qarunner.application.ports.common import PortContractError, ReplayResult
+from qarunner.application.run_closed_handoff import RunClosedHandoff, build_run_closed_handoff
 from qarunner.domain.digest import Digest
 from qarunner.domain.run_finalization import (
     RunDisposition,
@@ -118,6 +119,7 @@ class RunFinalizationPublication:
     resolution_set: RunItemResolutionSet
     projection: RunFinalizationProjection
     side_effect: RunFinalizationSideEffect
+    handoff: RunClosedHandoff
 
     def __post_init__(self) -> None:
         entity = "run_finalization_publication"
@@ -133,6 +135,8 @@ class RunFinalizationPublication:
             _invalid(entity, "projection", "invalid")
         if not isinstance(self.side_effect, RunFinalizationSideEffect):
             _invalid(entity, "side_effect", "invalid")
+        if not isinstance(self.handoff, RunClosedHandoff):
+            _invalid(entity, "handoff", "invalid")
         if (
             self.authority.run_id != self.projection.run_id
             or self.authority.source_run_version != self.projection.source_run_version
@@ -150,6 +154,13 @@ class RunFinalizationPublication:
             or self.side_effect.run_id != self.projection.run_id
             or self.side_effect.basis_digest != self.basis.basis_digest
             or self.side_effect.outcome is not self.projection.state.outcome
+            or self.handoff
+            != build_run_closed_handoff(
+                basis=self.basis,
+                resolution_set=self.resolution_set,
+                authority_digest=self.authority.authority_digest,
+                write_epoch=self.authority.write_epoch,
+            )
         ):
             _invalid(entity, "binding", "mismatch")
 

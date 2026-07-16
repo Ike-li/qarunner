@@ -182,11 +182,12 @@ async def test_authority_scope_mismatch_precedes_stored_lookup() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "point", ["basis", "resolution_set", "projection", "audit", "outbox", "commit"]
+    "point", ["basis", "resolution_set", "projection", "handoff", "audit", "outbox", "commit"]
 )
 async def test_publication_fault_rolls_back_every_participant(point: str) -> None:
     fake = gateway(fault_at=point)
     with pytest.raises(RuntimeError, match=point):
         await FinalizeRun(gateway=fake).execute(command())
     assert not fake.bases and not fake.resolution_sets and not fake.projections
+    assert not fake.run_closed_handoffs
     assert (fake.audit_count, fake.outbox_count, fake.publication_commits) == (0, 0, 0)

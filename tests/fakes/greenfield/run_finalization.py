@@ -53,6 +53,7 @@ class InMemoryRunFinalizationGateway:
         self.publication_commits = 0
         self.audit_records: tuple[RunFinalizationSideEffect, ...] = ()
         self.semantic_outbox: tuple[RunFinalizationSideEffect, ...] = ()
+        self.run_closed_handoffs: dict[str, object] = {}
         self.basis_digests: dict[RunFinalizationIdentityScope, Digest] = {}
         self.bases: dict[RunFinalizationIdentityScope, RunFinalizationBasis] = {}
         self.resolution_sets: dict[RunFinalizationIdentityScope, RunItemResolutionSet] = {}
@@ -129,6 +130,7 @@ class InMemoryRunFinalizationGateway:
         staged_projections = dict(self.projections)
         staged_audit = self.audit_records
         staged_outbox = self.semantic_outbox
+        staged_handoffs = dict(self.run_closed_handoffs)
         self._raise_at("basis")
         staged_basis[scope] = publication.basis.basis_digest
         staged_basis_values[scope] = publication.basis
@@ -136,6 +138,8 @@ class InMemoryRunFinalizationGateway:
         staged_resolution_sets[scope] = publication.resolution_set
         self._raise_at("projection")
         staged_projections[scope] = publication.projection
+        self._raise_at("handoff")
+        staged_handoffs[publication.handoff.event_id] = publication.handoff
         self._raise_at("audit")
         staged_audit += (publication.side_effect,)
         self._raise_at("outbox")
@@ -148,6 +152,7 @@ class InMemoryRunFinalizationGateway:
         self.projections = staged_projections
         self.audit_records = staged_audit
         self.semantic_outbox = staged_outbox
+        self.run_closed_handoffs = staged_handoffs
         self.projection = publication.projection
         self.publication_commits += 1
         return ReplayResult(value=publication.projection, replayed=False)

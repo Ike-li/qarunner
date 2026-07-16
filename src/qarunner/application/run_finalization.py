@@ -8,6 +8,7 @@ from qarunner.application.ports.run_finalization import (
     RunFinalizationPublication,
     RunFinalizationSideEffect,
 )
+from qarunner.application.run_closed_handoff import build_run_closed_handoff
 from qarunner.domain.errors import DomainValidationError, IdempotencyConflict, VersionConflict
 from qarunner.domain.run_finalization import (
     RunDisposition,
@@ -125,6 +126,12 @@ class FinalizeRun:
             command.resolution_set,
             projection,
             RunFinalizationSideEffect(basis.run_id, basis.basis_digest, basis.outcome),
+            build_run_closed_handoff(
+                basis=basis,
+                resolution_set=command.resolution_set,
+                authority_digest=authority.authority_digest,
+                write_epoch=authority.write_epoch,
+            ),
         )
         result = await self._gateway.publish_finalization(publication=publication)
         return FinalizeRunResult(result.value, result.replayed)

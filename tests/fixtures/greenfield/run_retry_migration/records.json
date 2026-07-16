@@ -1,0 +1,482 @@
+[
+  {
+    "id": "legacy-none",
+    "record": {
+      "record_id": "r0",
+      "compatibility_epoch": null,
+      "state_model_version": null,
+      "intent_digest": null,
+      "receipt_digest": null,
+      "authority_digest": null,
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": null,
+      "queue_identity_scope_digest": null,
+      "queued_run_version": null,
+      "queue_writer_digest": null,
+      "queue_write_epoch": null
+    },
+    "expected": {
+      "disposition": "legacy_unverified",
+      "reason": "no_retry_basis"
+    }
+  },
+  {
+    "id": "legacy-intent",
+    "record": {
+      "record_id": "r1",
+      "compatibility_epoch": null,
+      "state_model_version": null,
+      "intent_digest": "i",
+      "receipt_digest": null,
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": null,
+      "queue_identity_scope_digest": null,
+      "queued_run_version": null,
+      "queue_writer_digest": null,
+      "queue_write_epoch": null
+    },
+    "expected": {
+      "disposition": "legacy_unverified",
+      "reason": "basisless_legacy_retry"
+    }
+  },
+  {
+    "id": "policy-queued",
+    "record": {
+      "record_id": "r2",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": "b",
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "policy",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "trusted_v1",
+      "reason": "immutable_retry_chain_complete"
+    }
+  },
+  {
+    "id": "confirm-queued",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "trusted_v1",
+      "reason": "immutable_retry_chain_complete"
+    }
+  },
+  {
+    "id": "duplicate-committed",
+    "record": {
+      "record_id": "r4",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": "c",
+      "start_commit_digest": "s",
+      "attempt_provenance_digest": "p",
+      "retry_kind": "duplicate_risk",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "trusted_v1",
+      "reason": "immutable_retry_chain_complete"
+    }
+  },
+  {
+    "id": "wrong-epoch",
+    "record": {
+      "record_id": "r5",
+      "compatibility_epoch": "other",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "fail_closed",
+      "reason": "unsupported_compatibility_epoch"
+    }
+  },
+  {
+    "id": "wrong-version",
+    "record": {
+      "record_id": "r6",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 2,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "fail_closed",
+      "reason": "unsupported_state_model_version"
+    }
+  },
+  {
+    "id": "version-no-epoch",
+    "record": {
+      "record_id": "r7",
+      "compatibility_epoch": null,
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": null,
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": null,
+      "queue_identity_scope_digest": null,
+      "queued_run_version": null,
+      "queue_writer_digest": null,
+      "queue_write_epoch": null
+    },
+    "expected": {
+      "disposition": "fail_closed",
+      "reason": "missing_compatibility_epoch"
+    }
+  },
+  {
+    "id": "missing-base",
+    "record": {
+      "record_id": "r8",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": null,
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "incomplete_retry_chain"
+    }
+  },
+  {
+    "id": "union-conflict",
+    "record": {
+      "record_id": "r9",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": "b",
+      "acceptance_consumption_digest": "c",
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "policy",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "retry_participant_kind_mismatch"
+    }
+  },
+  {
+    "id": "provenance-no-start",
+    "record": {
+      "record_id": "r10",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": "p",
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "attempt_without_start_commit"
+    }
+  },
+  {
+    "id": "start-no-provenance",
+    "record": {
+      "record_id": "r11",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": "s",
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "missing_attempt_provenance"
+    }
+  },
+  {
+    "id": "policy-missing-reservation",
+    "record": {
+      "record_id": "r2",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "policy",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "retry_participant_kind_mismatch"
+    }
+  },
+  {
+    "id": "confirm-with-reservation",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": "b",
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "retry_participant_kind_mismatch"
+    }
+  },
+  {
+    "id": "duplicate-missing-consumption",
+    "record": {
+      "record_id": "r4",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": "s",
+      "attempt_provenance_digest": "p",
+      "retry_kind": "duplicate_risk",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "retry_participant_kind_mismatch"
+    }
+  },
+  {
+    "id": "missing-kind",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": null,
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "missing_retry_kind"
+    }
+  },
+  {
+    "id": "missing-queue-scope",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": null,
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "incomplete_retry_chain"
+    }
+  },
+  {
+    "id": "missing-queued-version",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": null,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "incomplete_retry_chain"
+    }
+  },
+  {
+    "id": "missing-queue-writer",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": null,
+      "queue_write_epoch": 1
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "incomplete_retry_chain"
+    }
+  },
+  {
+    "id": "missing-write-epoch",
+    "record": {
+      "record_id": "r3",
+      "compatibility_epoch": "M0-STATE-V1",
+      "state_model_version": 1,
+      "intent_digest": "i",
+      "receipt_digest": "r",
+      "authority_digest": "a",
+      "reservation_digest": null,
+      "acceptance_consumption_digest": null,
+      "start_commit_digest": null,
+      "attempt_provenance_digest": null,
+      "retry_kind": "confirm_stopped",
+      "queue_identity_scope_digest": "q",
+      "queued_run_version": 1,
+      "queue_writer_digest": "w",
+      "queue_write_epoch": null
+    },
+    "expected": {
+      "disposition": "conflict",
+      "reason": "incomplete_retry_chain"
+    }
+  }
+]

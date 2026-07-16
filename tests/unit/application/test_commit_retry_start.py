@@ -21,7 +21,9 @@ from qarunner.application.ports.retry_commit_start import (
     RetryCommitMutationSnapshot,
     RetryCommitPublication,
     RetryCommitSideEffect,
+    RetryCommitStartGateway,
     RetryQueueReceipt,
+    StoredRetryCommit,
 )
 from qarunner.application.ports.run_retry import (
     RetryBudgetReservation,
@@ -271,6 +273,68 @@ def test_snapshot_rejects_invalid_contract(field, value) -> None:
     with pytest.raises(PortContractError) as caught:
         replace(fake.mutation_snapshot, **{field: value})
     assert caught.value.field == field
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("run_id", ""),
+        ("run_id", " "),
+        ("run_id", object()),
+        ("retry_intent_digest", object()),
+        ("attempt_id", ""),
+        ("attempt_id", " "),
+        ("attempt_id", object()),
+    ],
+)
+def test_retry_commit_side_effect_rejects_invalid_contract(field, value) -> None:
+    fake, command = setup_commit_case()
+    side_effect = RetryCommitSideEffect(
+        command.receipt.intent.run_id,
+        command.receipt.intent.digest,
+        command.new_attempt_id,
+    )
+    with pytest.raises(PortContractError) as caught:
+        replace(side_effect, **{field: value})
+    assert caught.value.field == field
+
+
+@pytest.mark.parametrize(("field", "value"), [("commit", object()), ("receipt_digest", object())])
+def test_stored_retry_commit_rejects_invalid_contract(field, value) -> None:
+    fake, command = setup_commit_case()
+    commit = fake.mutation_snapshot.run.commit_start(
+        assignment_id=command.assignment_id,
+        worker=command.worker,
+        start_commit_key=command.start_commit_key,
+        spec_digest=command.spec_digest,
+        new_attempt_id=command.new_attempt_id,
+        observed_at=command.observed_at,
+        expected_version=command.expected_run_version,
+    )
+    stored = StoredRetryCommit(commit, command.receipt.digest)
+    with pytest.raises(PortContractError) as caught:
+        replace(stored, **{field: value})
+    assert caught.value.field == field
+
+
+def test_retry_commit_start_gateway_protocol_is_runtime_checkable() -> None:
+    class Stub:
+        async def require_current_authority(self, *, receipt):
+            return None
+
+        async def lookup_stored(self, *, identity_scope):
+            return None
+
+        async def require_receipt_for_update(self, *, retry_intent_digest):
+            return None
+
+        async def get_snapshot_for_update(self, *, run_id):
+            return None
+
+        async def publish(self, *, publication):
+            return None
+
+    assert isinstance(Stub(), RetryCommitStartGateway)
 
 
 @pytest.mark.parametrize(
