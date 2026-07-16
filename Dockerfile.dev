@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir uv
 
 # Pre-cache dependencies from the lockfile for reproducible builds and quick startup
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project \
+RUN uv sync --frozen --extra dev --no-install-project \
     && rm -rf /root/.cache
 
 # Place the synced virtualenv first on PATH
