@@ -6,7 +6,15 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from qarunner.application.ports.common import PortContractError, ReplayResult
-from qarunner.domain import Digest, RetryIntent, Run, RunRetryDecision
+from qarunner.domain import (
+    Digest,
+    DuplicateRiskAcceptanceRequest,
+    RetryIntent,
+    Run,
+    RunRetryDecision,
+    UnknownAdjudicationDecision,
+    UnknownAdjudicationRetryAuthority,
+)
 from qarunner.domain.run_retry_policy import (
     RetryBudget,
     RetryBudgetUsage,
@@ -40,6 +48,50 @@ class RunRetryWriteAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class UnknownRetryWriteAuthority:
+    run_id: str
+    attempt_id: str
+    attempt_version: int
+    attempt_fence: int
+    adjudication_id: str
+    adjudication_digest: Digest
+    decision: UnknownAdjudicationDecision
+    proof_digest: Digest | None
+    risk_acceptance_basis_digest: Digest | None
+    writer_digest: Digest
+    write_epoch: int
+
+    def __post_init__(self) -> None:
+        for field in ("run_id", "attempt_id", "adjudication_id"):
+            _string("unknown_retry_write_authority", field, getattr(self, field))
+        for field in ("adjudication_digest", "writer_digest"):
+            _digest("unknown_retry_write_authority", field, getattr(self, field))
+        if not isinstance(self.decision, UnknownAdjudicationDecision):
+            _invalid("unknown_retry_write_authority", "decision", "invalid")
+        _nonnegative("unknown_retry_write_authority", "attempt_version", self.attempt_version)
+        _positive("unknown_retry_write_authority", "attempt_fence", self.attempt_fence)
+        if self.decision is UnknownAdjudicationDecision.CONFIRM_STOPPED_THEN_RETRY:
+            _digest("unknown_retry_write_authority", "proof_digest", self.proof_digest)
+            if self.risk_acceptance_basis_digest is not None:
+                _invalid(
+                    "unknown_retry_write_authority",
+                    "risk_acceptance_basis_digest",
+                    "forbidden",
+                )
+        elif self.decision is UnknownAdjudicationDecision.ACCEPT_DUPLICATE_RISK_THEN_RETRY:
+            _digest(
+                "unknown_retry_write_authority",
+                "risk_acceptance_basis_digest",
+                self.risk_acceptance_basis_digest,
+            )
+            if self.proof_digest is not None:
+                _invalid("unknown_retry_write_authority", "proof_digest", "forbidden")
+        else:
+            _invalid("unknown_retry_write_authority", "decision", "nonretry")
+        _positive("unknown_retry_write_authority", "write_epoch", self.write_epoch)
+
+
+@dataclass(frozen=True, slots=True)
 class RunRetryMutationSnapshot:
     run: Run
     attempt_version: int
@@ -48,6 +100,39 @@ class RunRetryMutationSnapshot:
         if not isinstance(self.run, Run):
             _invalid("run_retry_mutation_snapshot", "run", "invalid")
         _nonnegative("run_retry_mutation_snapshot", "attempt_version", self.attempt_version)
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownRetryMutationBinding:
+    run_item_set_digest: Digest
+    sut_identity: str
+    sut_digest: Digest
+    target_grant_identity: str
+    target_grant_version: int
+    target_grant_digest: Digest
+
+    def __post_init__(self) -> None:
+        for field in ("run_item_set_digest", "sut_digest", "target_grant_digest"):
+            _digest("unknown_retry_mutation_binding", field, getattr(self, field))
+        for field in ("sut_identity", "target_grant_identity"):
+            _string("unknown_retry_mutation_binding", field, getattr(self, field))
+        _positive(
+            "unknown_retry_mutation_binding", "target_grant_version", self.target_grant_version
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownRetryMutationSnapshot:
+    run: Run
+    attempt_version: int
+    binding: UnknownRetryMutationBinding
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.run, Run):
+            _invalid("unknown_retry_mutation_snapshot", "run", "invalid")
+        _nonnegative("unknown_retry_mutation_snapshot", "attempt_version", self.attempt_version)
+        if not isinstance(self.binding, UnknownRetryMutationBinding):
+            _invalid("unknown_retry_mutation_snapshot", "binding", "invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,17 +262,101 @@ class RunRetryPublication:
             _invalid(entity, "binding", "mismatch")
 
 
+@dataclass(frozen=True, slots=True)
+class UnknownRetryPublication:
+    identity_scope: RunRetryIdentityScope
+    authority: UnknownRetryWriteAuthority
+    expected_snapshot: UnknownRetryMutationSnapshot
+    intent: RetryIntent
+    projection: RunRetryProjection
+    acceptance_request: DuplicateRiskAcceptanceRequest | None
+    side_effect: RunRetrySideEffect
+
+    def __post_init__(self) -> None:
+        entity = "unknown_retry_publication"
+        if (
+            not isinstance(self.identity_scope, tuple)
+            or len(self.identity_scope) != 2
+            or any(not isinstance(value, str) or not value for value in self.identity_scope)
+        ):
+            _invalid(entity, "identity_scope", "invalid")
+        for field, kind in (
+            ("authority", UnknownRetryWriteAuthority),
+            ("expected_snapshot", UnknownRetryMutationSnapshot),
+            ("intent", RetryIntent),
+            ("projection", RunRetryProjection),
+            ("side_effect", RunRetrySideEffect),
+        ):
+            if not isinstance(getattr(self, field), kind):
+                _invalid(entity, field, "invalid")
+        if not isinstance(self.intent.authority, UnknownAdjudicationRetryAuthority):
+            _invalid(entity, "intent", "not_unknown")
+        duplicate = (
+            self.authority.decision is UnknownAdjudicationDecision.ACCEPT_DUPLICATE_RISK_THEN_RETRY
+        )
+        if duplicate != isinstance(self.acceptance_request, DuplicateRiskAcceptanceRequest):
+            _invalid(entity, "acceptance_request", "decision_mismatch")
+        if duplicate:
+            request = self.acceptance_request
+            if request is None:  # pragma: no cover - narrowed by the typed matrix above
+                _invalid(entity, "acceptance_request", "missing")
+            acceptance, basis = request.acceptance, request.acceptance.basis
+            binding = self.expected_snapshot.binding
+            if (
+                self.authority.risk_acceptance_basis_digest != basis.digest
+                or acceptance.retry_intent_digest != self.intent.digest
+                or basis.run_id != self.intent.run_id
+                or basis.source_attempt_id != self.intent.source_attempt_id
+                or basis.source_attempt_no != self.intent.source_attempt_no
+                or basis.source_fence != self.intent.source_fence
+                or basis.run_item_set_digest != binding.run_item_set_digest
+                or basis.sut_identity != binding.sut_identity
+                or basis.sut_digest != binding.sut_digest
+                or basis.target_grant_identity != binding.target_grant_identity
+                or basis.target_grant_version != binding.target_grant_version
+                or basis.target_grant_digest != binding.target_grant_digest
+            ):
+                _invalid(entity, "acceptance_binding", "mismatch")
+        if (
+            self.authority.run_id != self.intent.run_id
+            or self.authority.adjudication_id != self.intent.adjudication_id
+            or self.authority.adjudication_digest != self.intent.adjudication_digest
+            or self.authority.decision is not self.intent.decision
+            or self.authority.attempt_id != self.intent.source_attempt_id
+            or self.authority.attempt_version != self.expected_snapshot.attempt_version
+            or self.authority.attempt_fence != self.intent.source_fence
+            or self.expected_snapshot.run.id != self.intent.run_id
+            or self.projection.run.id != self.intent.run_id
+            or self.projection.retry_intent_digest != self.intent.digest
+            or self.projection.decision_digest != self.authority.adjudication_digest
+            or self.side_effect
+            != RunRetrySideEffect(
+                self.intent.run_id, self.authority.adjudication_digest, self.intent.digest
+            )
+        ):
+            _invalid(entity, "binding", "mismatch")
+
+
+type RetryPublication = RunRetryPublication | UnknownRetryPublication
+
+
 @runtime_checkable
 class RunRetryGateway(Protocol):
     async def require_retry_authority(self, *, run_id: str) -> RunRetryWriteAuthority: ...
+    async def require_unknown_retry_authority(
+        self, *, run_id: str
+    ) -> UnknownRetryWriteAuthority: ...
     async def lookup_stored(
         self, *, identity_scope: RunRetryIdentityScope
     ) -> RunRetryProjection | None: ...
     async def get_mutation_snapshot_for_update(
         self, *, run_id: str
     ) -> RunRetryMutationSnapshot: ...
+    async def get_unknown_mutation_snapshot_for_update(
+        self, *, run_id: str
+    ) -> UnknownRetryMutationSnapshot: ...
     async def publish_retry(
-        self, *, publication: RunRetryPublication
+        self, *, publication: RetryPublication
     ) -> ReplayResult[RunRetryProjection]: ...
 
 

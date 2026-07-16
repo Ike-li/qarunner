@@ -9,8 +9,15 @@ from qarunner.application.ports.run_retry import (
     RunRetryProjection,
     RunRetryPublication,
     RunRetrySideEffect,
+    UnknownRetryPublication,
 )
-from qarunner.domain import RetryIntent, RunRetryDecision
+from qarunner.domain import (
+    DuplicateRiskAcceptanceRequest,
+    RetryIntent,
+    RunRetryDecision,
+    UnknownAdjudicationDecision,
+    UnknownAdjudicationRetryAuthority,
+)
 from qarunner.domain.errors import DomainValidationError, IdempotencyConflict, VersionConflict
 from qarunner.domain.run_retry_policy import RetryDecision
 
@@ -116,6 +123,106 @@ class QueuePolicyRetry:
         return QueuePolicyRetryResult(result.value, result.replayed)
 
 
+@dataclass(frozen=True, slots=True)
+class QueueAdjudicatedRetryCommand:
+    identity_scope: tuple[str, str]
+    candidate_intent: RetryIntent
+    expected_run_version: int
+    expected_attempt_version: int
+    acceptance_request: DuplicateRiskAcceptanceRequest | None = None
+
+    def __post_init__(self) -> None:
+        authority = getattr(self.candidate_intent, "authority", None)
+        if (
+            not isinstance(self.candidate_intent, RetryIntent)
+            or not isinstance(authority, UnknownAdjudicationRetryAuthority)
+            or not authority.decision.permits_retry
+        ):
+            _invalid_unknown("candidate_intent")
+        duplicate = (
+            authority.decision is UnknownAdjudicationDecision.ACCEPT_DUPLICATE_RISK_THEN_RETRY
+        )
+        if duplicate != isinstance(self.acceptance_request, DuplicateRiskAcceptanceRequest):
+            _invalid_unknown("acceptance_request")
+        _version("expected_run_version", self.expected_run_version)
+        _version("expected_attempt_version", self.expected_attempt_version)
+        if (
+            not isinstance(self.identity_scope, tuple)
+            or len(self.identity_scope) != 2
+            or any(not isinstance(value, str) or not value for value in self.identity_scope)
+        ):
+            _invalid_unknown("identity_scope")
+
+
+@dataclass(frozen=True, slots=True)
+class QueueAdjudicatedRetryResult:
+    projection: RunRetryProjection
+    replayed: bool
+
+
+class QueueAdjudicatedRetry:
+    def __init__(self, *, gateway: RunRetryGateway) -> None:
+        self._gateway = gateway
+
+    async def execute(self, command: QueueAdjudicatedRetryCommand) -> QueueAdjudicatedRetryResult:
+        intent = command.candidate_intent
+        authority = await self._gateway.require_unknown_retry_authority(run_id=intent.run_id)
+        if (
+            authority.attempt_id != intent.source_attempt_id
+            or authority.attempt_fence != intent.source_fence
+            or authority.attempt_version != command.expected_attempt_version
+            or authority.adjudication_id != intent.adjudication_id
+            or authority.adjudication_digest != intent.adjudication_digest
+            or authority.decision is not intent.decision
+        ):
+            raise AuthorityStateConflict(reason="unknown_retry_authority_superseded")
+        stored = await self._gateway.lookup_stored(identity_scope=command.identity_scope)
+        if stored is not None:
+            if (
+                stored.retry_intent_digest != intent.digest
+                or stored.decision_digest != authority.adjudication_digest
+            ):
+                raise IdempotencyConflict(
+                    scope=command.identity_scope[0],
+                    key=command.identity_scope[1],
+                    stored_digest=stored.decision_digest,
+                    received_digest=authority.adjudication_digest,
+                )
+            return QueueAdjudicatedRetryResult(stored, True)
+        snapshot = await self._gateway.get_unknown_mutation_snapshot_for_update(
+            run_id=intent.run_id
+        )
+        if snapshot.attempt_version != command.expected_attempt_version:
+            raise VersionConflict(
+                entity_type="attempt",
+                entity_id=intent.source_attempt_id,
+                current_version=snapshot.attempt_version,
+                expected_version=command.expected_attempt_version,
+            )
+        if snapshot.run.version != command.expected_run_version:
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=intent.run_id,
+                current_version=snapshot.run.version,
+                expected_version=command.expected_run_version,
+            )
+        queued = snapshot.run.queue_adjudicated_retry(
+            retry_intent=intent, expected_version=command.expected_run_version
+        )
+        projection = RunRetryProjection(queued, authority.adjudication_digest, intent.digest)
+        publication = UnknownRetryPublication(
+            command.identity_scope,
+            authority,
+            snapshot,
+            intent,
+            projection,
+            command.acceptance_request,
+            RunRetrySideEffect(intent.run_id, authority.adjudication_digest, intent.digest),
+        )
+        result = await self._gateway.publish_retry(publication=publication)
+        return QueueAdjudicatedRetryResult(result.value, result.replayed)
+
+
 def _version(field: str, value: object) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         _invalid(field)
@@ -124,4 +231,10 @@ def _version(field: str, value: object) -> None:
 def _invalid(field: str) -> None:
     raise DomainValidationError(
         entity_type="queue_policy_retry_command", field=field, reason="invalid"
+    )
+
+
+def _invalid_unknown(field: str) -> None:
+    raise DomainValidationError(
+        entity_type="queue_adjudicated_retry_command", field=field, reason="invalid"
     )

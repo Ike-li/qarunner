@@ -70,6 +70,10 @@ from qarunner.application.ports.run_retry import (
     RunRetryPublication,
     RunRetrySideEffect,
     RunRetryWriteAuthority,
+    UnknownRetryMutationBinding,
+    UnknownRetryMutationSnapshot,
+    UnknownRetryPublication,
+    UnknownRetryWriteAuthority,
 )
 from qarunner.application.ports.secrets import (
     SecretBroker,
@@ -127,6 +131,10 @@ __all__ = [
     "RunRetryPublication",
     "RunRetrySideEffect",
     "RunRetryWriteAuthority",
+    "UnknownRetryMutationBinding",
+    "UnknownRetryMutationSnapshot",
+    "UnknownRetryPublication",
+    "UnknownRetryWriteAuthority",
     "SecretBroker",
     "SecretDeliveryLease",
     "SecretRequest",
