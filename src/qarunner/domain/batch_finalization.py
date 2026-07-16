@@ -18,6 +18,7 @@ from qarunner.domain.run_finalization import (
     RunItemKey,
     RunItemResolution,
     RunItemResolutionSet,
+    RunOutcome,
     TerminalInputKind,
 )
 
@@ -39,6 +40,62 @@ class BatchItemClassification(StrEnum):
     CANCELLED = "cancelled"
     UNKNOWN_LINEAGE = "unknown_lineage"
     NOT_EXECUTED = "not_executed"
+
+
+@dataclass(frozen=True, slots=True)
+class BatchTerminalRunRef:
+    run_id: str
+    source_run_version: int
+    run_basis_digest: Digest
+    run_outcome: RunOutcome
+    run_item_set_digest: Digest
+    original_resolution_set_digest: Digest
+    effective_resolution_set_digest: Digest
+    item_resolution_set_digest: Digest
+
+    def __post_init__(self) -> None:
+        entity = "batch_terminal_run_ref"
+        if not isinstance(self.run_id, str) or not self.run_id.strip():
+            _invalid(entity, "run_id", "invalid")
+        _nonnegative(entity, "source_run_version", self.source_run_version)
+        if not isinstance(self.run_outcome, RunOutcome):
+            _invalid(entity, "run_outcome", "invalid")
+        for field in (
+            "run_basis_digest",
+            "run_item_set_digest",
+            "original_resolution_set_digest",
+            "effective_resolution_set_digest",
+            "item_resolution_set_digest",
+        ):
+            if not isinstance(getattr(self, field), Digest):
+                _invalid(entity, field, "invalid")
+
+    @classmethod
+    def from_basis(cls, *, basis: RunFinalizationBasis) -> BatchTerminalRunRef:
+        if not isinstance(basis, RunFinalizationBasis):
+            _invalid("batch_terminal_run_ref", "basis", "invalid")
+        return cls(
+            run_id=basis.run_id,
+            source_run_version=basis.source_run_version,
+            run_basis_digest=basis.basis_digest,
+            run_outcome=basis.outcome,
+            run_item_set_digest=basis.run_item_set_digest,
+            original_resolution_set_digest=basis.original_resolution_set_digest,
+            effective_resolution_set_digest=basis.effective_resolution_set_digest,
+            item_resolution_set_digest=basis.item_resolution_set_digest,
+        )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "source_run_version": self.source_run_version,
+            "run_basis_digest": self.run_basis_digest.value,
+            "run_outcome": self.run_outcome.value,
+            "run_item_set_digest": self.run_item_set_digest.value,
+            "original_resolution_set_digest": self.original_resolution_set_digest.value,
+            "effective_resolution_set_digest": self.effective_resolution_set_digest.value,
+            "item_resolution_set_digest": self.item_resolution_set_digest.value,
+        }
 
 
 @dataclass(frozen=True, slots=True)

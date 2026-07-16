@@ -28,6 +28,7 @@ from qarunner.domain.batch_finalization import (
     BatchOutcomeEvaluation,
     BatchResolutionCounts,
     BatchSuccessPolicy,
+    BatchTerminalRunRef,
     evaluate_batch_outcome,
 )
 from qarunner.domain.cancellation import (
@@ -238,6 +239,7 @@ __all__ = [
     "BatchResolutionCounts",
     "BatchState",
     "BatchSuccessPolicy",
+    "BatchTerminalRunRef",
     "BoundShardPlan",
     "CanonicalizationError",
     "CaseManifest",
