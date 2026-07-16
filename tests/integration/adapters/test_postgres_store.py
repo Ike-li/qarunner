@@ -84,6 +84,109 @@ async def test_run_round_trip_preserves_execution_inputs(
 
 
 @pytest.mark.asyncio
+async def test_run_list_is_newest_first_and_optionally_bounded(store: PostgresStore) -> None:
+    for index in range(3):
+        await store.save(
+            Run(
+                id=f"run-{index}",
+                status=RunStatus.QUEUED,
+                runner="pytest",
+                created_by="alice",
+                tests_path="suite/tests",
+                created_at=datetime(2026, 7, 16 + index, tzinfo=UTC),
+            )
+        )
+
+    assert [run.id for run in await store.list()] == ["run-2", "run-1", "run-0"]
+    assert [run.id for run in await store.list(limit=2)] == ["run-2", "run-1"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_only_transitions_inflight_runs(store: PostgresStore) -> None:
+    queued = Run(
+        id="queued-run",
+        status=RunStatus.QUEUED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    completed = queued.model_copy(update={"id": "completed-run", "status": RunStatus.COMPLETED})
+    await store.save(queued)
+    await store.save(completed)
+
+    assert await store.cancel_if_inflight(queued.id, "2026-07-16T01:00:00+00:00") is True
+    assert await store.cancel_if_inflight(completed.id, "2026-07-16T01:00:00+00:00") is False
+    assert (await store.get(queued.id)).status is RunStatus.CANCELLED
+    assert (await store.get(completed.id)).status is RunStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_inflight_count_is_owner_scoped(store: PostgresStore) -> None:
+    base = Run(
+        id="alice-queued",
+        status=RunStatus.QUEUED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save(base)
+    await store.save(base.model_copy(update={"id": "alice-running", "status": RunStatus.RUNNING}))
+    await store.save(base.model_copy(update={"id": "alice-done", "status": RunStatus.COMPLETED}))
+    await store.save(base.model_copy(update={"id": "bob-queued", "created_by": "bob"}))
+
+    assert await store.count_inflight_runs("alice") == 2
+    assert await store.count_inflight_runs("bob") == 1
+
+
+@pytest.mark.asyncio
+async def test_run_delete_reports_hit_and_miss(store: PostgresStore) -> None:
+    run = Run(
+        id="run-delete",
+        status=RunStatus.QUEUED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save(run)
+
+    assert await store.delete_run(run.id) is True
+    assert await store.delete_run(run.id) is False
+    with pytest.raises(RunNotFound):
+        await store.get(run.id)
+
+
+@pytest.mark.asyncio
+async def test_dequeue_is_fifo_and_each_queued_run_has_one_winner(store: PostgresStore) -> None:
+    for index in range(3):
+        await store.save(
+            Run(
+                id=f"queued-{index}",
+                status=RunStatus.QUEUED,
+                runner="pytest",
+                created_by="alice",
+                tests_path="suite/tests",
+                created_at=datetime(2026, 7, 16, 0, 0, index, tzinfo=UTC),
+            )
+        )
+
+    assert await store.dequeue_next_queued() == "queued-0"
+    concurrent = await asyncio.gather(
+        store.dequeue_next_queued(),
+        store.dequeue_next_queued(),
+        store.dequeue_next_queued(),
+    )
+
+    assert sorted(value for value in concurrent if value is not None) == ["queued-1", "queued-2"]
+    assert concurrent.count(None) == 1
+    claimed = [await store.get(f"queued-{index}") for index in range(3)]
+    assert all(run.status is RunStatus.RUNNING for run in claimed)
+    assert all(run.started_at is not None for run in claimed)
+
+
+@pytest.mark.asyncio
 async def test_missing_run_raises_domain_error(store: PostgresStore) -> None:
     with pytest.raises(RunNotFound):
         await store.get("missing-run")

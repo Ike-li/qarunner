@@ -298,6 +298,66 @@ class PostgresStore:
             raise RunNotFound(run_id)
         return _record_to_run(record)
 
+    async def list(self, limit: int | None = None) -> list[Run]:
+        query = "SELECT * FROM runs ORDER BY created_at DESC"
+        async with self._require_pool().acquire() as connection:
+            if limit is None:
+                records = await connection.fetch(query)
+            else:
+                records = await connection.fetch(f"{query} LIMIT $1", limit)
+        return [_record_to_run(record) for record in records]
+
+    async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                """
+                UPDATE runs
+                SET status = 'cancelled', finished_at = $2
+                WHERE id = $1 AND status IN ('queued', 'running')
+                """,
+                run_id,
+                datetime.fromisoformat(finished_at),
+            )
+        return status == "UPDATE 1"
+
+    async def count_inflight_runs(self, created_by: str) -> int:
+        async with self._require_pool().acquire() as connection:
+            count = await connection.fetchval(
+                """
+                SELECT count(*)
+                FROM runs
+                WHERE created_by = $1 AND status IN ('queued', 'running')
+                """,
+                created_by,
+            )
+        return int(count)
+
+    async def delete_run(self, run_id: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute("DELETE FROM runs WHERE id = $1", run_id)
+        return status == "DELETE 1"
+
+    async def dequeue_next_queued(self) -> str | None:
+        async with self._require_pool().acquire() as connection, connection.transaction():
+            run_id = await connection.fetchval(
+                """
+                WITH candidate AS (
+                    SELECT id
+                    FROM runs
+                    WHERE status = 'queued'
+                    ORDER BY created_at, id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                UPDATE runs
+                SET status = 'running', started_at = now()
+                FROM candidate
+                WHERE runs.id = candidate.id
+                RETURNING runs.id
+                """
+            )
+        return None if run_id is None else str(run_id)
+
     async def lock_run(self, run_id: str, locked: bool) -> None:
         async with self._require_pool().acquire() as connection:
             await connection.execute(
