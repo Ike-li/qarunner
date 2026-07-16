@@ -20,6 +20,12 @@ from qarunner.domain.batch import (
     BatchRejectionStage,
     BatchState,
 )
+from qarunner.domain.batch_finalization import (
+    BatchOutcomeEvaluation,
+    BatchResolutionCounts,
+    BatchSuccessPolicy,
+    evaluate_batch_outcome,
+)
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationScope,
@@ -207,6 +213,7 @@ __all__ = [
     "BatchCancellationIntent",
     "BatchCancellationScope",
     "BatchCancellationScopeKind",
+    "BatchOutcomeEvaluation",
     "BatchPreexecutionClosureBasis",
     "BatchPreexecutionScopeKind",
     "BatchPreexecutionScopeItem",
@@ -215,7 +222,9 @@ __all__ = [
     "BatchRejection",
     "BatchRejectionReasonClass",
     "BatchRejectionStage",
+    "BatchResolutionCounts",
     "BatchState",
+    "BatchSuccessPolicy",
     "BoundShardPlan",
     "CanonicalizationError",
     "CaseManifest",
@@ -287,6 +296,7 @@ __all__ = [
     "RunRetryDecision",
     "SuiteRetryPolicy",
     "evaluate_run_retry",
+    "evaluate_batch_outcome",
     "RetryNotAllowed",
     "RetryProvenance",
     "UnknownAdjudicationRetryAuthority",
