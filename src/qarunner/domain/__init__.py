@@ -32,11 +32,14 @@ from qarunner.domain.batch_finalization import (
 )
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
+    BatchCancellationResolutionKind,
     BatchCancellationScope,
+    BatchCancellationScopeItem,
     BatchCancellationScopeKind,
     CancellationIntent,
     CancellationSource,
     TrustedCancellationStop,
+    canonicalize_batch_cancellation_scope_items,
 )
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.duplicate_risk_acceptance import (
@@ -219,7 +222,9 @@ __all__ = [
     "BatchItemSourceKind",
     "BatchCancellationConflict",
     "BatchCancellationIntent",
+    "BatchCancellationResolutionKind",
     "BatchCancellationScope",
+    "BatchCancellationScopeItem",
     "BatchCancellationScopeKind",
     "BatchOutcomeEvaluation",
     "BatchPreexecutionClosureBasis",
@@ -336,6 +341,7 @@ __all__ = [
     "WorkEstimate",
     "WorkerAuthority",
     "canonical_digest",
+    "canonicalize_batch_cancellation_scope_items",
     "consume_duplicate_risk_acceptance",
     "build_evidence_manifest",
     "select_latest_authorized_complete_attempt",

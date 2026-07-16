@@ -7,6 +7,10 @@ from enum import StrEnum
 from typing import cast
 
 from qarunner.domain.batch import BatchState
+from qarunner.domain.cancellation import (
+    BatchCancellationResolutionKind,
+    BatchCancellationScopeItem,
+)
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import DomainValidationError
 from qarunner.domain.run_finalization import (
@@ -50,6 +54,27 @@ class BatchItemResolution:
     not_executed_fact_digest: Digest | None
     cancellation_scope_item_digest: Digest | None
     classification: BatchItemClassification
+
+    @classmethod
+    def from_not_executed(cls, *, fact: BatchCancellationScopeItem) -> BatchItemResolution:
+        entity = "batch_item_resolution"
+        if not isinstance(fact, BatchCancellationScopeItem):
+            _invalid(entity, "fact", "invalid")
+        if fact.resolution_kind is not BatchCancellationResolutionKind.NOT_EXECUTED:
+            _invalid(entity, "fact", "not_not_executed")
+        return cls(
+            item_key=fact.manifest_item_key,
+            source_kind=BatchItemSourceKind.NOT_EXECUTED,
+            source_run_id=None,
+            source_run_version=None,
+            source_run_basis_digest=None,
+            source_run_item_resolution_set_digest=None,
+            source_item_resolution_digest=None,
+            not_executed_fact_schema="qep.batch-cancellation-scope-item.v1",
+            not_executed_fact_digest=fact.scope_item_digest,
+            cancellation_scope_item_digest=fact.scope_item_digest,
+            classification=BatchItemClassification.NOT_EXECUTED,
+        )
 
     @classmethod
     def from_run_resolution(
@@ -154,6 +179,8 @@ class BatchItemResolution:
                 _invalid(entity, "not_executed_source", "invalid")
             if self.not_executed_fact_schema != "qep.batch-cancellation-scope-item.v1":
                 _invalid(entity, "not_executed_fact_schema", "unknown")
+            if self.not_executed_fact_digest != self.cancellation_scope_item_digest:
+                _invalid(entity, "not_executed_source", "digest_mismatch")
             if self.classification is not BatchItemClassification.NOT_EXECUTED:
                 _invalid(entity, "classification", "source_mismatch")
 

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import DomainValidationError
+from qarunner.domain.run_finalization import RunItemKey
 from qarunner.domain.worker import WorkerRef
 
 
@@ -24,6 +25,13 @@ class BatchCancellationScopeKind(enum.StrEnum):
 
     PRE_PLAN = "pre_plan"
     FROZEN_PLAN = "frozen_plan"
+
+
+class BatchCancellationResolutionKind(enum.StrEnum):
+    """How one frozen Manifest item converges after Batch cancellation."""
+
+    NOT_EXECUTED = "not_executed"
+    RUN_FANOUT = "run_fanout"
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +78,160 @@ class BatchCancellationScope:
             "shard_plan_version",
             self.shard_plan_version,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCancellationScopeItem:
+    """Immutable `qep.batch-cancellation-scope-item.v1` delivery fact."""
+
+    batch_id: str
+    batch_cancellation_intent_digest: Digest
+    manifest_id: str
+    manifest_digest: Digest
+    manifest_item_key: RunItemKey
+    shard_plan_version: int
+    shard_plan_digest: Digest
+    resolution_kind: BatchCancellationResolutionKind
+    run_id: str | None
+    source_run_version: int | None
+    recorded_at: datetime
+
+    def __post_init__(self) -> None:
+        entity = "batch_cancellation_scope_item"
+        _require_nonempty_string(entity, "batch_id", self.batch_id)
+        _require_nonempty_string(entity, "manifest_id", self.manifest_id)
+        for field in (
+            "batch_cancellation_intent_digest",
+            "manifest_digest",
+            "shard_plan_digest",
+        ):
+            if not isinstance(getattr(self, field), Digest):
+                _invalid(entity, field, "not_digest")
+        if not isinstance(self.manifest_item_key, RunItemKey):
+            _invalid(entity, "manifest_item_key", "invalid_type")
+        if self.manifest_item_key.manifest_id != self.manifest_id:
+            _invalid(entity, "manifest_item_key", "manifest_mismatch")
+        _require_nonnegative_version(entity, "shard_plan_version", self.shard_plan_version)
+        if not isinstance(self.resolution_kind, BatchCancellationResolutionKind):
+            _invalid(entity, "resolution_kind", "unknown")
+        if self.resolution_kind is BatchCancellationResolutionKind.NOT_EXECUTED:
+            if self.run_id is not None or self.source_run_version is not None:
+                _invalid(entity, "run_binding", "forbidden_for_kind")
+        else:
+            _require_nonempty_string(entity, "run_id", self.run_id)
+            _require_nonnegative_version(entity, "source_run_version", self.source_run_version)
+        _require_utc(entity, "recorded_at", self.recorded_at)
+
+    @property
+    def delivery_key(self) -> tuple[Digest, RunItemKey]:
+        return self.batch_cancellation_intent_digest, self.manifest_item_key
+
+    def canonical_payload(self) -> dict[str, object]:
+        item_key = self.manifest_item_key.canonical_payload()
+        return {
+            "batch_id": self.batch_id,
+            "batch_cancellation_intent_digest": self.batch_cancellation_intent_digest.value,
+            "manifest_id": self.manifest_id,
+            "manifest_digest": self.manifest_digest.value,
+            "manifest_item_key": item_key,
+            "shard_plan_version": self.shard_plan_version,
+            "shard_plan_digest": self.shard_plan_digest.value,
+            "resolution_kind": self.resolution_kind.value,
+            "run_id": self.run_id,
+            "source_run_version": self.source_run_version,
+            "delivery_key": {
+                "batch_cancellation_intent_digest": self.batch_cancellation_intent_digest.value,
+                "manifest_item_key": item_key,
+            },
+            "recorded_at": self.recorded_at.isoformat().replace("+00:00", "Z"),
+        }
+
+    @property
+    def scope_item_digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.batch-cancellation-scope-item.v1",
+            payload=self.canonical_payload(),
+        )
+
+
+def canonicalize_batch_cancellation_scope_items(
+    *,
+    batch_id: str,
+    batch_cancellation_intent_digest: Digest,
+    manifest_id: str,
+    manifest_digest: Digest,
+    shard_plan_version: int,
+    shard_plan_digest: Digest,
+    expected_item_keys: tuple[RunItemKey, ...],
+    items: tuple[BatchCancellationScopeItem, ...],
+) -> tuple[BatchCancellationScopeItem, ...]:
+    """Collapse exact delivery replays and require one canonical fact per Manifest item."""
+    entity = "batch_cancellation_scope_items"
+    _require_nonempty_string(entity, "batch_id", batch_id)
+    _require_nonempty_string(entity, "manifest_id", manifest_id)
+    for field, value in (
+        ("batch_cancellation_intent_digest", batch_cancellation_intent_digest),
+        ("manifest_digest", manifest_digest),
+        ("shard_plan_digest", shard_plan_digest),
+    ):
+        if not isinstance(value, Digest):
+            _invalid(entity, field, "not_digest")
+    _require_nonnegative_version(entity, "shard_plan_version", shard_plan_version)
+    if (
+        not isinstance(expected_item_keys, tuple)
+        or not expected_item_keys
+        or any(not isinstance(key, RunItemKey) for key in expected_item_keys)
+    ):
+        _invalid(entity, "expected_item_keys", "invalid")
+    if len(set(expected_item_keys)) != len(expected_item_keys):
+        _invalid(entity, "expected_item_keys", "duplicate")
+    if (
+        not isinstance(items, tuple)
+        or not items
+        or any(not isinstance(item, BatchCancellationScopeItem) for item in items)
+    ):
+        _invalid(entity, "items", "invalid")
+    by_delivery_key: dict[tuple[Digest, RunItemKey], BatchCancellationScopeItem] = {}
+    for item in items:
+        prior = by_delivery_key.setdefault(item.delivery_key, item)
+        if prior.scope_item_digest != item.scope_item_digest:
+            _invalid(entity, "items", "replay_conflict")
+    canonical = tuple(sorted(by_delivery_key.values(), key=lambda item: item.manifest_item_key))
+    keys = tuple(item.manifest_item_key for item in canonical)
+    if keys != tuple(sorted(expected_item_keys)):
+        _invalid(entity, "items", "manifest_coverage_mismatch")
+    first = canonical[0]
+    envelope = (
+        first.batch_id,
+        first.batch_cancellation_intent_digest,
+        first.manifest_id,
+        first.manifest_digest,
+        first.shard_plan_version,
+        first.shard_plan_digest,
+    )
+    if any(
+        (
+            item.batch_id,
+            item.batch_cancellation_intent_digest,
+            item.manifest_id,
+            item.manifest_digest,
+            item.shard_plan_version,
+            item.shard_plan_digest,
+        )
+        != envelope
+        for item in canonical
+    ):
+        _invalid(entity, "items", "envelope_mismatch")
+    if envelope != (
+        batch_id,
+        batch_cancellation_intent_digest,
+        manifest_id,
+        manifest_digest,
+        shard_plan_version,
+        shard_plan_digest,
+    ):
+        _invalid(entity, "items", "authoritative_envelope_mismatch")
+    return canonical
 
 
 @dataclass(frozen=True, slots=True)

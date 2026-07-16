@@ -53,7 +53,7 @@ def _not_executed_entry(index: int):
         source_run_item_resolution_set_digest=None,
         source_item_resolution_digest=None,
         not_executed_fact_schema="qep.batch-cancellation-scope-item.v1",
-        not_executed_fact_digest=_digest(f"not-executed-{index}"),
+        not_executed_fact_digest=_digest(f"scope-{index}"),
         cancellation_scope_item_digest=_digest(f"scope-{index}"),
         classification=BatchItemClassification.NOT_EXECUTED,
     )
