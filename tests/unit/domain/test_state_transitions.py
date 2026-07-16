@@ -129,24 +129,16 @@ def test_batch_legal_transition_returns_a_new_version() -> None:
     assert draft.version == 0
 
 
-@pytest.mark.parametrize(
-    ("source_name", "target_name"),
-    [("QUEUED", "RUNNING"), ("RUNNING", "FINALIZING")],
-)
-def test_batch_shared_nonterminal_edges_return_a_new_version(
-    source_name: str, target_name: str
-) -> None:
-    """The PRD and detailed design agree on these execution-phase edges."""
+def test_batch_shared_start_edge_returns_a_new_version() -> None:
     from qarunner.domain import Batch, BatchState
 
-    source_state = BatchState[source_name]
-    source = Batch(id="batch-001", state=source_state, version=3)
+    source = Batch(id="batch-001", state=BatchState.QUEUED, version=3)
 
-    advanced = source.transition(BatchState[target_name], expected_version=3)
+    advanced = source.transition(BatchState.RUNNING, expected_version=3)
 
-    assert advanced.state is BatchState[target_name]
+    assert advanced.state is BatchState.RUNNING
     assert advanced.version == 4
-    assert source.state is source_state
+    assert source.state is BatchState.QUEUED
     assert source.version == 3
 
 
@@ -242,6 +234,18 @@ def test_batch_finalizing_requires_a_fact_aware_finalize_command(target_name: st
     assert caught.value.requested_state is target
     assert finalizing.state is BatchState.FINALIZING
     assert finalizing.version == 8
+
+
+def test_batch_running_requires_fact_aware_command_to_begin_finalization() -> None:
+    from qarunner.domain import Batch, BatchState, InvalidTransition
+
+    running = Batch(id="batch-001", state=BatchState.RUNNING, version=7)
+
+    with pytest.raises(InvalidTransition):
+        running.transition(BatchState.FINALIZING, expected_version=7)
+
+    assert running.state is BatchState.RUNNING
+    assert running.version == 7
 
 
 def test_run_uses_shared_expected_version_runtime_validation() -> None:

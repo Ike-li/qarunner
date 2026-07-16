@@ -177,9 +177,9 @@ _ALLOWED_TRANSITIONS: dict[BatchState, frozenset[BatchState]] = {
     BatchState.PLANNING: frozenset({BatchState.AWAITING_ADMISSION}),
     BatchState.AWAITING_ADMISSION: frozenset({BatchState.QUEUED}),
     BatchState.QUEUED: frozenset({BatchState.RUNNING}),
-    BatchState.RUNNING: frozenset({BatchState.FINALIZING}),
-    # Terminal classification is deliberately not exposed through transition().
-    # A later M0 slice adds a finalize command that enforces Run/Evidence facts.
+    BatchState.RUNNING: frozenset(),
+    # Finalization edges are deliberately not exposed through transition().
+    # Fact-aware reconciler commands own RUNNING -> FINALIZING -> terminal.
     BatchState.FINALIZING: frozenset(),
     BatchState.SUCCEEDED: frozenset(),
     BatchState.FAILED: frozenset(),
