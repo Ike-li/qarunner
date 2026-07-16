@@ -6,6 +6,7 @@ import pytest
 from qarunner.domain import canonical_digest
 from qarunner.domain.duplicate_risk_acceptance import (
     DuplicateRiskAcceptance,
+    DuplicateRiskAcceptanceBasis,
     DuplicateRiskAcceptanceConsumption,
     DuplicateRiskAcceptanceRequest,
     DuplicateRiskReplay,
@@ -20,7 +21,7 @@ def _digest(label: str):
     return canonical_digest(schema_version="test.v1", payload={"label": label})
 
 
-def _acceptance(**changes):
+def _basis(**changes):
     values = dict(
         id="acceptance-1",
         run_id="run-1",
@@ -33,7 +34,6 @@ def _acceptance(**changes):
         target_grant_identity="grant-1",
         target_grant_version=3,
         target_grant_digest=_digest("grant"),
-        retry_intent_digest=_digest("intent"),
         suite_owner_id="owner-1",
         reviewer_id="reviewer-1",
         original_executor_id="worker-1",
@@ -41,6 +41,12 @@ def _acceptance(**changes):
         accepted_at=NOW,
         expires_at=NOW + timedelta(hours=1),
     )
+    values.update(changes)
+    return DuplicateRiskAcceptanceBasis(**values)
+
+
+def _acceptance(**changes):
+    values = dict(basis=_basis(), retry_intent_digest=_digest("intent"))
     values.update(changes)
     return DuplicateRiskAcceptance(**values)
 
@@ -77,13 +83,52 @@ def test_acceptance_digest_binds_complete_canonical_scope() -> None:
         ("original_executor_id", "worker-2"),
         ("original_trigger_actor_id", "trigger-2"),
     ):
-        assert replace(acceptance, **{field: value}).digest != acceptance.digest
+        changed = (
+            replace(acceptance, **{field: value})
+            if field == "retry_intent_digest"
+            else replace(acceptance, basis=replace(acceptance.basis, **{field: value}))
+        )
+        assert changed.digest != acceptance.digest
     shifted = replace(
         acceptance,
-        accepted_at=NOW + timedelta(seconds=1),
-        expires_at=NOW + timedelta(hours=1, seconds=1),
+        basis=replace(
+            acceptance.basis,
+            accepted_at=NOW + timedelta(seconds=1),
+            expires_at=NOW + timedelta(hours=1, seconds=1),
+        ),
     )
     assert shifted.digest != acceptance.digest
+
+
+def test_basis_adjudication_intent_acceptance_chain_is_acyclic() -> None:
+    from tests.unit.domain.test_unknown_adjudicated_retry import _adjudication, _retry_intent
+
+    basis = _basis(
+        run_id="run-001",
+        source_attempt_id="attempt-001",
+        source_attempt_no=1,
+        source_fence=1,
+    )
+    adjudication = replace(
+        _adjudication(decision_name="ACCEPT_DUPLICATE_RISK_THEN_RETRY"),
+        risk_acceptance_digest=basis.digest,
+    )
+    intent = _retry_intent(adjudication=adjudication)
+    acceptance = DuplicateRiskAcceptance(basis=basis, retry_intent_digest=intent.digest)
+
+    assert adjudication.risk_acceptance_digest == basis.digest
+    assert intent.adjudication_digest == adjudication.digest
+    assert acceptance.retry_intent_digest == intent.digest
+    assert acceptance.digest != basis.digest
+
+
+def test_final_acceptance_requires_typed_basis() -> None:
+    with pytest.raises(DomainValidationError, match="basis"):
+        DuplicateRiskAcceptance(basis=object(), retry_intent_digest=_digest("intent"))
+    acceptance = _acceptance()
+    assert acceptance.basis.run_id == "run-1"
+    assert acceptance.retry_intent_digest == _digest("intent")
+    assert not hasattr(acceptance, "run_id")
 
 
 @pytest.mark.parametrize(
@@ -103,14 +148,14 @@ def test_acceptance_digest_binds_complete_canonical_scope() -> None:
 @pytest.mark.parametrize("value", ["", 1])
 def test_acceptance_rejects_invalid_strings(field, value) -> None:
     with pytest.raises(DomainValidationError):
-        _acceptance(**{field: value})
+        _basis(**{field: value})
 
 
 @pytest.mark.parametrize("field", ["source_attempt_no", "source_fence", "target_grant_version"])
 @pytest.mark.parametrize("value", [True, 0, "1"])
 def test_acceptance_rejects_invalid_positive_integers(field, value) -> None:
     with pytest.raises(DomainValidationError):
-        _acceptance(**{field: value})
+        _basis(**{field: value})
 
 
 @pytest.mark.parametrize(
@@ -118,16 +163,16 @@ def test_acceptance_rejects_invalid_positive_integers(field, value) -> None:
 )
 def test_acceptance_requires_typed_digests(field) -> None:
     with pytest.raises(DomainValidationError):
-        _acceptance(**{field: "sha256:no"})
+        (_acceptance if field == "retry_intent_digest" else _basis)(**{field: "sha256:no"})
 
 
 def test_acceptance_requires_utc_and_exact_one_hour_ttl() -> None:
     with pytest.raises(DomainValidationError):
-        _acceptance(accepted_at=NOW.replace(tzinfo=None))
+        _basis(accepted_at=NOW.replace(tzinfo=None))
     with pytest.raises(DomainValidationError):
-        _acceptance(expires_at=NOW.replace(tzinfo=None))
+        _basis(expires_at=NOW.replace(tzinfo=None))
     with pytest.raises(DomainValidationError):
-        _acceptance(expires_at=NOW + timedelta(minutes=59))
+        _basis(expires_at=NOW + timedelta(minutes=59))
 
 
 @pytest.mark.parametrize(
@@ -135,7 +180,7 @@ def test_acceptance_requires_utc_and_exact_one_hour_ttl() -> None:
 )
 def test_reviewer_must_be_independent(field) -> None:
     with pytest.raises(DomainValidationError):
-        _acceptance(**{field: "same"}, reviewer_id="same")
+        _basis(**{field: "same"}, reviewer_id="same")
 
 
 def test_request_and_consume_require_typed_values_and_valid_window() -> None:
@@ -196,7 +241,12 @@ def test_expired_or_identity_changed_requests_fail_closed() -> None:
         )
     request = _request()
     consumed = consume_duplicate_risk_acceptance(request=request, prior=None)
-    changed = _request(replace(request.acceptance, sut_identity="sut-changed"))
+    changed = _request(
+        replace(
+            request.acceptance,
+            basis=replace(request.acceptance.basis, sut_identity="sut-changed"),
+        )
+    )
     with pytest.raises(IdempotencyConflict):
         consume_duplicate_risk_acceptance(request=changed, prior=consumed)
 

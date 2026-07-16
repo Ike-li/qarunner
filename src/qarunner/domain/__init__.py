@@ -31,6 +31,7 @@ from qarunner.domain.cancellation import (
 from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.duplicate_risk_acceptance import (
     DuplicateRiskAcceptance,
+    DuplicateRiskAcceptanceBasis,
     DuplicateRiskAcceptanceConsumption,
     DuplicateRiskAcceptanceRequest,
     DuplicateRiskReplay,
@@ -223,6 +224,7 @@ __all__ = [
     "CancellationConflict",
     "Digest",
     "DuplicateRiskAcceptance",
+    "DuplicateRiskAcceptanceBasis",
     "DuplicateRiskAcceptanceConsumption",
     "DuplicateRiskAcceptanceRequest",
     "DuplicateRiskReplay",

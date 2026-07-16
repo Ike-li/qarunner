@@ -85,7 +85,7 @@ class UnknownObservation:
 
 @dataclass(frozen=True, slots=True)
 class UnknownAdjudication:
-    """Append-only handling decision tied to one immutable unknown observation."""
+    """Append-only decision; risk_acceptance_digest binds the pre-intent basis."""
 
     id: str
     attempt_id: str

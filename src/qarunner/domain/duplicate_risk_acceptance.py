@@ -10,8 +10,8 @@ from qarunner.domain.errors import DomainValidationError, IdempotencyConflict
 
 
 @dataclass(frozen=True, slots=True)
-class DuplicateRiskAcceptance:
-    """Two-person acceptance bound to one complete retry candidate."""
+class DuplicateRiskAcceptanceBasis:
+    """Pre-intent two-person authority and complete retry environment binding."""
 
     id: str
     run_id: str
@@ -24,7 +24,6 @@ class DuplicateRiskAcceptance:
     target_grant_identity: str
     target_grant_version: int
     target_grant_digest: Digest
-    retry_intent_digest: Digest
     suite_owner_id: str
     reviewer_id: str
     original_executor_id: str
@@ -51,7 +50,6 @@ class DuplicateRiskAcceptance:
             "run_item_set_digest",
             "sut_digest",
             "target_grant_digest",
-            "retry_intent_digest",
         ):
             _require_digest("duplicate_risk_acceptance", field, getattr(self, field))
         _require_utc("duplicate_risk_acceptance", "accepted_at", self.accepted_at)
@@ -72,7 +70,7 @@ class DuplicateRiskAcceptance:
     @property
     def digest(self) -> Digest:
         return canonical_digest(
-            schema_version="qep.duplicate-risk-acceptance.v1",
+            schema_version="qep.duplicate-risk-acceptance-basis.v1",
             payload={
                 "id": self.id,
                 "run_id": self.run_id,
@@ -85,13 +83,41 @@ class DuplicateRiskAcceptance:
                 "target_grant_identity": self.target_grant_identity,
                 "target_grant_version": self.target_grant_version,
                 "target_grant_digest": self.target_grant_digest.value,
-                "retry_intent_digest": self.retry_intent_digest.value,
                 "suite_owner_id": self.suite_owner_id,
                 "reviewer_id": self.reviewer_id,
                 "original_executor_id": self.original_executor_id,
                 "original_trigger_actor_id": self.original_trigger_actor_id,
                 "accepted_at": _timestamp(self.accepted_at),
                 "expires_at": _timestamp(self.expires_at),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateRiskAcceptance:
+    """Consumable acceptance binding a pre-intent basis to the final intent."""
+
+    basis: DuplicateRiskAcceptanceBasis
+    retry_intent_digest: Digest
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.basis, DuplicateRiskAcceptanceBasis):
+            _invalid("duplicate_risk_acceptance", "basis", "wrong_type")
+        _require_digest(
+            "duplicate_risk_acceptance", "retry_intent_digest", self.retry_intent_digest
+        )
+
+    @property
+    def ttl(self) -> timedelta:
+        return self.basis.ttl
+
+    @property
+    def digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.duplicate-risk-acceptance.v2",
+            payload={
+                "basis_digest": self.basis.digest.value,
+                "retry_intent_digest": self.retry_intent_digest.value,
             },
         )
 
@@ -198,9 +224,9 @@ def consume_duplicate_risk_acceptance(
             stored_digest=prior.request_digest,
             received_digest=request.digest,
         )
-    if request.requested_at >= request.acceptance.expires_at:
+    if request.requested_at >= request.acceptance.basis.expires_at:
         _invalid("duplicate_risk_acceptance_consumption", "requested_at", "acceptance_expired")
-    if request.requested_at < request.acceptance.accepted_at:
+    if request.requested_at < request.acceptance.basis.accepted_at:
         _invalid("duplicate_risk_acceptance_consumption", "requested_at", "before_acceptance")
     return DuplicateRiskAcceptanceConsumption(
         scope=request.scope,
