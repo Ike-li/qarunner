@@ -21,6 +21,10 @@ from qarunner.domain.batch import (
     BatchState,
 )
 from qarunner.domain.batch_finalization import (
+    BatchItemClassification,
+    BatchItemResolution,
+    BatchItemResolutionSet,
+    BatchItemSourceKind,
     BatchOutcomeEvaluation,
     BatchResolutionCounts,
     BatchSuccessPolicy,
@@ -209,6 +213,10 @@ __all__ = [
     "ArtifactPath",
     "ArtifactValidationError",
     "Batch",
+    "BatchItemClassification",
+    "BatchItemResolution",
+    "BatchItemResolutionSet",
+    "BatchItemSourceKind",
     "BatchCancellationConflict",
     "BatchCancellationIntent",
     "BatchCancellationScope",
