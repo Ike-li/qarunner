@@ -54,6 +54,14 @@ def canonical_digest(*, schema_version: str, payload: JsonValue) -> Digest:
     return Digest(value=f"sha256:{hashlib.sha256(canonical).hexdigest()}")
 
 
+def canonical_materialized_run_set_digest(*, batch_id: str, run_ids: tuple[str, ...]) -> Digest:
+    """Bind the stable authoritative Run set observed under Batch serialization."""
+    return canonical_digest(
+        schema_version="qep.authoritative-materialized-run-set.v1",
+        payload={"batch_id": batch_id, "run_ids": list(sorted(run_ids))},
+    )
+
+
 def _validate_json_value(value: object, *, path: str) -> None:
     """Validate the deterministic I-JSON subset used by M0 contracts."""
     if value is None or isinstance(value, bool):

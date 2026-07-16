@@ -21,14 +21,17 @@ from qarunner.domain.batch import (
     BatchState,
 )
 from qarunner.domain.batch_finalization import (
+    BatchFinalizationBasis,
     BatchItemClassification,
     BatchItemResolution,
     BatchItemResolutionSet,
     BatchItemSourceKind,
+    BatchNonRunResolutionRef,
     BatchOutcomeEvaluation,
     BatchResolutionCounts,
     BatchSuccessPolicy,
     BatchTerminalRunRef,
+    BatchUnknownFactRef,
     evaluate_batch_outcome,
 )
 from qarunner.domain.cancellation import (
@@ -42,7 +45,11 @@ from qarunner.domain.cancellation import (
     TrustedCancellationStop,
     canonicalize_batch_cancellation_scope_items,
 )
-from qarunner.domain.digest import Digest, canonical_digest
+from qarunner.domain.digest import (
+    Digest,
+    canonical_digest,
+    canonical_materialized_run_set_digest,
+)
 from qarunner.domain.duplicate_risk_acceptance import (
     DuplicateRiskAcceptance,
     DuplicateRiskAcceptanceBasis,
@@ -218,9 +225,11 @@ __all__ = [
     "ArtifactValidationError",
     "Batch",
     "BatchItemClassification",
+    "BatchFinalizationBasis",
     "BatchItemResolution",
     "BatchItemResolutionSet",
     "BatchItemSourceKind",
+    "BatchNonRunResolutionRef",
     "BatchCancellationConflict",
     "BatchCancellationIntent",
     "BatchCancellationResolutionKind",
@@ -240,8 +249,10 @@ __all__ = [
     "BatchState",
     "BatchSuccessPolicy",
     "BatchTerminalRunRef",
+    "BatchUnknownFactRef",
     "BoundShardPlan",
     "CanonicalizationError",
+    "canonical_materialized_run_set_digest",
     "CaseManifest",
     "CancellationIntent",
     "CancellationSource",

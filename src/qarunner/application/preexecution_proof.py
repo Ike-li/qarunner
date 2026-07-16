@@ -9,7 +9,7 @@ from qarunner.application.ports.preexecution_proof import (
 )
 from qarunner.domain.batch import BatchPreexecutionSnapshot, BatchPreexecutionTerminalKind
 from qarunner.domain.cancellation import BatchCancellationScope, BatchCancellationScopeKind
-from qarunner.domain.digest import Digest, canonical_digest
+from qarunner.domain.digest import Digest, canonical_materialized_run_set_digest
 
 
 class ClosureNotReady(RuntimeError):
@@ -50,14 +50,6 @@ class MaterializedExecutionScope:
     batch_id: str
     run_ids: tuple[str, ...]
     authoritative_run_set_digest: Digest
-
-
-def canonical_materialized_run_set_digest(*, batch_id: str, run_ids: tuple[str, ...]) -> Digest:
-    """Bind the stable authoritative Run set observed under Batch serialization."""
-    return canonical_digest(
-        schema_version="qep.authoritative-materialized-run-set.v1",
-        payload={"batch_id": batch_id, "run_ids": list(sorted(run_ids))},
-    )
 
 
 class ProvePreexecutionClosure:
