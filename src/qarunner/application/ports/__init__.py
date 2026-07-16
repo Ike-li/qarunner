@@ -1,6 +1,15 @@
 """Application-facing ports for the greenfield control plane."""
 
 from qarunner.application.ports.audit import AuditLog, AuditRecord
+from qarunner.application.ports.batch_finalization import (
+    BatchFinalizationGateway,
+    BatchFinalizationMutationSnapshot,
+    BatchFinalizationProjection,
+    BatchFinalizationPublication,
+    BatchFinalizationSideEffect,
+    BatchFinalizationSourceSnapshot,
+    FinalizeBatchAuthority,
+)
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
     AuthorityProjectionStamp,
@@ -113,6 +122,12 @@ __all__ = [
     "BatchClosureSideEffect",
     "BatchClosureAuthority",
     "BatchPreexecutionGateway",
+    "BatchFinalizationGateway",
+    "BatchFinalizationMutationSnapshot",
+    "BatchFinalizationProjection",
+    "BatchFinalizationPublication",
+    "BatchFinalizationSideEffect",
+    "BatchFinalizationSourceSnapshot",
     "BatchRejectionAuthority",
     "BatchRejectionSideEffect",
     "EvidenceManifestIndex",
@@ -125,6 +140,7 @@ __all__ = [
     "FactCommitResult",
     "FactKey",
     "FinalizeRunAuthority",
+    "FinalizeBatchAuthority",
     "HandoffEventBlocked",
     "HandoffDeliveryMetadata",
     "HandoffEventConflict",
