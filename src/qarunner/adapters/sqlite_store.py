@@ -232,6 +232,7 @@ class SqliteStore:
         self._uri = False
         self._keepalive: aiosqlite.Connection | None = None
         self._cleanup_claims_recovered = False
+        self._ai_diagnosis_save_lock = asyncio.Lock()
         self._admin_mutation_lock = asyncio.Lock()
         self._case_save_lock = asyncio.Lock()
         self._inflight_create_lock = asyncio.Lock()
@@ -695,7 +696,7 @@ class SqliteStore:
         model: str,
         created_at: datetime,
     ) -> None:
-        async with self._connect() as db:
+        async with self._ai_diagnosis_save_lock, self._connect() as db:
             await db.execute(
                 "INSERT OR REPLACE INTO run_ai_diagnosis "
                 "(run_id, diagnosis_json, provider, model, created_at) "

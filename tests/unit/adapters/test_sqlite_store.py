@@ -607,6 +607,39 @@ async def test_ai_diagnosis_roundtrip_upsert_and_cascade(store: SqliteStore) -> 
     assert await store.get_ai_diagnosis("run-ai") is None
 
 
+async def test_concurrent_ai_diagnosis_upserts_keep_one_complete_diagnosis(
+    store: SqliteStore,
+) -> None:
+    run = _make_run(id="run-ai-concurrent")
+    diagnoses = [
+        FailureDiagnosis(
+            category=RootCauseCategory.ASSERTION,
+            confidence=DiagnosisConfidence.HIGH,
+            summary=f"diagnosis-{index}",
+            evidence=[f"evidence-{index}"],
+            is_likely_regression=True,
+        )
+        for index in range(5)
+    ]
+    await store.save(run)
+
+    await asyncio.gather(
+        *(
+            store.save_ai_diagnosis(
+                run.id,
+                diagnosis,
+                f"provider-{index}",
+                f"model-{index}",
+                run.created_at,
+            )
+            for index, diagnosis in enumerate(diagnoses)
+        )
+    )
+
+    persisted = await store.get_ai_diagnosis(run.id)
+    assert persisted in diagnoses
+
+
 async def test_get_ai_diagnosis_corrupt_json_returns_none(store: SqliteStore) -> None:
     """A corrupt cache row must degrade to None (never 500 the GET endpoint)."""
     run = _make_run(id="run-corrupt")
