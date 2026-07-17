@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -72,6 +73,7 @@ class FakeStore:
     _credentials: dict[str, tuple] = field(default_factory=dict)
     _cases: dict[str, list] = field(default_factory=dict)
     _ai_diagnoses: dict[str, object] = field(default_factory=dict)
+    _cleanup_claimed: set[str] = field(default_factory=set)
     count_flaky_calls: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -80,6 +82,7 @@ class FakeStore:
         self._schedules = {}
         self._users = {}
         self._credentials = {}
+        self._cleanup_claimed = set()
         from qarunner.core.auth import hash_password
 
         self._users["test_user"] = {
@@ -282,10 +285,12 @@ class FakeStore:
                 count += 1
         return count
 
-    async def lock_run(self, run_id: str, locked: bool) -> None:
-        if run_id in self._runs:
+    async def lock_run(self, run_id: str, locked: bool) -> bool:
+        if run_id in self._runs and run_id not in self._cleanup_claimed:
             run = self._runs[run_id]
             self._runs[run_id] = run.model_copy(update={"locked": locked})
+            return True
+        return False
 
     async def delete_run(self, run_id: str) -> bool:
         return self._runs.pop(run_id, None) is not None
@@ -311,6 +316,26 @@ class FakeStore:
             ):
                 res.append(r)
         return res
+
+    async def claim_run_cleanup(self, run_id: str, retention_days: int) -> bool:
+        run = self._runs.get(run_id)
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        if (
+            run is None
+            or run_id in self._cleanup_claimed
+            or run.locked
+            or run.status not in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.TIMEOUT)
+            or run.finished_at is None
+            or run.finished_at > cutoff
+        ):
+            return False
+        self._cleanup_claimed.add(run_id)
+        return True
+
+    async def finish_run_cleanup(self, run_id: str, *, cleaned: bool) -> None:
+        if cleaned and run_id in self._runs:
+            self._runs[run_id] = self._runs[run_id].model_copy(update={"report": None})
+        self._cleanup_claimed.discard(run_id)
 
     async def save_suite(self, suite: TestSuite) -> None:
         self._suites[suite.name] = suite
@@ -2788,6 +2813,33 @@ def test_lock_run() -> None:
         assert resp.json()["locked"] is False
 
 
+def test_lock_run_conflicts_with_active_cleanup_claim() -> None:
+    import asyncio
+
+    container = _make_container()
+    old = NOW - timedelta(days=40)
+    run = Run(
+        id="run-cleanup-lock-conflict",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="test_user",
+        tests_path="tests/",
+        created_at=old,
+        finished_at=old,
+    )
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(container.store.save(run))
+    assert loop.run_until_complete(container.store.claim_run_cleanup(run.id, 30)) is True
+    loop.close()
+
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.put(f"/runs/{run.id}/lock", json={"locked": True})
+
+    assert resp.status_code == 409
+    assert "cleanup" in resp.text
+
+
 def test_cleanup_runs_rejects_nonpositive_retention() -> None:
     # retention_days < 1 would purge same-day / all finished runs; reject it (422)
     # rather than silently nuking artifacts on a fat-fingered 0/negative.
@@ -4654,6 +4706,53 @@ def test_cleanup_runs_rmtree_exception(tmp_path: Path, monkeypatch: pytest.Monke
         # Exception is caught and ignored, cleaned count should be 0 because it failed
         assert resp.json()["cleaned_runs"] == 0
         assert dir_old.exists()
+        assert "run-old-exc" not in container.store._cleanup_claimed
+
+
+def test_cleanup_retries_finalize_with_removed_artifact_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(tmp_path))
+    container = _make_container()
+    old_date = datetime.now(UTC) - timedelta(days=40)
+    run = Run(
+        id="run-finalize-retry",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="test_user",
+        tests_path="tests/",
+        created_at=old_date,
+        finished_at=old_date,
+        report=ReportRef(
+            allure_results_dir="run-finalize-retry/results",
+            allure_report_file="run-finalize-retry/report.html",
+            html_generated=True,
+        ),
+    )
+    asyncio.run(container.store.save(run))
+    run_dir = tmp_path / run.id
+    run_dir.mkdir()
+    original_finish = container.store.finish_run_cleanup
+    cleaned_calls: list[bool] = []
+
+    async def flaky_finish(run_id: str, *, cleaned: bool) -> None:
+        cleaned_calls.append(cleaned)
+        if len(cleaned_calls) == 1:
+            raise RuntimeError("transient database failure")
+        await original_finish(run_id, cleaned=cleaned)
+
+    monkeypatch.setattr(container.store, "finish_run_cleanup", flaky_finish)
+    app = create_app(container)
+
+    with (
+        pytest.raises(RuntimeError, match="transient database failure"),
+        TestClient(app) as client,
+    ):
+        client.post("/runs/cleanup?retention_days=30")
+
+    assert not run_dir.exists()
+    assert cleaned_calls == [True, True]
+    assert asyncio.run(container.store.get(run.id)).report is None
 
 
 def test_preview_schedule_detailed() -> None:

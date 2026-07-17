@@ -190,6 +190,15 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
     # Existing users default to 0; the column is idempotent (duplicate column
     # tolerated by _run_migrations).
     (11, ("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;",)),
+    (
+        12,
+        (
+            "ALTER TABLE runs ADD COLUMN cleanup_claimed INTEGER NOT NULL DEFAULT 0;",
+            "CREATE INDEX idx_runs_cleanup_candidates "
+            "ON runs(finished_at) WHERE cleanup_claimed = 0 AND locked = 0 "
+            "AND status IN ('completed', 'failed', 'timeout');",
+        ),
+    ),
 )
 
 
@@ -221,6 +230,7 @@ class SqliteStore:
     def __init__(self, db_path: str) -> None:
         self._uri = False
         self._keepalive: aiosqlite.Connection | None = None
+        self._cleanup_claims_recovered = False
         if db_path == ":memory:":
             self._db_path = f"file:qarunner_mem_{uuid.uuid4().hex}?mode=memory&cache=shared"
             self._uri = True
@@ -262,6 +272,15 @@ class SqliteStore:
             await self._enable_wal(db)
             await db.execute("BEGIN IMMEDIATE")
             await self._run_migrations(db)
+            # A claim is owned by this single control-plane process. If it died
+            # during filesystem cleanup, initialization is the recovery boundary.
+            if not self._cleanup_claims_recovered:
+                async with db.execute("PRAGMA table_info(runs)") as cursor:
+                    run_columns = {row[1] for row in await cursor.fetchall()}
+                if "cleanup_claimed" in run_columns:
+                    await db.execute(
+                        "UPDATE runs SET cleanup_claimed = 0 WHERE cleanup_claimed = 1"
+                    )
 
             async with db.execute("SELECT COUNT(*) FROM users") as cursor:
                 row = await cursor.fetchone()
@@ -279,6 +298,7 @@ class SqliteStore:
                     ),
                 )
             await db.commit()
+            self._cleanup_claims_recovered = True
 
     @staticmethod
     async def _run_migrations(db: aiosqlite.Connection) -> None:
@@ -976,13 +996,14 @@ class SqliteStore:
             await db.commit()
             return cursor.rowcount > 0
 
-    async def lock_run(self, run_id: str, locked: bool) -> None:
+    async def lock_run(self, run_id: str, locked: bool) -> bool:
         async with self._connect() as db:
-            await db.execute(
-                "UPDATE runs SET locked = ? WHERE id = ?",
+            cursor = await db.execute(
+                "UPDATE runs SET locked = ? WHERE id = ? AND cleanup_claimed = 0",
                 (1 if locked else 0, run_id),
             )
             await db.commit()
+            return cursor.rowcount == 1
 
     async def cancel_if_inflight(self, run_id: str, finished_at: str) -> bool:
         """BUG-3: atomically set CANCELLED only if still QUEUED or RUNNING.
@@ -1027,12 +1048,34 @@ class SqliteStore:
         async with self._connect() as db:
             cursor = await db.execute(
                 f"SELECT {_RUN_COLUMNS} FROM runs "
-                "WHERE finished_at <= ? AND locked = 0 "
+                "WHERE finished_at <= ? AND locked = 0 AND cleanup_claimed = 0 "
                 "AND status IN ('completed', 'failed', 'timeout')",
                 (cutoff_iso,),
             )
             rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
+
+    async def claim_run_cleanup(self, run_id: str, retention_days: int) -> bool:
+        cutoff_iso = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE runs SET cleanup_claimed = 1 "
+                "WHERE id = ? AND cleanup_claimed = 0 AND locked = 0 "
+                "AND finished_at <= ? "
+                "AND status IN ('completed', 'failed', 'timeout')",
+                (run_id, cutoff_iso),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def finish_run_cleanup(self, run_id: str, *, cleaned: bool) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE runs SET report_json = CASE WHEN ? THEN NULL ELSE report_json END, "
+                "cleanup_claimed = 0 WHERE id = ? AND cleanup_claimed = 1",
+                (1 if cleaned else 0, run_id),
+            )
+            await db.commit()
 
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         """Fail runs left RUNNING by a previous process (crash recovery).

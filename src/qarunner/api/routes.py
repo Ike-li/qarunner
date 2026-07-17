@@ -2157,7 +2157,8 @@ async def lock_run(
     container = request.app.state.container
     await _get_owned_run(container, run_id, current_user)
 
-    await container.store.lock_run(run_id, req.locked)
+    if not await container.store.lock_run(run_id, req.locked):
+        raise HTTPException(status_code=409, detail="Run cleanup is in progress; retry later.")
     updated_run = await container.store.get(run_id)
     return run_to_response(updated_run)
 
@@ -2252,24 +2253,26 @@ async def cleanup_runs(
     cleaned_count = 0
 
     for r in runs_to_cleanup:
-        # Re-read the lock just before deleting: a run locked after it was
-        # selected as unlocked (TOCTOU) must be preserved. Run metadata is never
-        # deleted, so get() always resolves.
-        if (await container.store.get(r.id)).locked:
-            continue
         run_dir = _safe_run_artifact_dir(cfg.artifacts_root, r.id)
         if run_dir is None:
             logger.warning("Skipping cleanup for unsafe run artifact path: %s", r.id)
             continue
         if run_dir.exists():
+            if not await container.store.claim_run_cleanup(r.id, retention_days):
+                continue
+            artifacts_removed = False
+            finalized = False
             try:
                 await asyncio.to_thread(shutil.rmtree, run_dir)
-                # Set report reference to None in DB to prevent broken links
-                updated_run = r.model_copy(update={"report": None})
-                await container.store.save(updated_run)
+                artifacts_removed = True
+                await container.store.finish_run_cleanup(r.id, cleaned=True)
+                finalized = True
                 cleaned_count += 1
             except OSError:
                 logger.warning("Failed to remove run directory %s", run_dir, exc_info=True)
+            finally:
+                if not finalized:
+                    await container.store.finish_run_cleanup(r.id, cleaned=artifacts_removed)
 
     return {"status": "success", "cleaned_runs": cleaned_count}
 

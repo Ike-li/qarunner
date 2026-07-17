@@ -156,6 +156,18 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             WHERE status = 'running'
         """,
     ),
+    (
+        9,
+        """
+        ALTER TABLE runs
+            ADD COLUMN cleanup_claimed BOOLEAN NOT NULL DEFAULT FALSE;
+        CREATE INDEX idx_runs_cleanup_candidates
+            ON runs(finished_at)
+            WHERE cleanup_claimed = FALSE
+              AND locked = FALSE
+              AND status IN ('completed', 'failed', 'timeout')
+        """,
+    ),
 )
 _SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
 _MAX_CASE_MESSAGE_CHARS = 8192
@@ -216,6 +228,11 @@ class PostgresStore:
                         await connection.execute(
                             "INSERT INTO schema_migrations (version) VALUES ($1)", version
                         )
+
+                if created_pool:
+                    await connection.execute(
+                        "UPDATE runs SET cleanup_claimed = FALSE WHERE cleanup_claimed = TRUE"
+                    )
 
                 settings = Settings()
                 await connection.execute(
@@ -437,6 +454,53 @@ class PostgresStore:
             )
         return int(count)
 
+    async def get_old_unlocked_runs(self, retention_days: int) -> list[Run]:
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(
+                """
+                SELECT *
+                FROM runs
+                WHERE finished_at <= $1
+                  AND locked = FALSE
+                  AND cleanup_claimed = FALSE
+                  AND status IN ('completed', 'failed', 'timeout')
+                """,
+                cutoff,
+            )
+        return [_record_to_run(record) for record in records]
+
+    async def claim_run_cleanup(self, run_id: str, retention_days: int) -> bool:
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                """
+                UPDATE runs
+                SET cleanup_claimed = TRUE
+                WHERE id = $1
+                  AND cleanup_claimed = FALSE
+                  AND locked = FALSE
+                  AND finished_at <= $2
+                  AND status IN ('completed', 'failed', 'timeout')
+                """,
+                run_id,
+                cutoff,
+            )
+        return status == "UPDATE 1"
+
+    async def finish_run_cleanup(self, run_id: str, *, cleaned: bool) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE runs
+                SET report_json = CASE WHEN $2 THEN NULL ELSE report_json END,
+                    cleanup_claimed = FALSE
+                WHERE id = $1 AND cleanup_claimed = TRUE
+                """,
+                run_id,
+                cleaned,
+            )
+
     async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
         query = """
             UPDATE runs
@@ -480,13 +544,14 @@ class PostgresStore:
             )
         return None if run_id is None else str(run_id)
 
-    async def lock_run(self, run_id: str, locked: bool) -> None:
+    async def lock_run(self, run_id: str, locked: bool) -> bool:
         async with self._require_pool().acquire() as connection:
-            await connection.execute(
-                "UPDATE runs SET locked = $1 WHERE id = $2",
+            status = await connection.execute(
+                "UPDATE runs SET locked = $1 WHERE id = $2 AND cleanup_claimed = FALSE",
                 locked,
                 run_id,
             )
+        return status == "UPDATE 1"
 
     async def save_cases(
         self,

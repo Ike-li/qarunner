@@ -843,6 +843,59 @@ async def test_sqlite_store_get_old_unlocked_runs(store: SqliteStore) -> None:
     assert unlocked_old[0].id == "run-old"
 
 
+async def test_cleanup_claim_and_user_lock_are_mutually_exclusive(store: SqliteStore) -> None:
+    now = datetime.now(UTC)
+    run = _make_run(
+        id="run-cleanup-claim",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(days=10),
+    ).model_copy(update={"finished_at": now - timedelta(days=10)})
+    await store.save(run)
+
+    assert await store.claim_run_cleanup(run.id, retention_days=7) is True
+    assert await store.claim_run_cleanup(run.id, retention_days=7) is False
+    assert await store.lock_run(run.id, True) is False
+
+    await store.finish_run_cleanup(run.id, cleaned=False)
+
+    assert await store.lock_run(run.id, True) is True
+    assert await store.claim_run_cleanup(run.id, retention_days=7) is False
+
+
+async def test_finish_cleanup_narrowly_updates_report_and_releases_claim(
+    store: SqliteStore,
+) -> None:
+    now = datetime.now(UTC)
+    report = ReportRef(
+        allure_results_dir="results", allure_report_file="report/index.html", html_generated=True
+    )
+    run = _make_run(
+        id="run-cleanup-finish",
+        status=RunStatus.COMPLETED,
+        created_at=now - timedelta(days=10),
+    ).model_copy(
+        update={
+            "finished_at": now - timedelta(days=10),
+            "report": report,
+            "error": "preserve-me",
+        }
+    )
+    await store.save(run)
+
+    assert await store.claim_run_cleanup(run.id, retention_days=7) is True
+    await store.finish_run_cleanup(run.id, cleaned=False)
+    assert (await store.get(run.id)).report == report
+    assert await store.claim_run_cleanup(run.id, retention_days=7) is True
+
+    await store.finish_run_cleanup(run.id, cleaned=True)
+
+    persisted = await store.get(run.id)
+    assert persisted.report is None
+    assert persisted.error == "preserve-me"
+    assert persisted.finished_at == run.finished_at
+    assert await store.lock_run(run.id, True) is True
+
+
 async def test_sqlite_store_delete_schedule(store: SqliteStore) -> None:
     # Save profile first
     profile = TestProfile(
@@ -1479,9 +1532,7 @@ async def test_dequeue_next_queued_returns_oldest_fifo(store: SqliteStore) -> No
     """Dequeue picks the oldest QUEUED run by created_at (FIFO)."""
     now = datetime.now(UTC)
     run_a = _make_run(id="a", status=RunStatus.QUEUED, created_at=now)
-    run_b = _make_run(
-        id="b", status=RunStatus.QUEUED, created_at=now + timedelta(seconds=1)
-    )
+    run_b = _make_run(id="b", status=RunStatus.QUEUED, created_at=now + timedelta(seconds=1))
     await store.save(run_a)
     await store.save(run_b)
 

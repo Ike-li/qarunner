@@ -222,6 +222,122 @@ async def test_lifecycle_save_preserves_a_concurrent_run_lock(store: PostgresSto
     assert persisted.locked is True
 
 
+def _old_cleanup_run(run_id: str, **updates: object) -> Run:
+    old = datetime.now(UTC) - timedelta(days=10)
+    return Run(
+        id=run_id,
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=old,
+        finished_at=old,
+        report=ReportRef(
+            allure_results_dir="results",
+            allure_report_file="report/index.html",
+            html_generated=True,
+        ),
+    ).model_copy(update=updates)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_claim_and_user_lock_elect_one_winner(store: PostgresStore) -> None:
+    run = _old_cleanup_run("postgres-cleanup-lock-race")
+    await store.save(run)
+
+    claim_won, lock_won = await asyncio.gather(
+        store.claim_run_cleanup(run.id, retention_days=7),
+        store.lock_run(run.id, True),
+    )
+
+    assert claim_won + lock_won == 1
+    if claim_won:
+        assert (await store.get(run.id)).locked is False
+        await store.finish_run_cleanup(run.id, cleaned=False)
+    else:
+        assert (await store.get(run.id)).locked is True
+
+
+@pytest.mark.asyncio
+async def test_cleanup_claim_validates_eligibility_and_has_one_winner(
+    store: PostgresStore,
+) -> None:
+    eligible = _old_cleanup_run("postgres-cleanup-eligible")
+    await store.save(eligible)
+    await store.save(_old_cleanup_run("postgres-cleanup-recent", finished_at=datetime.now(UTC)))
+    await store.save(_old_cleanup_run("postgres-cleanup-running", status=RunStatus.RUNNING))
+    locked = _old_cleanup_run("postgres-cleanup-locked")
+    await store.save(locked)
+    assert await store.lock_run(locked.id, True) is True
+
+    winners = await asyncio.gather(
+        store.claim_run_cleanup(eligible.id, retention_days=7),
+        store.claim_run_cleanup(eligible.id, retention_days=7),
+    )
+
+    assert winners.count(True) == 1
+    assert await store.claim_run_cleanup("missing", retention_days=7) is False
+    assert await store.claim_run_cleanup("postgres-cleanup-recent", 7) is False
+    assert await store.claim_run_cleanup("postgres-cleanup-running", 7) is False
+    assert await store.claim_run_cleanup(locked.id, 7) is False
+    assert await store.get_old_unlocked_runs(7) == []
+
+
+@pytest.mark.asyncio
+async def test_finish_cleanup_narrowly_updates_report_and_releases_claim(
+    store: PostgresStore,
+) -> None:
+    run = _old_cleanup_run("postgres-cleanup-finish", error="preserve-me")
+    await store.save(run)
+
+    assert await store.claim_run_cleanup(run.id, 7) is True
+    await store.finish_run_cleanup(run.id, cleaned=False)
+    assert (await store.get(run.id)).report == run.report
+    assert await store.claim_run_cleanup(run.id, 7) is True
+
+    await store.finish_run_cleanup(run.id, cleaned=True)
+
+    persisted = await store.get(run.id)
+    assert persisted.report is None
+    assert persisted.error == "preserve-me"
+    assert persisted.finished_at == run.finished_at
+    assert await store.lock_run(run.id, True) is True
+
+
+@pytest.mark.asyncio
+async def test_repeated_initialize_does_not_release_active_cleanup_claim(
+    store: PostgresStore,
+) -> None:
+    run = _old_cleanup_run("postgres-cleanup-repeat-initialize")
+    await store.save(run)
+    assert await store.claim_run_cleanup(run.id, 7) is True
+
+    await store.initialize()
+
+    assert await store.lock_run(run.id, True) is False
+    await store.finish_run_cleanup(run.id, cleaned=False)
+
+
+@pytest.mark.asyncio
+async def test_new_store_instance_recovers_abandoned_cleanup_claim(
+    store: PostgresStore,
+) -> None:
+    run = _old_cleanup_run("postgres-cleanup-restart-recovery")
+    await store.save(run)
+    assert await store.claim_run_cleanup(run.id, 7) is True
+    database_url = store._database_url
+    schema = store._schema
+    await store.close()
+
+    restarted = PostgresStore(database_url, schema=schema)
+    try:
+        await restarted.initialize()
+        assert await restarted.claim_run_cleanup(run.id, 7) is True
+        await restarted.finish_run_cleanup(run.id, cleaned=False)
+    finally:
+        await restarted.close()
+
+
 @pytest.mark.asyncio
 async def test_suite_round_trip_preserves_registration(store: PostgresStore) -> None:
     suite = TestSuite(
