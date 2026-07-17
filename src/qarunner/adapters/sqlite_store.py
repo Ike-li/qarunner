@@ -559,7 +559,7 @@ class SqliteStore:
             "exit_code=excluded.exit_code, error=excluded.error, "
             "created_at=excluded.created_at, started_at=excluded.started_at, "
             "finished_at=excluded.finished_at, env_json=excluded.env_json, "
-            "worker_node_id=excluded.worker_node_id",
+            "worker_node_id=excluded.worker_node_id, profile_id=excluded.profile_id",
             (
                 run.id,
                 run.status.value,

@@ -221,6 +221,15 @@ async def test_upsert(store: SqliteStore) -> None:
     assert len(all_runs) == 1
 
 
+async def test_run_upsert_updates_profile_id(store: SqliteStore) -> None:
+    run = _make_run(id="run-reprofile", profile_id="profile-a")
+    await store.save(run)
+
+    await store.save(run.model_copy(update={"profile_id": "profile-b"}))
+
+    assert (await store.get(run.id)).profile_id == "profile-b"
+
+
 async def test_close(store: SqliteStore) -> None:
     await store.close()
     # Second close is a no-op
