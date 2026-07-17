@@ -14,7 +14,10 @@ from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.errors import RunNotFound
 from qarunner.models import (
     Credential,
+    DiagnosisConfidence,
+    FailureDiagnosis,
     ReportRef,
+    RootCauseCategory,
     Run,
     RunStatus,
     TestCaseResult,
@@ -166,6 +169,136 @@ async def test_run_delete_reports_hit_and_miss(store: PostgresStore) -> None:
     assert await store.delete_run(run.id) is False
     with pytest.raises(RunNotFound):
         await store.get(run.id)
+
+
+def _diagnosis(summary: str = "an assertion failed") -> FailureDiagnosis:
+    return FailureDiagnosis(
+        category=RootCauseCategory.ASSERTION,
+        confidence=DiagnosisConfidence.HIGH,
+        summary=summary,
+        evidence=["expected 200"],
+        is_likely_regression=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ai_diagnosis_round_trip_upsert_and_run_delete_cascade(
+    store: PostgresStore,
+) -> None:
+    run = Run(
+        id="postgres-ai-diagnosis",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save(run)
+    assert await store.get_ai_diagnosis(run.id) is None
+
+    await store.save_ai_diagnosis(
+        run.id,
+        _diagnosis(),
+        "anthropic",
+        "claude-x",
+        datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    assert await store.get_ai_diagnosis(run.id) == _diagnosis()
+
+    revised = _diagnosis("revised")
+    await store.save_ai_diagnosis(
+        run.id,
+        revised,
+        "openai",
+        "gpt-x",
+        datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    assert await store.get_ai_diagnosis(run.id) == revised
+
+    assert await store.delete_run(run.id) is True
+    assert await store.get_ai_diagnosis(run.id) is None
+
+
+@pytest.mark.asyncio
+async def test_ai_diagnosis_schema_drift_degrades_to_missing(store: PostgresStore) -> None:
+    run = Run(
+        id="postgres-ai-schema-drift",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save(run)
+    async with store._require_pool().acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO run_ai_diagnosis
+                (run_id, diagnosis_json, provider, model, created_at)
+            VALUES ($1, $2::jsonb, $3, $4, $5)
+            """,
+            run.id,
+            '{"category": "future-category"}',
+            "future-provider",
+            "future-model",
+            datetime(2026, 7, 16, tzinfo=UTC),
+        )
+
+    assert await store.get_ai_diagnosis(run.id) is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ai_diagnosis_upserts_keep_one_coherent_row(
+    store: PostgresStore,
+) -> None:
+    run = Run(
+        id="postgres-ai-concurrent-upsert",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save(run)
+    first_at = datetime(2026, 7, 16, tzinfo=UTC)
+    second_at = datetime(2026, 7, 17, tzinfo=UTC)
+
+    await asyncio.gather(
+        store.save_ai_diagnosis(run.id, _diagnosis("first"), "provider-a", "model-a", first_at),
+        store.save_ai_diagnosis(run.id, _diagnosis("second"), "provider-b", "model-b", second_at),
+    )
+
+    async with store._require_pool().acquire() as connection:
+        row = await connection.fetchrow(
+            """
+            SELECT diagnosis_json, provider, model, created_at
+            FROM run_ai_diagnosis
+            WHERE run_id = $1
+            """,
+            run.id,
+        )
+    assert row is not None
+    persisted = FailureDiagnosis.model_validate_json(row["diagnosis_json"])
+    assert (persisted.summary, row["provider"], row["model"], row["created_at"]) in {
+        ("first", "provider-a", "model-a", first_at),
+        ("second", "provider-b", "model-b", second_at),
+    }
+
+
+@pytest.mark.asyncio
+async def test_ai_diagnosis_rejects_missing_parent_run(store: PostgresStore) -> None:
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        await store.save_ai_diagnosis(
+            "missing-run",
+            _diagnosis(),
+            "anthropic",
+            "claude-x",
+            datetime(2026, 7, 16, tzinfo=UTC),
+        )
+
+    async with store._require_pool().acquire() as connection:
+        count = await connection.fetchval("SELECT count(*) FROM run_ai_diagnosis")
+    assert count == 0
 
 
 @pytest.mark.asyncio

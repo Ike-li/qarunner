@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -14,6 +15,7 @@ from qarunner.errors import RunNotFound
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
+    FailureDiagnosis,
     ReportRef,
     Run,
     RunStatus,
@@ -23,6 +25,8 @@ from qarunner.models import (
     TestSuite,
     TestSummary,
 )
+
+logger = logging.getLogger(__name__)
 
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
@@ -166,6 +170,18 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             WHERE cleanup_claimed = FALSE
               AND locked = FALSE
               AND status IN ('completed', 'failed', 'timeout')
+        """,
+    ),
+    (
+        10,
+        """
+        CREATE TABLE run_ai_diagnosis (
+            run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+            diagnosis_json JSONB NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
+        )
         """,
     ),
 )
@@ -711,6 +727,51 @@ class PostgresStore:
             flip_threshold=flip_threshold,
         )
         return sum(1 for statuses in grouped.values() if flakiness(statuses, policy)[0])
+
+    async def save_ai_diagnosis(
+        self,
+        run_id: str,
+        diagnosis: FailureDiagnosis,
+        provider: str,
+        model: str,
+        created_at: datetime,
+    ) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO run_ai_diagnosis
+                    (run_id, diagnosis_json, provider, model, created_at)
+                VALUES ($1, $2::jsonb, $3, $4, $5)
+                ON CONFLICT (run_id) DO UPDATE SET
+                    diagnosis_json = EXCLUDED.diagnosis_json,
+                    provider = EXCLUDED.provider,
+                    model = EXCLUDED.model,
+                    created_at = EXCLUDED.created_at
+                """,
+                run_id,
+                diagnosis.model_dump_json(),
+                provider,
+                model,
+                created_at,
+            )
+
+    async def get_ai_diagnosis(self, run_id: str) -> FailureDiagnosis | None:
+        async with self._require_pool().acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT diagnosis_json FROM run_ai_diagnosis WHERE run_id = $1",
+                run_id,
+            )
+        if value is None:
+            return None
+        try:
+            return FailureDiagnosis.model_validate_json(value)
+        except Exception:  # noqa: BLE001 - corrupt/schema-drifted cache is a miss
+            logger.warning(
+                "Corrupt AI diagnosis cache for run %s; treating as missing",
+                run_id,
+                exc_info=True,
+            )
+            return None
 
     async def save_suite(self, suite: TestSuite) -> None:
         async with self._require_pool().acquire() as connection:
