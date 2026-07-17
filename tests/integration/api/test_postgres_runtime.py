@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Iterator
+from concurrent.futures import CancelledError
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
 import asyncpg
@@ -396,5 +400,64 @@ def test_postgres_health_timeout_cancels_query_without_poisoning_pool(
         recovered = client.get("/health")
 
     assert timed_out.status_code == 503
+    assert recovered.status_code == 200
+    assert recovered.json() == {"status": "ok"}
+
+
+def test_postgres_health_timeout_cancels_pool_wait_and_recovers(
+    postgres_schema: tuple[str, str], tmp_path: Path
+) -> None:
+    database_url, schema = postgres_schema
+    container = create_container(
+        Settings(
+            database_backend="postgres",
+            database_url=database_url,
+            database_schema=schema,
+            database_pool_min_size=2,
+            database_pool_max_size=2,
+            database_health_timeout_seconds=0.01,
+            crash_recovery_on_startup=False,
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path),
+        )
+    )
+    acquired = Event()
+    release: asyncio.Event | None = None
+
+    async def exhaust_pool() -> None:
+        nonlocal release
+        release = asyncio.Event()
+        pool = container.store._require_pool()
+        async with pool.acquire(), pool.acquire():
+            acquired.set()
+            await release.wait()
+
+    with TestClient(create_app(container)) as client:
+        assert client.portal is not None
+        holder = client.portal.start_task_soon(exhaust_pool)
+        try:
+            assert acquired.wait(timeout=2)
+            assert container.store._require_pool().get_size() == 2
+            assert container.store._require_pool().get_idle_size() == 0
+
+            saturated = client.get("/health")
+        finally:
+            if release is None:
+                holder.cancel()
+            else:
+                client.portal.call(release.set)
+            try:
+                holder.result(timeout=2)
+            except CancelledError:
+                pass
+            except FutureTimeoutError:
+                holder.cancel()
+                with suppress(CancelledError, FutureTimeoutError):
+                    holder.result(timeout=2)
+                raise
+        recovered = client.get("/health")
+
+    assert saturated.status_code == 503
+    assert saturated.json() == {"detail": "database unavailable"}
     assert recovered.status_code == 200
     assert recovered.json() == {"status": "ok"}
