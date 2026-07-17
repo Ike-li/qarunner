@@ -96,3 +96,30 @@ def test_postgres_container_lifespan_health_and_restart_persistence(
     persisted_user = asyncio.run(read_after_restart())
     assert persisted_user is not None
     assert persisted_user["role"] == "user"
+
+
+def test_postgres_health_returns_503_after_pool_disconnect(
+    postgres_schema: tuple[str, str], tmp_path: Path
+) -> None:
+    database_url, schema = postgres_schema
+    container = create_container(
+        Settings(
+            database_backend="postgres",
+            database_url=database_url,
+            database_schema=schema,
+            crash_recovery_on_startup=False,
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path),
+        )
+    )
+
+    with TestClient(create_app(container)) as client:
+        assert client.get("/health").status_code == 200
+        assert client.portal is not None
+        client.portal.call(container.task_scheduler.shutdown)
+        client.portal.call(container.store.close)
+
+        disconnected = client.get("/health")
+
+    assert disconnected.status_code == 503
+    assert disconnected.json()["detail"] == "database unavailable"

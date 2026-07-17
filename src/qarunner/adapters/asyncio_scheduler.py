@@ -1,4 +1,4 @@
-"""Persistent scheduler backed by a SQLite queue with an asyncio poller loop."""
+"""Persistent scheduler backed by a Store queue with an asyncio poller loop."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class AsyncioScheduler:
     """Schedule background coroutines with bounded concurrency via a
-    SQLite-backed queue.
+    Store-backed queue.
 
     ``enqueue(run_id)`` signals the orchestrator created a new QUEUED run.
     A background poller loop atomically dequeues the next QUEUED run from
