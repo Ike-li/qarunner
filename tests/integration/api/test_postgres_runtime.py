@@ -123,3 +123,46 @@ def test_postgres_health_returns_503_after_pool_disconnect(
 
     assert disconnected.status_code == 503
     assert disconnected.json()["detail"] == "database unavailable"
+
+
+def test_postgres_health_recovers_after_connection_is_terminated(
+    postgres_schema: tuple[str, str], tmp_path: Path
+) -> None:
+    database_url, schema = postgres_schema
+    container = create_container(
+        Settings(
+            database_backend="postgres",
+            database_url=database_url,
+            database_schema=schema,
+            crash_recovery_on_startup=False,
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path),
+        )
+    )
+    terminated_pids: list[int] = []
+
+    async def terminate_current_connection() -> None:
+        assert isinstance(container.store, PostgresStore)
+        pool = container.store._require_pool()
+        with pytest.raises(asyncpg.ConnectionDoesNotExistError):
+            async with pool.acquire() as connection:
+                terminated_pids.append(await connection.fetchval("SELECT pg_backend_pid()"))
+                await connection.fetchval("SELECT pg_terminate_backend(pg_backend_pid())")
+
+    async def current_connection_pid() -> int:
+        assert isinstance(container.store, PostgresStore)
+        async with container.store._require_pool().acquire() as connection:
+            return int(await connection.fetchval("SELECT pg_backend_pid()"))
+
+    with TestClient(create_app(container)) as client:
+        assert client.get("/health").status_code == 200
+        assert client.portal is not None
+        client.portal.call(terminate_current_connection)
+
+        recovered = client.get("/health")
+        replacement_pid = client.portal.call(current_connection_pid)
+
+    assert recovered.status_code == 200
+    assert recovered.json() == {"status": "ok"}
+    assert len(terminated_pids) == 1
+    assert replacement_pid != terminated_pids[0]
