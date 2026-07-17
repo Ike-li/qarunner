@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -27,28 +27,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "QARUNNER_COOKIE_SECURE is False — auth cookies will be sent over "
             "plaintext HTTP. Set QARUNNER_COOKIE_SECURE=true for production."
         )
-    # Initialize the configured persistence store.
-    await container.store.initialize()
-    # Crash recovery: fail RUNNING runs left by a previous process.  QUEUED
-    # runs survive restart — they are persistent and will be picked up by the
-    # new poller (CONC-2: single-instance assumption).
-    recover = getattr(container.store, "mark_interrupted_runs", None)
-    if settings.crash_recovery_on_startup and recover is not None:
-        interrupted = await recover(worker_node_id=settings.worker_node_id)
+    async with AsyncExitStack() as cleanup:
+        # Register each cleanup only after its startup stage succeeds. LIFO exit
+        # preserves cron -> poller -> drain -> Store for both normal shutdown
+        # and a later startup-stage failure.
+        await container.store.initialize()
+        cleanup.push_async_callback(container.store.close)
 
-        if interrupted:
-            logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
-    # Start the persistent task scheduler (poller) before cron, so the poller
-    # is ready to pick up any QUEUED runs that survived the restart.
-    await container.task_scheduler.start()
-    await container.scheduler.start()
-    yield
-    # Cleanup — stop cron triggers first, then stop the task poller,
-    # drain in-flight runs, then close the DB.
-    await container.scheduler.shutdown()
-    await container.task_scheduler.shutdown()
-    await container.orchestrator.drain(timeout=settings.shutdown_drain_timeout_seconds)
-    await container.store.close()
+        # Crash recovery: fail RUNNING runs left by a previous process.  QUEUED
+        # runs survive restart — they are persistent and will be picked up by the
+        # new poller (CONC-2: single-instance assumption).
+        recover = getattr(container.store, "mark_interrupted_runs", None)
+        if settings.crash_recovery_on_startup and recover is not None:
+            interrupted = await recover(worker_node_id=settings.worker_node_id)
+
+            if interrupted:
+                logger.warning("Recovered %d interrupted run(s) as FAILED on startup", interrupted)
+
+        # Start the persistent task scheduler (poller) before cron, so the poller
+        # is ready to pick up any QUEUED runs that survived the restart.
+        await container.task_scheduler.start()
+        cleanup.push_async_callback(
+            container.orchestrator.drain,
+            settings.shutdown_drain_timeout_seconds,
+        )
+        cleanup.push_async_callback(container.task_scheduler.shutdown)
+
+        await container.scheduler.start()
+        cleanup.push_async_callback(container.scheduler.shutdown)
+        yield
 
 
 def create_app(container: Container | None = None) -> FastAPI:

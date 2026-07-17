@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from qarunner.api.app import create_app
+from qarunner.api.app import create_app, lifespan
 from qarunner.api.deps import Container, create_container
 from qarunner.config import Settings
 from qarunner.errors import RunNotFound
@@ -423,3 +424,102 @@ async def test_lifespan_drains_inflight_runs_before_closing_store() -> None:
         sched._tasks.add(task)
     # Context exit ran shutdown: drain awaited the in-flight save, then closed.
     assert events == ["save", "close"]
+
+
+async def test_lifespan_rolls_back_started_resources_when_cron_start_fails() -> None:
+    events: list[str] = []
+
+    class _OrderStore(_FakeStore):
+        async def initialize(self) -> None:
+            events.append("store-initialize")
+
+        async def close(self) -> None:
+            events.append("store-close")
+
+    class _OrderTaskScheduler(FakeScheduler):
+        async def start(self) -> None:
+            events.append("task-start")
+            await super().start()
+
+        async def shutdown(self) -> None:
+            events.append("task-shutdown")
+            await super().shutdown()
+
+    class _FailingCron(FakeSchedulePort):
+        async def start(self) -> None:
+            events.append("cron-start")
+            raise RuntimeError("cron startup failed")
+
+    class _OrderOrchestrator(_FakeOrch):
+        async def drain(self, timeout: float | None = None) -> None:
+            events.append("orchestrator-drain")
+
+    store = _OrderStore()
+    container = Container(
+        orchestrator=_OrderOrchestrator(store=store),
+        store=store,
+        task_scheduler=_OrderTaskScheduler(),
+        scheduler=_FailingCron(),
+        schedule_service=None,
+        profile_service=None,
+        login_throttle=None,
+        settings=Settings(crash_recovery_on_startup=False),
+    )  # type: ignore[arg-type]
+    app = FastAPI()
+    app.state.container = container
+
+    with pytest.raises(RuntimeError, match="cron startup failed"):
+        async with lifespan(app):
+            pytest.fail("lifespan must not yield after cron startup fails")
+
+    assert events == [
+        "store-initialize",
+        "task-start",
+        "cron-start",
+        "task-shutdown",
+        "orchestrator-drain",
+        "store-close",
+    ]
+
+
+async def test_lifespan_closes_store_when_crash_recovery_fails() -> None:
+    events: list[str] = []
+
+    class _RecoveryStore(_FakeStore):
+        async def initialize(self) -> None:
+            events.append("store-initialize")
+
+        async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
+            events.append("crash-recovery")
+            raise RuntimeError("recovery failed")
+
+        async def close(self) -> None:
+            events.append("store-close")
+
+    class _UnstartedTaskScheduler(FakeScheduler):
+        async def start(self) -> None:
+            events.append("unexpected-task-start")
+
+    class _UnstartedCron(FakeSchedulePort):
+        async def start(self) -> None:
+            events.append("unexpected-cron-start")
+
+    store = _RecoveryStore()
+    container = Container(
+        orchestrator=_FakeOrch(store=store),
+        store=store,
+        task_scheduler=_UnstartedTaskScheduler(),
+        scheduler=_UnstartedCron(),
+        schedule_service=None,
+        profile_service=None,
+        login_throttle=None,
+        settings=Settings(crash_recovery_on_startup=True),
+    )  # type: ignore[arg-type]
+    app = FastAPI()
+    app.state.container = container
+
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        async with lifespan(app):
+            pytest.fail("lifespan must not yield after crash recovery fails")
+
+    assert events == ["store-initialize", "crash-recovery", "store-close"]
