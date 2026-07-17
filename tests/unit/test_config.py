@@ -12,7 +12,9 @@ _EXPLICIT_ADMIN_PASSWORD = "test-admin-password"
 _SETTINGS_ENV_KEYS = [
     "QARUNNER_TESTS_ROOT",
     "QARUNNER_ARTIFACTS_ROOT",
+    "QARUNNER_DATABASE_BACKEND",
     "QARUNNER_DB_PATH",
+    "QARUNNER_DATABASE_URL",
     "QARUNNER_ALLURE_BIN",
     "QARUNNER_EXECUTABLE",
     "QARUNNER_DEFAULT_TIMEOUT_SECONDS",
@@ -39,7 +41,9 @@ class TestSettings:
         s = Settings(secret_key=_EXPLICIT_SECRET, admin_password=_EXPLICIT_ADMIN_PASSWORD)
         assert s.tests_root == "./external_tests/"
         assert s.artifacts_root == "./artifacts"
+        assert s.database_backend == "sqlite"
         assert s.db_path == "./artifacts/qarunner.db"
+        assert s.database_url == ""
         assert s.allure_bin == "allure"
         assert s.executable == ""
         assert s.default_timeout_seconds == 1800
@@ -81,6 +85,13 @@ class TestSettings:
         assert s.ai_request_timeout_seconds == 30.0
         assert s.ai_post_max_calls == 3
         assert s.ai_post_window_seconds == 120.0
+
+    def test_rejects_non_postgresql_database_url(self):
+        with pytest.raises(ValidationError, match="PostgreSQL"):
+            Settings(
+                database_backend="postgres",
+                database_url="sqlite:///artifacts/qarunner.db",
+            )
 
 
 @pytest.mark.parametrize(

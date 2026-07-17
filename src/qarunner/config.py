@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import socket
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 # Known placeholder / weak values that must never reach a running instance.
@@ -37,7 +38,9 @@ class Settings(BaseSettings):
 
     tests_root: str = "./external_tests/"
     artifacts_root: str = "./artifacts"
+    database_backend: Literal["sqlite", "postgres"] = "sqlite"
     db_path: str = "./artifacts/qarunner.db"
+    database_url: str = ""
     allure_bin: str = "allure"
     executable: str = ""  # empty → sys.executable at runtime
     default_timeout_seconds: int = 1800
@@ -122,6 +125,17 @@ class Settings(BaseSettings):
     # ``X-Forwarded-For`` parsing entirely — the transport peer address is
     # always used.
     trusted_proxies: str = ""
+
+    @model_validator(mode="after")
+    def _require_postgresql_database_url(self) -> Settings:
+        if self.database_backend == "postgres" and not self.database_url.startswith(
+            ("postgresql://", "postgres://")
+        ):
+            raise ValueError(
+                "QARUNNER_DATABASE_URL must be a PostgreSQL connection URL when "
+                "QARUNNER_DATABASE_BACKEND=postgres"
+            )
+        return self
 
     @field_validator("secret_key")
     @classmethod

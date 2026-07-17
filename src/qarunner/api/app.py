@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "QARUNNER_COOKIE_SECURE is False — auth cookies will be sent over "
             "plaintext HTTP. Set QARUNNER_COOKIE_SECURE=true for production."
         )
-    # Initialize SQLite store
+    # Initialize the configured persistence store.
     await container.store.initialize()
     # Crash recovery: fail RUNNING runs left by a previous process.  QUEUED
     # runs survive restart — they are persistent and will be picked up by the

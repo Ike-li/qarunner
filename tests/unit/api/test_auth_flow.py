@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
+from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.api.app import create_app
 from qarunner.api.deps import create_container
 from qarunner.config import Settings
@@ -22,10 +23,7 @@ ADMIN_PW = os.environ["QARUNNER_ADMIN_PASSWORD"]
 async def auth_app() -> FastAPI:
     """Create a real FastAPI application with an in-memory SqliteStore and no
     dependency overrides."""
-    settings = Settings()
-    # Use in-memory SQLite for testing real database interactions
-    settings.db_path = ":memory:"
-    container = create_container(settings)
+    container = create_container(Settings(), store=SqliteStore(":memory:"))
 
     # Initialize the sqlite store
     await container.store.initialize()

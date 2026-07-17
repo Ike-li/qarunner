@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from qarunner.api.app import create_app
-from qarunner.api.deps import Container
+from qarunner.api.deps import Container, create_container
 from qarunner.config import Settings
 from qarunner.errors import RunNotFound
 from qarunner.models import Run
@@ -163,10 +163,8 @@ def test_lifespan_skips_cookie_secure_warning_when_enabled(caplog) -> None:
 
 
 def test_lifespan_without_container_creates_one(monkeypatch) -> None:
-    """When no container is injected, lifespan creates a real one."""
-    import tempfile
+    """When no container is injected, lifespan asks the factory for one."""
     from datetime import UTC, datetime
-    from pathlib import Path
 
     from qarunner.api.deps import get_current_user
     from qarunner.models import User, UserRole
@@ -174,16 +172,26 @@ def test_lifespan_without_container_creates_one(monkeypatch) -> None:
     async def mock_get_current_user() -> User:
         return User(username="test_user", role=UserRole.ADMIN, created_at=datetime.now(UTC))
 
-    with tempfile.TemporaryDirectory() as td:
-        monkeypatch.setenv("QARUNNER_DB_PATH", str(Path(td) / "test.db"))
-        monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(Path(td) / "tests"))
-        monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
-        app = create_app()
-        app.dependency_overrides[get_current_user] = mock_get_current_user
-        with TestClient(app) as client:
-            resp = client.get("/runs")
-        assert resp.status_code == 200
-        assert resp.json() == {"runs": []}
+    store = _FakeStore()
+    container = Container(
+        orchestrator=_FakeOrch(store=store),
+        store=store,
+        task_scheduler=FakeScheduler(),
+        scheduler=FakeSchedulePort(),
+        schedule_service=None,
+        profile_service=None,
+        login_throttle=None,
+        settings=Settings(database_backend="sqlite"),
+    )  # type: ignore[arg-type]
+    monkeypatch.setattr("qarunner.api.app.create_container", lambda: container)
+    app = create_app()
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    with TestClient(app) as client:
+        resp = client.get("/runs")
+    assert resp.status_code == 200
+    assert resp.json() == {"runs": []}
+    assert store.initialized is True
+    assert store.closed is True
 
 
 def test_static_files_mounting(tmp_path, monkeypatch) -> None:
@@ -253,7 +261,6 @@ def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
 
     with tempfile.TemporaryDirectory() as td:
         db_path = str(Path(td) / "test.db")
-        monkeypatch.setenv("QARUNNER_DB_PATH", db_path)
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(Path(td) / "tests"))
         monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
 
@@ -278,7 +285,7 @@ def test_lifespan_recovers_interrupted_runs(monkeypatch) -> None:
         asyncio.run(seed())
 
         # Entering the TestClient context triggers lifespan startup (recovery).
-        app = create_app()
+        app = create_app(create_container(Settings(), store=SqliteStore(db_path)))
         with TestClient(app):
             pass
 
@@ -312,7 +319,6 @@ def test_lifespan_skips_recovery_when_disabled(monkeypatch) -> None:
 
     with tempfile.TemporaryDirectory() as td:
         db_path = str(Path(td) / "test.db")
-        monkeypatch.setenv("QARUNNER_DB_PATH", db_path)
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", str(Path(td) / "tests"))
         monkeypatch.setenv("QARUNNER_ARTIFACTS_ROOT", str(Path(td) / "artifacts"))
         monkeypatch.setenv("QARUNNER_CRASH_RECOVERY_ON_STARTUP", "false")
@@ -334,7 +340,7 @@ def test_lifespan_skips_recovery_when_disabled(monkeypatch) -> None:
 
         asyncio.run(seed())
 
-        app = create_app()
+        app = create_app(create_container(Settings(), store=SqliteStore(db_path)))
         with TestClient(app):
             pass
 

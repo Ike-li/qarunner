@@ -17,6 +17,7 @@ from qarunner.adapters.asyncio_scheduler import AsyncioScheduler
 from qarunner.adapters.docker_runner import DockerRunner
 from qarunner.adapters.junit_collector import JunitCollector
 from qarunner.adapters.openai_analyzer import OpenAiFailureAnalyzer
+from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.adapters.sqlite_store import SqliteStore
 from qarunner.adapters.subprocess_runner import SubprocessRunner
 from qarunner.adapters.system_clock import SystemClock
@@ -78,12 +79,17 @@ def _build_ai_analyzer(cfg: Settings) -> FailureAnalyzer | None:
     return None
 
 
-def create_container(settings: Settings | None = None) -> Container:
+def create_container(settings: Settings | None = None, *, store: Store | None = None) -> Container:
     """Wire up real adapters from settings."""
     cfg = settings or Settings()
     executable = cfg.executable or sys.executable
 
-    store = SqliteStore(cfg.db_path)
+    if store is None:
+        store = (
+            PostgresStore(cfg.database_url)
+            if cfg.database_backend == "postgres"
+            else SqliteStore(cfg.db_path)
+        )
     clock = SystemClock()
     ids = UuidIds()
     process = SubprocessRunner()

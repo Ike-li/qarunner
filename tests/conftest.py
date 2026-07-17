@@ -17,3 +17,5 @@ import os
 # monkeypatching still overrides these afterwards.
 os.environ["QARUNNER_SECRET_KEY"] = "test-secret-" + "x" * 60
 os.environ["QARUNNER_ADMIN_PASSWORD"] = "test-admin-password"
+os.environ["QARUNNER_DATABASE_BACKEND"] = "postgres"
+os.environ["QARUNNER_DATABASE_URL"] = "postgresql://unit-test.invalid/qarunner"
