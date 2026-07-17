@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -230,20 +231,56 @@ class PostgresStore:
                     """
                     CREATE TABLE IF NOT EXISTS schema_migrations (
                         version INTEGER PRIMARY KEY,
+                        checksum TEXT NOT NULL,
                         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
                     )
                     """
                 )
-                applied = {
-                    record["version"]
-                    for record in await connection.fetch("SELECT version FROM schema_migrations")
+                await connection.execute(
+                    "ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT"
+                )
+                known_migrations = {
+                    version: hashlib.sha256(ddl.encode("utf-8")).hexdigest()
+                    for version, ddl in _MIGRATIONS
                 }
+                applied_records = await connection.fetch(
+                    "SELECT version, checksum FROM schema_migrations"
+                )
+                applied: set[int] = set()
+                for record in applied_records:
+                    version = record["version"]
+                    checksum = record["checksum"]
+                    expected_checksum = known_migrations.get(version)
+                    if expected_checksum is None:
+                        raise RuntimeError(f"unknown applied migration {version}")
+                    if checksum is None:
+                        await connection.execute(
+                            "UPDATE schema_migrations SET checksum = $1 WHERE version = $2",
+                            expected_checksum,
+                            version,
+                        )
+                    elif checksum != expected_checksum:
+                        raise RuntimeError(f"migration {version} checksum mismatch")
+                    applied.add(version)
+
+                if applied:
+                    expected_prefix = {
+                        version for version, _ddl in _MIGRATIONS if version <= max(applied)
+                    }
+                    if applied != expected_prefix:
+                        raise RuntimeError("non-contiguous migration ledger")
+
                 for version, ddl in _MIGRATIONS:
                     if version not in applied:
                         await connection.execute(ddl)
                         await connection.execute(
-                            "INSERT INTO schema_migrations (version) VALUES ($1)", version
+                            "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
+                            version,
+                            known_migrations[version],
                         )
+                await connection.execute(
+                    "ALTER TABLE schema_migrations ALTER COLUMN checksum SET NOT NULL"
+                )
 
                 if created_pool:
                     await connection.execute(

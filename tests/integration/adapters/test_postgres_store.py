@@ -68,6 +68,76 @@ async def test_empty_database_initialization_is_repeatable_and_seeds_admin(
 
 
 @pytest.mark.asyncio
+async def test_migrations_record_checksums_and_reject_ddl_drift(store: PostgresStore) -> None:
+    async with store._require_pool().acquire() as connection:
+        migrations = await connection.fetch(
+            "SELECT version, checksum FROM schema_migrations ORDER BY version"
+        )
+
+        assert [row["version"] for row in migrations] == list(range(1, 11))
+        assert all(len(row["checksum"]) == 64 for row in migrations)
+
+        await connection.execute(
+            "UPDATE schema_migrations SET checksum = $1 WHERE version = 1", "0" * 64
+        )
+
+    with pytest.raises(RuntimeError, match="migration 1 checksum mismatch"):
+        await store.initialize()
+
+
+@pytest.mark.asyncio
+async def test_existing_migration_ledger_is_bootstrapped_once(store: PostgresStore) -> None:
+    async with store._require_pool().acquire() as connection:
+        await connection.execute(
+            "ALTER TABLE schema_migrations ALTER COLUMN checksum DROP NOT NULL"
+        )
+        await connection.execute("UPDATE schema_migrations SET checksum = NULL WHERE version = 1")
+
+    await store.initialize()
+
+    async with store._require_pool().acquire() as connection:
+        checksum = await connection.fetchval(
+            "SELECT checksum FROM schema_migrations WHERE version = 1"
+        )
+        nullable = await connection.fetchval(
+            """
+            SELECT is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'schema_migrations'
+              AND column_name = 'checksum'
+            """
+        )
+
+    assert len(checksum) == 64
+    assert nullable == "NO"
+
+
+@pytest.mark.asyncio
+async def test_initialization_rejects_schema_version_newer_than_code(store: PostgresStore) -> None:
+    async with store._require_pool().acquire() as connection:
+        await connection.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
+            999,
+            "0" * 64,
+        )
+
+    with pytest.raises(RuntimeError, match="unknown applied migration 999"):
+        await store.initialize()
+
+
+@pytest.mark.asyncio
+async def test_initialization_rejects_non_contiguous_migration_ledger(
+    store: PostgresStore,
+) -> None:
+    async with store._require_pool().acquire() as connection:
+        await connection.execute("DELETE FROM schema_migrations WHERE version = 2")
+
+    with pytest.raises(RuntimeError, match="non-contiguous migration ledger"):
+        await store.initialize()
+
+
+@pytest.mark.asyncio
 async def test_run_round_trip_preserves_execution_inputs(
     store: PostgresStore,
 ) -> None:
