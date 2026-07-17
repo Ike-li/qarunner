@@ -889,7 +889,8 @@ class SqliteStore:
                     "selected_files, selected_markers, "
                     "extra_args, executor_mode, timeout, created_by, created_at, env_json, "
                     "webhook_url "
-                    "FROM test_profiles WHERE tests_path = ? ORDER BY created_at DESC",
+                    "FROM test_profiles WHERE tests_path = ? "
+                    "ORDER BY created_at DESC, id DESC",
                     (tests_path,),
                 )
             else:
@@ -898,7 +899,7 @@ class SqliteStore:
                     "selected_files, selected_markers, "
                     "extra_args, executor_mode, timeout, created_by, created_at, env_json, "
                     "webhook_url "
-                    "FROM test_profiles ORDER BY created_at DESC"
+                    "FROM test_profiles ORDER BY created_at DESC, id DESC"
                 )
             rows = await cursor.fetchall()
         return [_row_to_profile(row) for row in rows]
@@ -1256,14 +1257,15 @@ class SqliteStore:
                 cursor = await db.execute(
                     "SELECT id, name, profile_id, cron_expression, enabled, timezone, "
                     "last_run_at, next_run_at, created_by, created_at "
-                    "FROM test_schedules WHERE profile_id = ? ORDER BY created_at DESC",
+                    "FROM test_schedules WHERE profile_id = ? "
+                    "ORDER BY created_at DESC, id DESC",
                     (profile_id,),
                 )
             else:
                 cursor = await db.execute(
                     "SELECT id, name, profile_id, cron_expression, enabled, timezone, "
                     "last_run_at, next_run_at, created_by, created_at "
-                    "FROM test_schedules ORDER BY created_at DESC"
+                    "FROM test_schedules ORDER BY created_at DESC, id DESC"
                 )
             rows = await cursor.fetchall()
         return [_row_to_schedule(row) for row in rows]

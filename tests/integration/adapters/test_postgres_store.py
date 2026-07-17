@@ -815,6 +815,30 @@ async def test_profile_list_is_newest_first_and_optionally_path_filtered(
 
 
 @pytest.mark.asyncio
+async def test_profile_list_has_stable_id_tie_break_for_equal_timestamps(
+    store: PostgresStore,
+) -> None:
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    for suffix in ["b", "a", "c"]:
+        await store.save_profile(
+            TestProfile(
+                id=f"profile-tie-{suffix}",
+                name=f"Profile {suffix}",
+                tests_path="suite-tie",
+                created_by="alice",
+                created_at=created_at,
+            )
+        )
+
+    expected = ["profile-tie-c", "profile-tie-b", "profile-tie-a"]
+
+    assert [profile.id for profile in await store.list_profiles()] == expected
+    assert [
+        profile.id for profile in await store.list_profiles(tests_path="suite-tie")
+    ] == expected
+
+
+@pytest.mark.asyncio
 async def test_profile_delete_and_missing_lookup_report_absence(store: PostgresStore) -> None:
     profile = TestProfile(
         id="profile-delete",
@@ -975,6 +999,39 @@ async def test_schedule_list_is_newest_first_and_optionally_profile_filtered(
     assert [
         schedule.id for schedule in await store.list_schedules(profile_id=first_profile.id)
     ] == ["schedule-older"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_has_stable_id_tie_break_for_equal_timestamps(
+    store: PostgresStore,
+) -> None:
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    profile = TestProfile(
+        id="schedule-tie-profile",
+        name="Schedule Tie Profile",
+        tests_path="suite-tie",
+        created_by="alice",
+        created_at=created_at,
+    )
+    await store.save_profile(profile)
+    for suffix in ["b", "a", "c"]:
+        await store.save_schedule(
+            TestSchedule(
+                id=f"schedule-tie-{suffix}",
+                name=f"Schedule {suffix}",
+                profile_id=profile.id,
+                cron_expression="0 1 * * *",
+                created_by="alice",
+                created_at=created_at,
+            )
+        )
+
+    expected = ["schedule-tie-c", "schedule-tie-b", "schedule-tie-a"]
+
+    assert [schedule.id for schedule in await store.list_schedules()] == expected
+    assert [
+        schedule.id for schedule in await store.list_schedules(profile_id=profile.id)
+    ] == expected
 
 
 @pytest.mark.asyncio

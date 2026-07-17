@@ -1028,13 +1028,13 @@ class PostgresStore:
                     SELECT *
                     FROM test_profiles
                     WHERE tests_path = $1
-                    ORDER BY created_at DESC
+                    ORDER BY created_at DESC, id DESC
                     """,
                     tests_path,
                 )
             else:
                 records = await connection.fetch(
-                    "SELECT * FROM test_profiles ORDER BY created_at DESC"
+                    "SELECT * FROM test_profiles ORDER BY created_at DESC, id DESC"
                 )
         return [_record_to_profile(record) for record in records]
 
@@ -1104,13 +1104,13 @@ class PostgresStore:
                     SELECT *
                     FROM test_schedules
                     WHERE profile_id = $1
-                    ORDER BY created_at DESC
+                    ORDER BY created_at DESC, id DESC
                     """,
                     profile_id,
                 )
             else:
                 records = await connection.fetch(
-                    "SELECT * FROM test_schedules ORDER BY created_at DESC"
+                    "SELECT * FROM test_schedules ORDER BY created_at DESC, id DESC"
                 )
         return [_record_to_schedule(record) for record in records]
 

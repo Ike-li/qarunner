@@ -428,6 +428,29 @@ async def test_profile_crud(store: SqliteStore) -> None:
     assert retrieved2 is None
 
 
+async def test_profile_list_has_stable_id_tie_break_for_equal_timestamps(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    for suffix in ["b", "a", "c"]:
+        await store.save_profile(
+            TestProfile(
+                id=f"profile-tie-{suffix}",
+                name=f"Profile {suffix}",
+                tests_path="tests/tie",
+                created_by="alice",
+                created_at=created_at,
+            )
+        )
+
+    expected = ["profile-tie-c", "profile-tie-b", "profile-tie-a"]
+
+    assert [profile.id for profile in await store.list_profiles()] == expected
+    assert [
+        profile.id for profile in await store.list_profiles(tests_path="tests/tie")
+    ] == expected
+
+
 async def test_ai_diagnosis_roundtrip_upsert_and_cascade(store: SqliteStore) -> None:
     run = _make_run(id="run-ai")
     await store.save(run)
@@ -534,6 +557,38 @@ async def test_schedule_crud_and_cascade(store: SqliteStore) -> None:
     # FK ON + ON DELETE CASCADE: sched-001 is deleted automatically
     retrieved_after_cascade = await store.get_schedule("sched-001")
     assert retrieved_after_cascade is None
+
+
+async def test_schedule_list_has_stable_id_tie_break_for_equal_timestamps(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    profile = TestProfile(
+        id="schedule-tie-profile",
+        name="Schedule Tie Profile",
+        tests_path="tests/tie",
+        created_by="alice",
+        created_at=created_at,
+    )
+    await store.save_profile(profile)
+    for suffix in ["b", "a", "c"]:
+        await store.save_schedule(
+            TestSchedule(
+                id=f"schedule-tie-{suffix}",
+                name=f"Schedule {suffix}",
+                profile_id=profile.id,
+                cron_expression="0 1 * * *",
+                created_by="alice",
+                created_at=created_at,
+            )
+        )
+
+    expected = ["schedule-tie-c", "schedule-tie-b", "schedule-tie-a"]
+
+    assert [schedule.id for schedule in await store.list_schedules()] == expected
+    assert [
+        schedule.id for schedule in await store.list_schedules(profile_id=profile.id)
+    ] == expected
 
 
 async def test_updating_a_profile_keeps_its_schedules(store: SqliteStore) -> None:
