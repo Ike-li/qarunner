@@ -529,7 +529,7 @@ class PostgresStore:
         return _record_to_run(record)
 
     async def list(self, limit: int | None = None) -> list[Run]:
-        query = "SELECT * FROM runs ORDER BY created_at DESC"
+        query = "SELECT * FROM runs ORDER BY created_at DESC, id DESC"
         async with self._require_pool().acquire() as connection:
             if limit is None:
                 records = await connection.fetch(query)

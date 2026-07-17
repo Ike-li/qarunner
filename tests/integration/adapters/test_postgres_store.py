@@ -185,6 +185,28 @@ async def test_run_list_is_newest_first_and_optionally_bounded(store: PostgresSt
 
 
 @pytest.mark.asyncio
+async def test_run_list_limit_has_stable_id_tie_break_for_equal_timestamps(
+    store: PostgresStore,
+) -> None:
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    for run_id in ["run-tie-b", "run-tie-a", "run-tie-c"]:
+        await store.save(
+            Run(
+                id=run_id,
+                status=RunStatus.QUEUED,
+                runner="pytest",
+                created_by="alice",
+                tests_path="suite/tests",
+                created_at=created_at,
+            )
+        )
+
+    runs = await store.list(limit=2)
+
+    assert [run.id for run in runs] == ["run-tie-c", "run-tie-b"]
+
+
+@pytest.mark.asyncio
 async def test_cancel_only_transitions_inflight_runs(store: PostgresStore) -> None:
     queued = Run(
         id="queued-run",

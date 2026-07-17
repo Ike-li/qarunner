@@ -150,6 +150,18 @@ async def test_list_respects_limit_newest_first(store: SqliteStore) -> None:
     assert [r.id for r in result] == ["run-2", "run-1"]  # newest 2, DESC order preserved
 
 
+async def test_list_limit_has_stable_id_tie_break_for_equal_timestamps(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    for run_id in ["run-tie-b", "run-tie-a", "run-tie-c"]:
+        await store.save(_make_run(id=run_id, created_at=created_at))
+
+    result = await store.list(limit=2)
+
+    assert [run.id for run in result] == ["run-tie-c", "run-tie-b"]
+
+
 async def test_save_with_summary(store: SqliteStore) -> None:
     summary = TestSummary(total=10, passed=8, failed=1, skipped=1, error=0, duration_ms=5000)
     run = _make_run(summary=summary, status=RunStatus.COMPLETED)

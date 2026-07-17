@@ -601,7 +601,7 @@ class SqliteStore:
         # of that user's runs) rely on this. Hot dashboard-facing endpoints
         # pass a bounding limit instead (PERF: SqliteStore.list() had no
         # ceiling at all, and was the shared data source for 5 of them).
-        query = f"SELECT {_RUN_COLUMNS} FROM runs ORDER BY created_at DESC"
+        query = f"SELECT {_RUN_COLUMNS} FROM runs ORDER BY created_at DESC, id DESC"
         params: tuple[int, ...] = ()
         if limit is not None:
             query += " LIMIT ?"
