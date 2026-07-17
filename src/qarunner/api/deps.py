@@ -86,7 +86,7 @@ def create_container(settings: Settings | None = None, *, store: Store | None = 
 
     if store is None:
         store = (
-            PostgresStore(cfg.database_url)
+            PostgresStore(cfg.database_url, schema=cfg.database_schema)
             if cfg.database_backend == "postgres"
             else SqliteStore(cfg.db_path)
         )

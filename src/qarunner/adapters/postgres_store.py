@@ -276,7 +276,11 @@ class PostgresStore:
                 """,
                 username,
             )
-        return None if record is None else dict(record)
+        if record is None:
+            return None
+        user = dict(record)
+        user["created_at"] = record["created_at"].isoformat()
+        return user
 
     async def create_user(self, username: str, password_hash: str, role: str) -> None:
         async with self._require_pool().acquire() as connection:
@@ -296,7 +300,14 @@ class PostgresStore:
             records = await connection.fetch(
                 "SELECT username, role, created_at FROM users ORDER BY username"
             )
-        return [dict(record) for record in records]
+        return [
+            {
+                "username": record["username"],
+                "role": record["role"],
+                "created_at": record["created_at"].isoformat(),
+            }
+            for record in records
+        ]
 
     async def update_password(self, username: str, password_hash: str) -> bool:
         async with self._require_pool().acquire() as connection:

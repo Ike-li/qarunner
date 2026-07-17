@@ -15,6 +15,7 @@ _SETTINGS_ENV_KEYS = [
     "QARUNNER_DATABASE_BACKEND",
     "QARUNNER_DB_PATH",
     "QARUNNER_DATABASE_URL",
+    "QARUNNER_DATABASE_SCHEMA",
     "QARUNNER_ALLURE_BIN",
     "QARUNNER_EXECUTABLE",
     "QARUNNER_DEFAULT_TIMEOUT_SECONDS",
@@ -44,6 +45,7 @@ class TestSettings:
         assert s.database_backend == "sqlite"
         assert s.db_path == "./artifacts/qarunner.db"
         assert s.database_url == ""
+        assert s.database_schema == "public"
         assert s.allure_bin == "allure"
         assert s.executable == ""
         assert s.default_timeout_seconds == 1800

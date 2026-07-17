@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     database_backend: Literal["sqlite", "postgres"] = "sqlite"
     db_path: str = "./artifacts/qarunner.db"
     database_url: str = ""
+    database_schema: str = "public"
     allure_bin: str = "allure"
     executable: str = ""  # empty → sys.executable at runtime
     default_timeout_seconds: int = 1800

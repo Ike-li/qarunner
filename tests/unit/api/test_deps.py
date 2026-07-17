@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from qarunner.adapters.anthropic_analyzer import AnthropicFailureAnalyzer
 from qarunner.adapters.openai_analyzer import OpenAiFailureAnalyzer
 from qarunner.adapters.postgres_store import PostgresStore
@@ -16,6 +18,7 @@ def test_create_container_returns_container() -> None:
     assert c.orchestrator is not None
     assert isinstance(c.store, PostgresStore)
     assert c.store._database_url == c.settings.database_url
+    assert c.store._schema == c.settings.database_schema
 
 
 def test_create_container_with_custom_settings(monkeypatch) -> None:
@@ -35,6 +38,17 @@ def test_create_container_keeps_sqlite_when_postgres_is_not_selected() -> None:
     c = create_container(cfg)
 
     assert isinstance(c.store, SqliteStore)
+
+
+def test_create_container_rejects_unsafe_postgres_schema() -> None:
+    cfg = Settings(
+        database_backend="postgres",
+        database_url="postgresql://unit-test.invalid/qarunner",
+        database_schema="public; DROP SCHEMA",
+    )
+
+    with pytest.raises(ValueError, match="safe lowercase identifier"):
+        create_container(cfg)
 
 
 def test_create_container_uses_sys_executable_by_default() -> None:

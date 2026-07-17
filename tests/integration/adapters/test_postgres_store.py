@@ -1368,7 +1368,10 @@ async def test_user_create_and_list_round_trip(store: PostgresStore) -> None:
     assert alice is not None
     assert alice["password_hash"] == "alice-password-hash"
     assert alice["role"] == "user"
-    assert [user["username"] for user in await store.list_users()] == ["admin", "alice"]
+    assert isinstance(alice["created_at"], str)
+    users = await store.list_users()
+    assert [user["username"] for user in users] == ["admin", "alice"]
+    assert all(isinstance(user["created_at"], str) for user in users)
 
 
 @pytest.mark.asyncio
