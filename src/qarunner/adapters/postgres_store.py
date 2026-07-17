@@ -148,6 +148,14 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             ON run_test_cases(tests_path, suite, name, created_at)
         """,
     ),
+    (
+        8,
+        """
+        CREATE INDEX idx_runs_running_worker
+            ON runs(worker_node_id)
+            WHERE status = 'running'
+        """,
+    ),
 )
 _SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
 _MAX_CASE_MESSAGE_CHARS = 8192
@@ -428,6 +436,23 @@ class PostgresStore:
                 created_by,
             )
         return int(count)
+
+    async def mark_interrupted_runs(self, worker_node_id: str | None = None) -> int:
+        query = """
+            UPDATE runs
+            SET status = 'failed',
+                error = 'interrupted by server restart',
+                finished_at = now()
+            WHERE status = 'running'
+        """
+        parameters: tuple[str, ...] = ()
+        if worker_node_id is not None:
+            query += " AND worker_node_id = $1"
+            parameters = (worker_node_id,)
+        query += " RETURNING id"
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(query, *parameters)
+        return len(records)
 
     async def delete_run(self, run_id: str) -> bool:
         async with self._require_pool().acquire() as connection:

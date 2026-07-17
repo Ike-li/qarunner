@@ -1053,6 +1053,65 @@ async def test_flaky_count_has_stable_tie_break_for_equal_timestamps(
 
 
 @pytest.mark.asyncio
+async def test_recovery_fails_only_running_runs_and_reports_count(store: PostgresStore) -> None:
+    base = Run(
+        id="recovery-running",
+        status=RunStatus.RUNNING,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    await store.save(base)
+    await store.save(base.model_copy(update={"id": "recovery-queued", "status": RunStatus.QUEUED}))
+    await store.save(
+        base.model_copy(update={"id": "recovery-completed", "status": RunStatus.COMPLETED})
+    )
+    await store.save(base.model_copy(update={"id": "recovery-failed", "status": RunStatus.FAILED}))
+
+    assert await store.mark_interrupted_runs() == 1
+
+    recovered = await store.get("recovery-running")
+    assert recovered.status is RunStatus.FAILED
+    assert recovered.error == "interrupted by server restart"
+    assert recovered.finished_at is not None
+    assert (await store.get("recovery-queued")).status is RunStatus.QUEUED
+    assert (await store.get("recovery-completed")).status is RunStatus.COMPLETED
+    assert (await store.get("recovery-failed")).status is RunStatus.FAILED
+    assert await store.mark_interrupted_runs() == 0
+
+
+@pytest.mark.asyncio
+async def test_recovery_can_be_scoped_to_one_worker_node(store: PostgresStore) -> None:
+    base = Run(
+        id="recovery-node-a-running",
+        status=RunStatus.RUNNING,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        worker_node_id="node-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    await store.save(base)
+    await store.save(
+        base.model_copy(update={"id": "recovery-node-b-running", "worker_node_id": "node-b"})
+    )
+    await store.save(
+        base.model_copy(update={"id": "recovery-unassigned-running", "worker_node_id": None})
+    )
+    await store.save(
+        base.model_copy(update={"id": "recovery-node-a-queued", "status": RunStatus.QUEUED})
+    )
+
+    assert await store.mark_interrupted_runs(worker_node_id="node-a") == 1
+
+    assert (await store.get("recovery-node-a-running")).status is RunStatus.FAILED
+    assert (await store.get("recovery-node-b-running")).status is RunStatus.RUNNING
+    assert (await store.get("recovery-unassigned-running")).status is RunStatus.RUNNING
+    assert (await store.get("recovery-node-a-queued")).status is RunStatus.QUEUED
+
+
+@pytest.mark.asyncio
 async def test_user_create_and_list_round_trip(store: PostgresStore) -> None:
     await store.create_user("alice", "alice-password-hash", "user")
 
