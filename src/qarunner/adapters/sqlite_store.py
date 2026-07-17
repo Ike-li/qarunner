@@ -755,7 +755,7 @@ class SqliteStore:
                     cursor = await db.execute(
                         "SELECT created_at, status FROM run_test_cases "
                         "WHERE tests_path = ? AND suite = ? AND name = ? "
-                        "ORDER BY created_at DESC LIMIT ?",
+                        "ORDER BY created_at DESC, run_id DESC, id DESC LIMIT ?",
                         (tests_path, suite, name, limit),
                     )
                 else:
@@ -772,7 +772,7 @@ class SqliteStore:
                         "SELECT c.created_at, c.status FROM run_test_cases c "
                         "JOIN runs r ON c.run_id = r.id "
                         f"WHERE {' AND '.join(clauses)} "
-                        "ORDER BY c.created_at DESC LIMIT ?",
+                        "ORDER BY c.created_at DESC, c.run_id DESC, c.id DESC LIMIT ?",
                         params,
                     )
                 rows = await cursor.fetchall()
@@ -812,7 +812,7 @@ class SqliteStore:
                 "JOIN runs r ON r.id = c.run_id "
                 "WHERE r.status = 'completed' AND c.created_at >= ? "
                 + owner_filter
-                + " ORDER BY c.tests_path, c.suite, c.name, c.created_at",
+                + " ORDER BY c.tests_path, c.suite, c.name, c.created_at, c.run_id, c.id",
                 params,
             )
             rows = await cursor.fetchall()

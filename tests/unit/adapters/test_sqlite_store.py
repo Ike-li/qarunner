@@ -1333,6 +1333,42 @@ async def test_get_case_history_oldest_first(store: SqliteStore) -> None:
     assert [p.status for p in hist] == ["passed", "failed", "passed"]  # oldest-first
 
 
+async def test_get_case_history_has_stable_tie_break_at_limit_boundary(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    for run_id, status in [
+        ("history-tie-b", "failed"),
+        ("history-tie-a", "skipped"),
+        ("history-tie-c", "passed"),
+    ]:
+        run = _make_run(
+            id=run_id,
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=created_at,
+        )
+        await store.save(run)
+        await store.save_cases(
+            run.id,
+            run.tests_path,
+            run.created_at,
+            [TestCaseResult(suite="s", name="tie", status=status, duration_ms=0)],
+        )
+
+    expected = ["failed", "passed"]
+
+    assert [
+        point.status for point in await store.get_case_history("suite_a", "s", "tie", limit=2)
+    ] == expected
+    assert [
+        point.status
+        for point in await store.get_case_history(
+            "suite_a", "s", "tie", limit=2, created_by="test_user"
+        )
+    ] == expected
+
+
 async def test_get_case_history_owner_scoped(store: SqliteStore) -> None:
     for rid, owner in [("ha", "alice"), ("hb", "bob")]:
         run = _make_run(
@@ -1473,6 +1509,34 @@ async def test_count_flaky_tests_detects_flips(store: SqliteStore) -> None:
             run.created_at,
             [TestCaseResult(suite="s", name="t", status=st, duration_ms=0)],
         )
+    assert await store.count_flaky_tests(days=30) == 1
+
+
+async def test_flaky_count_has_stable_tie_break_for_equal_timestamps(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime.now(UTC) - timedelta(hours=1)
+    statuses = {
+        "a": "passed",
+        "b": "failed",
+        "c": "passed",
+        "d": "failed",
+    }
+    for suffix in ["a", "c", "b", "d"]:
+        run = _make_run(
+            id=f"flaky-tie-{suffix}",
+            tests_path="suite_a",
+            status=RunStatus.COMPLETED,
+            created_at=created_at,
+        )
+        await store.save(run)
+        await store.save_cases(
+            run.id,
+            run.tests_path,
+            run.created_at,
+            [TestCaseResult(suite="s", name="tie", status=statuses[suffix], duration_ms=0)],
+        )
+
     assert await store.count_flaky_tests(days=30) == 1
 
 

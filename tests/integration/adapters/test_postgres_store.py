@@ -1383,7 +1383,7 @@ async def test_case_history_returns_recent_window_oldest_first(store: PostgresSt
 @pytest.mark.asyncio
 async def test_case_history_has_stable_tie_break_at_limit_boundary(store: PostgresStore) -> None:
     created_at = datetime(2026, 7, 17, tzinfo=UTC)
-    for suffix, status in [("a", "passed"), ("b", "failed"), ("c", "passed")]:
+    for suffix, status in [("b", "failed"), ("a", "skipped"), ("c", "passed")]:
         run = Run(
             id=f"history-tie-{suffix}",
             status=RunStatus.COMPLETED,
@@ -1525,8 +1525,8 @@ async def test_flaky_count_has_stable_tie_break_for_equal_timestamps(
     created_at = datetime.now(UTC) - timedelta(hours=1)
     for suffix, status in [
         ("a", "passed"),
-        ("b", "failed"),
         ("c", "passed"),
+        ("b", "failed"),
         ("d", "failed"),
     ]:
         run = Run(
