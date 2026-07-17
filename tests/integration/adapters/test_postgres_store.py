@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import asyncpg
@@ -18,6 +18,7 @@ from qarunner.models import (
     Run,
     RunStatus,
     TestProfile,
+    TestSchedule,
     TestSuite,
     TestSummary,
 )
@@ -459,6 +460,259 @@ async def test_profile_delete_and_missing_lookup_report_absence(store: PostgresS
     assert await store.get_profile(profile.id) is None
     assert await store.delete_profile(profile.id) is False
     assert await store.get_profile("missing-profile") is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_round_trip_preserves_cron_configuration(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="schedule-profile",
+        name="Schedule Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="schedule-1",
+        name="Nightly",
+        profile_id=profile.id,
+        cron_expression="0 2 * * *",
+        enabled=False,
+        timezone="America/Chicago",
+        last_run_at=datetime(2026, 7, 16, 7, tzinfo=UTC),
+        next_run_at=datetime(2026, 7, 17, 7, tzinfo=UTC),
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+
+    await store.save_schedule(schedule)
+
+    assert await store.get_schedule(schedule.id) == schedule
+
+
+@pytest.mark.asyncio
+async def test_schedule_claim_elects_one_leader_per_fire_time(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="claim-profile",
+        name="Claim Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="claim-schedule",
+        name="Every Five Minutes",
+        profile_id=profile.id,
+        cron_expression="*/5 * * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    await store.save_schedule(schedule)
+    fire_time = datetime(2026, 7, 17, 12, tzinfo=UTC)
+
+    winners = await asyncio.gather(
+        *(store.claim_schedule_run(schedule.id, fire_time) for _ in range(5))
+    )
+
+    assert winners.count(True) == 1
+    assert await store.claim_schedule_run(schedule.id, fire_time) is False
+    assert await store.claim_schedule_run(schedule.id, fire_time - timedelta(minutes=5)) is False
+    assert await store.claim_schedule_run(schedule.id, fire_time + timedelta(minutes=5)) is True
+    assert await store.claim_schedule_run("missing-schedule", fire_time) is False
+    persisted = await store.get_schedule(schedule.id)
+    assert persisted is not None
+    assert persisted.last_run_at == fire_time + timedelta(minutes=5)
+
+
+@pytest.mark.asyncio
+async def test_schedule_save_preserves_claim_owned_last_run_at(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="preserve-profile",
+        name="Preserve Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="preserve-schedule",
+        name="Original",
+        profile_id=profile.id,
+        cron_expression="*/5 * * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    await store.save_schedule(schedule)
+    fire_time = datetime(2026, 7, 17, 12, tzinfo=UTC)
+    assert await store.claim_schedule_run(schedule.id, fire_time) is True
+
+    stale_update = schedule.model_copy(
+        update={
+            "name": "Renamed",
+            "enabled": False,
+            "next_run_at": fire_time + timedelta(minutes=5),
+        }
+    )
+    await store.save_schedule(stale_update)
+
+    persisted = await store.get_schedule(schedule.id)
+    assert persisted is not None
+    assert persisted.name == "Renamed"
+    assert persisted.enabled is False
+    assert persisted.next_run_at == fire_time + timedelta(minutes=5)
+    assert persisted.last_run_at == fire_time
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_is_newest_first_and_optionally_profile_filtered(
+    store: PostgresStore,
+) -> None:
+    first_profile = TestProfile(
+        id="schedule-profile-a",
+        name="Profile A",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    second_profile = first_profile.model_copy(
+        update={"id": "schedule-profile-b", "name": "Profile B"}
+    )
+    older = TestSchedule(
+        id="schedule-older",
+        name="Older",
+        profile_id=first_profile.id,
+        cron_expression="0 1 * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    newer = older.model_copy(
+        update={
+            "id": "schedule-newer",
+            "name": "Newer",
+            "profile_id": second_profile.id,
+            "created_at": datetime(2026, 7, 17, tzinfo=UTC),
+        }
+    )
+    await store.save_profile(first_profile)
+    await store.save_profile(second_profile)
+    await store.save_schedule(older)
+    await store.save_schedule(newer)
+
+    assert [schedule.id for schedule in await store.list_schedules()] == [
+        "schedule-newer",
+        "schedule-older",
+    ]
+    assert [
+        schedule.id for schedule in await store.list_schedules(profile_id=first_profile.id)
+    ] == ["schedule-older"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_next_run_update_is_narrow_and_missing_safe(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="next-run-profile",
+        name="Next Run Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="next-run-schedule",
+        name="Next Run",
+        profile_id=profile.id,
+        cron_expression="0 1 * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    await store.save_schedule(schedule)
+    next_run_at = datetime(2026, 7, 18, tzinfo=UTC)
+
+    await store.update_schedule_next_run(schedule.id, next_run_at)
+
+    persisted = await store.get_schedule(schedule.id)
+    assert persisted == schedule.model_copy(update={"next_run_at": next_run_at})
+    await store.update_schedule_next_run(schedule.id, None)
+    assert await store.get_schedule(schedule.id) == schedule
+    await store.update_schedule_next_run("missing-schedule", next_run_at)
+    assert await store.get_schedule("missing-schedule") is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_delete_and_missing_lookup_report_absence(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="delete-schedule-profile",
+        name="Delete Schedule Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="delete-schedule",
+        name="Delete Schedule",
+        profile_id=profile.id,
+        cron_expression="0 1 * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    await store.save_schedule(schedule)
+
+    assert await store.delete_schedule(schedule.id) is True
+    assert await store.get_schedule(schedule.id) is None
+    assert await store.delete_schedule(schedule.id) is False
+    assert await store.get_schedule("missing-schedule") is None
+
+
+@pytest.mark.asyncio
+async def test_profile_delete_cascades_to_bound_schedules(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="cascade-profile",
+        name="Cascade Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="cascade-schedule",
+        name="Cascade Schedule",
+        profile_id=profile.id,
+        cron_expression="0 1 * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    await store.save_schedule(schedule)
+
+    assert await store.delete_profile(profile.id) is True
+
+    assert await store.get_schedule(schedule.id) is None
+
+
+@pytest.mark.asyncio
+async def test_profile_upsert_keeps_bound_schedules(store: PostgresStore) -> None:
+    profile = TestProfile(
+        id="upsert-profile",
+        name="Original Profile",
+        tests_path="suite-a",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    schedule = TestSchedule(
+        id="upsert-profile-schedule",
+        name="Bound Schedule",
+        profile_id=profile.id,
+        cron_expression="0 1 * * *",
+        created_by="alice",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    await store.save_profile(profile)
+    await store.save_schedule(schedule)
+
+    await store.save_profile(profile.model_copy(update={"name": "Renamed Profile"}))
+
+    assert await store.get_schedule(schedule.id) == schedule
 
 
 @pytest.mark.asyncio

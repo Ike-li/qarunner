@@ -16,6 +16,7 @@ from qarunner.models import (
     Run,
     RunStatus,
     TestProfile,
+    TestSchedule,
     TestSuite,
     TestSummary,
 )
@@ -105,6 +106,23 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             created_at TIMESTAMPTZ NOT NULL,
             env_json JSONB NOT NULL DEFAULT '{}',
             webhook_url TEXT
+        )
+        """,
+    ),
+    (
+        6,
+        """
+        CREATE TABLE test_schedules (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            profile_id TEXT NOT NULL REFERENCES test_profiles(id) ON DELETE CASCADE,
+            cron_expression TEXT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            timezone TEXT NOT NULL DEFAULT 'UTC',
+            last_run_at TIMESTAMPTZ,
+            next_run_at TIMESTAMPTZ,
+            created_by TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
         )
         """,
     ),
@@ -602,6 +620,92 @@ class PostgresStore:
             )
         return status == "DELETE 1"
 
+    async def save_schedule(self, schedule: TestSchedule) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO test_schedules (
+                    id, name, profile_id, cron_expression, enabled, timezone, last_run_at,
+                    next_run_at, created_by, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (id) DO UPDATE SET
+                    name = excluded.name,
+                    profile_id = excluded.profile_id,
+                    cron_expression = excluded.cron_expression,
+                    enabled = excluded.enabled,
+                    timezone = excluded.timezone,
+                    next_run_at = excluded.next_run_at,
+                    created_by = excluded.created_by,
+                    created_at = excluded.created_at
+                """,
+                schedule.id,
+                schedule.name,
+                schedule.profile_id,
+                schedule.cron_expression,
+                schedule.enabled,
+                schedule.timezone,
+                schedule.last_run_at,
+                schedule.next_run_at,
+                schedule.created_by,
+                schedule.created_at,
+            )
+
+    async def get_schedule(self, schedule_id: str) -> TestSchedule | None:
+        async with self._require_pool().acquire() as connection:
+            record = await connection.fetchrow(
+                "SELECT * FROM test_schedules WHERE id = $1", schedule_id
+            )
+        return None if record is None else _record_to_schedule(record)
+
+    async def claim_schedule_run(self, schedule_id: str, fire_time: datetime) -> bool:
+        normalized_fire_time = fire_time.astimezone(UTC)
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                """
+                UPDATE test_schedules
+                SET last_run_at = $2
+                WHERE id = $1 AND (last_run_at IS NULL OR last_run_at < $2)
+                """,
+                schedule_id,
+                normalized_fire_time,
+            )
+        return status == "UPDATE 1"
+
+    async def list_schedules(self, profile_id: str | None = None) -> list[TestSchedule]:
+        async with self._require_pool().acquire() as connection:
+            if profile_id:
+                records = await connection.fetch(
+                    """
+                    SELECT *
+                    FROM test_schedules
+                    WHERE profile_id = $1
+                    ORDER BY created_at DESC
+                    """,
+                    profile_id,
+                )
+            else:
+                records = await connection.fetch(
+                    "SELECT * FROM test_schedules ORDER BY created_at DESC"
+                )
+        return [_record_to_schedule(record) for record in records]
+
+    async def update_schedule_next_run(
+        self, schedule_id: str, next_run_at: datetime | None
+    ) -> None:
+        async with self._require_pool().acquire() as connection:
+            await connection.execute(
+                "UPDATE test_schedules SET next_run_at = $2 WHERE id = $1",
+                schedule_id,
+                next_run_at,
+            )
+
+    async def delete_schedule(self, schedule_id: str) -> bool:
+        async with self._require_pool().acquire() as connection:
+            status = await connection.execute(
+                "DELETE FROM test_schedules WHERE id = $1", schedule_id
+            )
+        return status == "DELETE 1"
+
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -656,4 +760,19 @@ def _record_to_profile(record: asyncpg.Record) -> TestProfile:
         created_at=record["created_at"],
         env=json.loads(record["env_json"]),
         webhook_url=record["webhook_url"],
+    )
+
+
+def _record_to_schedule(record: asyncpg.Record) -> TestSchedule:
+    return TestSchedule(
+        id=record["id"],
+        name=record["name"],
+        profile_id=record["profile_id"],
+        cron_expression=record["cron_expression"],
+        enabled=record["enabled"],
+        timezone=record["timezone"],
+        last_run_at=record["last_run_at"],
+        next_run_at=record["next_run_at"],
+        created_by=record["created_by"],
+        created_at=record["created_at"],
     )
