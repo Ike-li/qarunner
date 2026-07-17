@@ -1218,8 +1218,8 @@ async def test_claim_schedule_run_leader_election(store: SqliteStore) -> None:
     await store.save_schedule(schedule)
 
     tick = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-    # First replica wins this tick; a second firing for the same tick loses.
-    assert await store.claim_schedule_run("s-claim", tick) is True
+    winners = await asyncio.gather(*(store.claim_schedule_run("s-claim", tick) for _ in range(5)))
+    assert winners.count(True) == 1
     assert await store.claim_schedule_run("s-claim", tick) is False
     # An earlier tick (e.g. backward clock skew) also loses.
     assert await store.claim_schedule_run("s-claim", tick - timedelta(minutes=5)) is False
@@ -1868,6 +1868,31 @@ async def test_dequeue_next_queued_returns_oldest_fifo(store: SqliteStore) -> No
     assert first == "a", f"expected oldest run 'a', got {first!r}"
     second = await store.dequeue_next_queued()
     assert second == "b", f"expected second run 'b', got {second!r}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_dequeue_claims_each_queued_run_once(store: SqliteStore) -> None:
+    for index in range(3):
+        await store.save(
+            _make_run(
+                id=f"queued-{index}",
+                status=RunStatus.QUEUED,
+                created_at=datetime(2026, 7, 17, 0, 0, index, tzinfo=UTC),
+            )
+        )
+
+    assert await store.dequeue_next_queued() == "queued-0"
+    concurrent = await asyncio.gather(
+        store.dequeue_next_queued(),
+        store.dequeue_next_queued(),
+        store.dequeue_next_queued(),
+    )
+
+    assert sorted(value for value in concurrent if value is not None) == ["queued-1", "queued-2"]
+    assert concurrent.count(None) == 1
+    claimed = [await store.get(f"queued-{index}") for index in range(3)]
+    assert all(run.status is RunStatus.RUNNING for run in claimed)
+    assert all(run.started_at is not None for run in claimed)
 
 
 @pytest.mark.asyncio

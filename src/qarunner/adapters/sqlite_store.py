@@ -235,7 +235,9 @@ class SqliteStore:
         self._ai_diagnosis_save_lock = asyncio.Lock()
         self._admin_mutation_lock = asyncio.Lock()
         self._case_save_lock = asyncio.Lock()
+        self._dequeue_lock = asyncio.Lock()
         self._inflight_create_lock = asyncio.Lock()
+        self._schedule_claim_lock = asyncio.Lock()
         if db_path == ":memory:":
             self._db_path = f"file:qarunner_mem_{uuid.uuid4().hex}?mode=memory&cache=shared"
             self._uri = True
@@ -1158,7 +1160,7 @@ class SqliteStore:
         round-trip (SQLite ≥ 3.35).  Returns None when no QUEUED run exists.
         """
         now_iso = datetime.now(UTC).isoformat()
-        async with self._connect() as db:
+        async with self._dequeue_lock, self._connect() as db:
             cursor = await db.execute(
                 "UPDATE runs SET status = ?, started_at = ? "
                 "WHERE id = ("
@@ -1229,7 +1231,7 @@ class SqliteStore:
         caller won and should create the run.
         """
         fire_iso = fire_time.astimezone(UTC).isoformat()
-        async with self._connect() as db:
+        async with self._schedule_claim_lock, self._connect() as db:
             cursor = await db.execute(
                 "UPDATE test_schedules SET last_run_at = ? "
                 "WHERE id = ? AND (last_run_at IS NULL OR last_run_at < ?)",
