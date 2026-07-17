@@ -998,7 +998,7 @@ class SqliteStore:
         async with self._connect() as db:
             cursor = await db.execute(
                 "SELECT id, name, type, created_by, created_at FROM credentials "
-                "ORDER BY created_at"
+                "ORDER BY created_at ASC, id ASC"
             )
             rows = await cursor.fetchall()
         return [

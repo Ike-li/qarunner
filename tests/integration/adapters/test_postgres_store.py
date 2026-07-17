@@ -728,6 +728,30 @@ async def test_credential_list_is_created_ordered_and_contains_only_metadata(
 
 
 @pytest.mark.asyncio
+async def test_credential_list_has_stable_id_tie_break_for_equal_timestamps(
+    store: PostgresStore,
+) -> None:
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    for suffix in ["b", "c", "a"]:
+        await store.save_credential(
+            Credential(
+                id=f"credential-tie-{suffix}",
+                name=f"Token {suffix}",
+                type="https_token",
+                created_by="alice",
+                created_at=created_at,
+            ),
+            f"ENC(secret-{suffix})",
+        )
+
+    assert [credential.id for credential in await store.list_credentials()] == [
+        "credential-tie-a",
+        "credential-tie-b",
+        "credential-tie-c",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_credential_delete_and_missing_reads_report_absence(store: PostgresStore) -> None:
     credential = Credential(
         id="credential-delete",

@@ -278,6 +278,29 @@ async def test_credential_crud(store: SqliteStore) -> None:
     assert await store.delete_credential("cred-1") is False
 
 
+async def test_credential_list_has_stable_id_tie_break_for_equal_timestamps(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime(2026, 6, 20, tzinfo=UTC)
+    for suffix in ["b", "c", "a"]:
+        await store.save_credential(
+            Credential(
+                id=f"credential-tie-{suffix}",
+                name=f"Token {suffix}",
+                type="https_token",
+                created_by="alice",
+                created_at=created_at,
+            ),
+            f"ENC(secret-{suffix})",
+        )
+
+    assert [credential.id for credential in await store.list_credentials()] == [
+        "credential-tie-a",
+        "credential-tie-b",
+        "credential-tie-c",
+    ]
+
+
 async def test_user_delete_and_update(store: SqliteStore) -> None:
     await store.create_user("dave", "h1", "user")
 

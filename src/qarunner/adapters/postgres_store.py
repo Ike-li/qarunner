@@ -958,7 +958,7 @@ class PostgresStore:
                 """
                 SELECT id, name, type, created_by, created_at
                 FROM credentials
-                ORDER BY created_at
+                ORDER BY created_at ASC, id ASC
                 """
             )
         return [Credential.model_validate(dict(record)) for record in records]
