@@ -16,6 +16,7 @@ _SETTINGS_ENV_KEYS = [
     "QARUNNER_DB_PATH",
     "QARUNNER_DATABASE_URL",
     "QARUNNER_DATABASE_SCHEMA",
+    "QARUNNER_DATABASE_HEALTH_TIMEOUT_SECONDS",
     "QARUNNER_ALLURE_BIN",
     "QARUNNER_EXECUTABLE",
     "QARUNNER_DEFAULT_TIMEOUT_SECONDS",
@@ -49,6 +50,7 @@ class TestSettings:
         assert s.allure_bin == "allure"
         assert s.executable == ""
         assert s.default_timeout_seconds == 1800
+        assert s.database_health_timeout_seconds == 2.0
         assert s.max_concurrency == 4
         assert s.flaky_min_observations == 4
         assert s.flaky_flip_threshold == 3

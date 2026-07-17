@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     db_path: str = "./artifacts/qarunner.db"
     database_url: str = ""
     database_schema: str = "public"
+    database_health_timeout_seconds: float = Field(default=2.0, gt=0)
     allure_bin: str = "allure"
     executable: str = ""  # empty → sys.executable at runtime
     default_timeout_seconds: int = 1800

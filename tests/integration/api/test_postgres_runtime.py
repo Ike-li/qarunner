@@ -166,3 +166,37 @@ def test_postgres_health_recovers_after_connection_is_terminated(
     assert recovered.json() == {"status": "ok"}
     assert len(terminated_pids) == 1
     assert replacement_pid != terminated_pids[0]
+
+
+def test_postgres_health_timeout_cancels_query_without_poisoning_pool(
+    postgres_schema: tuple[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_url, schema = postgres_schema
+    container = create_container(
+        Settings(
+            database_backend="postgres",
+            database_url=database_url,
+            database_schema=schema,
+            database_health_timeout_seconds=0.01,
+            crash_recovery_on_startup=False,
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path),
+        )
+    )
+    assert isinstance(container.store, PostgresStore)
+    original_get_user = container.store.get_user
+
+    async def slow_get_user(_username: str) -> None:
+        async with container.store._require_pool().acquire() as connection:
+            await connection.execute("SELECT pg_sleep(0.1)")
+
+    with TestClient(create_app(container)) as client:
+        monkeypatch.setattr(container.store, "get_user", slow_get_user)
+        timed_out = client.get("/health")
+        monkeypatch.setattr(container.store, "get_user", original_get_user)
+
+        recovered = client.get("/health")
+
+    assert timed_out.status_code == 503
+    assert recovered.status_code == 200
+    assert recovered.json() == {"status": "ok"}

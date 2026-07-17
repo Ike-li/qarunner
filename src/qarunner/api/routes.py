@@ -415,7 +415,10 @@ async def health(request: Request) -> dict[str, str]:
     """
     container = request.app.state.container
     try:
-        await container.store.get_user("__health_probe__")
+        await asyncio.wait_for(
+            container.store.get_user("__health_probe__"),
+            timeout=container.settings.database_health_timeout_seconds,
+        )
     except Exception as exc:
         logger.warning("Health probe failed: database unreachable", exc_info=True)
         raise HTTPException(

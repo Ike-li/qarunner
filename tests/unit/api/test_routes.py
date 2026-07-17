@@ -533,6 +533,31 @@ def test_health_db_unavailable_returns_503(monkeypatch: pytest.MonkeyPatch) -> N
     assert resp.status_code == 503
 
 
+def test_health_db_timeout_returns_503_and_cancels_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancelled = False
+    settings = Settings(database_health_timeout_seconds=0.01)
+    container = _make_container(settings=settings)
+
+    async def _hang(_username: str) -> None:
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    monkeypatch.setattr(container.store, "get_user", _hang)
+    app = create_app(container)
+    with TestClient(app) as client:
+        resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "database unavailable"
+    assert cancelled is True
+
+
 # ── POST /runs ─────────────────────────────────────────────────────────
 
 
