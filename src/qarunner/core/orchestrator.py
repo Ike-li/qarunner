@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from qarunner.core.paths import safe_subpath
 from qarunner.core.runners.base import BuildContext
-from qarunner.errors import RunnerError, UnsafeArguments
+from qarunner.errors import InflightRunLimitExceeded, RunnerError, UnsafeArguments
 from qarunner.models import (
     CollectResult,
     ProcessResult,
@@ -217,7 +217,11 @@ class RunOrchestrator:
     # ── create ────────────────────────────────────────────────────────────
 
     async def create(
-        self, req: RunRequest, created_by: str = "system", profile_id: str | None = None
+        self,
+        req: RunRequest,
+        created_by: str = "system",
+        profile_id: str | None = None,
+        inflight_limit: int | None = None,
     ) -> Run:
         """Create a new run, persist it, and schedule background execution."""
         # 1. Validate runner
@@ -248,7 +252,10 @@ class RunOrchestrator:
             worker_node_id=self._worker_node_id,
             profile_id=profile_id,
         )
-        await self._store.save(run)
+        if inflight_limit is None:
+            await self._store.save(run)
+        elif not await self._store.create_if_below_inflight_limit(run, inflight_limit):
+            raise InflightRunLimitExceeded
 
         # 4. Signal the persistent scheduler (poller picks up from DB/store)
         self._scheduler.enqueue(run_id)

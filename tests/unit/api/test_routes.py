@@ -20,7 +20,7 @@ from qarunner.config import Settings
 from qarunner.core.login_throttle import LoginThrottle
 from qarunner.core.profile_service import ProfileService
 from qarunner.core.schedule_service import ScheduleService
-from qarunner.errors import RunNotFound, UnknownRunner, UnsafePath
+from qarunner.errors import InflightRunLimitExceeded, RunNotFound, UnknownRunner, UnsafePath
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
@@ -169,6 +169,12 @@ class FakeStore:
 
     async def save(self, run: Run) -> None:
         self._runs[run.id] = run
+
+    async def create_if_below_inflight_limit(self, run: Run, limit: int) -> bool:
+        if await self.count_inflight_runs(run.created_by) >= limit:
+            return False
+        self._runs[run.id] = run
+        return True
 
     async def get(self, run_id: str) -> Run:
         try:
@@ -426,7 +432,13 @@ class FakeOrchestrator:
     last_req: RunRequest | None = None
     last_profile_id: str | None = None
 
-    async def create(self, req: RunRequest, created_by: str, profile_id: str | None = None) -> Run:
+    async def create(
+        self,
+        req: RunRequest,
+        created_by: str,
+        profile_id: str | None = None,
+        inflight_limit: int | None = None,
+    ) -> Run:
         if self.raise_unknown_runner:
             raise UnknownRunner(req.runner)
         if self.raise_unsafe_path:
@@ -448,7 +460,10 @@ class FakeOrchestrator:
             env=req.env,
             profile_id=profile_id,
         )
-        await self.store.save(run)
+        if inflight_limit is None:
+            await self.store.save(run)
+        elif not await self.store.create_if_below_inflight_limit(run, inflight_limit):
+            raise InflightRunLimitExceeded
         return run
 
     async def drain(self, timeout: float | None = None) -> None:

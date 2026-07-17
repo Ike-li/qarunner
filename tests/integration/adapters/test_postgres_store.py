@@ -224,6 +224,33 @@ async def test_inflight_count_is_owner_scoped(store: PostgresStore) -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_inflight_limited_creates_respect_owner_cap(
+    store: PostgresStore,
+) -> None:
+    base = Run(
+        id="limited-0",
+        status=RunStatus.QUEUED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite/tests",
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    created = await asyncio.gather(
+        *(
+            store.create_if_below_inflight_limit(
+                base.model_copy(update={"id": f"limited-{index}"}),
+                2,
+            )
+            for index in range(5)
+        )
+    )
+
+    assert sum(created) == 2
+    assert await store.count_inflight_runs("alice") == 2
+
+
+@pytest.mark.asyncio
 async def test_run_delete_reports_hit_and_miss(store: PostgresStore) -> None:
     run = Run(
         id="run-delete",

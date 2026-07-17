@@ -14,12 +14,13 @@ from threading import Event
 from uuid import uuid4
 
 import asyncpg
+import httpx
 import pytest
 from starlette.testclient import TestClient
 
 from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.api.app import create_app
-from qarunner.api.deps import create_container
+from qarunner.api.deps import create_container, get_current_user
 from qarunner.config import Settings
 from qarunner.models import (
     DiagnosisConfidence,
@@ -30,6 +31,8 @@ from qarunner.models import (
     RunStatus,
     TestCaseResult,
     TestSummary,
+    User,
+    UserRole,
 )
 
 
@@ -461,3 +464,62 @@ def test_postgres_health_timeout_cancels_pool_wait_and_recovers(
     assert saturated.json() == {"detail": "database unavailable"}
     assert recovered.status_code == 200
     assert recovered.json() == {"status": "ok"}
+
+
+def test_postgres_concurrent_run_creation_enforces_per_user_inflight_limit(
+    postgres_schema: tuple[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_url, schema = postgres_schema
+    container = create_container(
+        Settings(
+            database_backend="postgres",
+            database_url=database_url,
+            database_schema=schema,
+            max_inflight_runs_per_user=1,
+            crash_recovery_on_startup=False,
+            tests_root=str(tmp_path),
+            artifacts_root=str(tmp_path),
+        )
+    )
+    app = create_app(container)
+
+    async def current_user() -> User:
+        return User(
+            username="concurrent-user",
+            role=UserRole.USER,
+            created_at=datetime.now(UTC),
+        )
+
+    app.dependency_overrides[get_current_user] = current_user
+    original_count = container.store.count_inflight_runs
+    count_barrier = asyncio.Barrier(2)
+
+    # Keep the legacy count-then-create race deterministic in RED. The atomic
+    # GREEN path bypasses this wrapper and reserves capacity inside the Store.
+    async def synchronized_count(created_by: str) -> int:
+        count = await original_count(created_by)
+        await count_barrier.wait()
+        return count
+
+    monkeypatch.setattr(container.store, "count_inflight_runs", synchronized_count)
+
+    async def create_concurrently() -> list[httpx.Response]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as async_client:
+            payload = {"tests_path": "tests/", "runner": "pytest"}
+            return await asyncio.gather(
+                async_client.post("/runs", json=payload),
+                async_client.post("/runs", json=payload),
+            )
+
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(container.task_scheduler.shutdown)
+        responses = client.portal.call(create_concurrently)
+        inflight = client.portal.call(original_count, "concurrent-user")
+
+    assert sorted(response.status_code for response in responses) == [202, 429]
+    assert inflight == 1

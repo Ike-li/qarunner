@@ -437,58 +437,89 @@ class PostgresStore:
 
     async def save(self, run: Run) -> None:
         async with self._require_pool().acquire() as connection:
+            await self._save_run(connection, run)
+
+    async def create_if_below_inflight_limit(self, run: Run, limit: int) -> bool:
+        async with self._require_pool().acquire() as connection, connection.transaction():
             await connection.execute(
                 """
-                INSERT INTO runs (
-                    id, status, runner, created_by, tests_path, args_json, allure_enabled,
-                    timeout, executor_mode, summary_json, report_json, exit_code, error,
-                    created_at, started_at, finished_at, env_json, locked, worker_node_id,
-                    profile_id
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb,
-                    $11::jsonb, $12, $13, $14, $15, $16, $17::jsonb, $18, $19, $20
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(
+                        'qarunner-inflight-run:' || current_database() || ':' ||
+                        current_schema() || ':' || $1::text,
+                        0
+                    )
                 )
-                ON CONFLICT (id) DO UPDATE SET
-                    status = excluded.status,
-                    runner = excluded.runner,
-                    created_by = excluded.created_by,
-                    tests_path = excluded.tests_path,
-                    args_json = excluded.args_json,
-                    allure_enabled = excluded.allure_enabled,
-                    timeout = excluded.timeout,
-                    executor_mode = excluded.executor_mode,
-                    summary_json = excluded.summary_json,
-                    report_json = excluded.report_json,
-                    exit_code = excluded.exit_code,
-                    error = excluded.error,
-                    created_at = excluded.created_at,
-                    started_at = excluded.started_at,
-                    finished_at = excluded.finished_at,
-                    env_json = excluded.env_json,
-                    worker_node_id = excluded.worker_node_id,
-                    profile_id = excluded.profile_id
                 """,
-                run.id,
-                run.status.value,
-                run.runner,
                 run.created_by,
-                run.tests_path,
-                json.dumps(run.args),
-                run.allure_enabled,
-                run.timeout,
-                run.executor_mode,
-                None if run.summary is None else run.summary.model_dump_json(),
-                None if run.report is None else run.report.model_dump_json(),
-                run.exit_code,
-                run.error,
-                run.created_at,
-                run.started_at,
-                run.finished_at,
-                json.dumps(run.env),
-                run.locked,
-                run.worker_node_id,
-                run.profile_id,
             )
+            count = await connection.fetchval(
+                """
+                SELECT count(*)
+                FROM runs
+                WHERE created_by = $1 AND status IN ('queued', 'running')
+                """,
+                run.created_by,
+            )
+            if int(count) >= limit:
+                return False
+            await self._save_run(connection, run)
+        return True
+
+    @staticmethod
+    async def _save_run(connection: asyncpg.Connection, run: Run) -> None:
+        await connection.execute(
+            """
+            INSERT INTO runs (
+                id, status, runner, created_by, tests_path, args_json, allure_enabled,
+                timeout, executor_mode, summary_json, report_json, exit_code, error,
+                created_at, started_at, finished_at, env_json, locked, worker_node_id,
+                profile_id
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb,
+                $11::jsonb, $12, $13, $14, $15, $16, $17::jsonb, $18, $19, $20
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                status = excluded.status,
+                runner = excluded.runner,
+                created_by = excluded.created_by,
+                tests_path = excluded.tests_path,
+                args_json = excluded.args_json,
+                allure_enabled = excluded.allure_enabled,
+                timeout = excluded.timeout,
+                executor_mode = excluded.executor_mode,
+                summary_json = excluded.summary_json,
+                report_json = excluded.report_json,
+                exit_code = excluded.exit_code,
+                error = excluded.error,
+                created_at = excluded.created_at,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                env_json = excluded.env_json,
+                worker_node_id = excluded.worker_node_id,
+                profile_id = excluded.profile_id
+            """,
+            run.id,
+            run.status.value,
+            run.runner,
+            run.created_by,
+            run.tests_path,
+            json.dumps(run.args),
+            run.allure_enabled,
+            run.timeout,
+            run.executor_mode,
+            None if run.summary is None else run.summary.model_dump_json(),
+            None if run.report is None else run.report.model_dump_json(),
+            run.exit_code,
+            run.error,
+            run.created_at,
+            run.started_at,
+            run.finished_at,
+            json.dumps(run.env),
+            run.locked,
+            run.worker_node_id,
+            run.profile_id,
+        )
 
     async def get(self, run_id: str) -> Run:
         async with self._require_pool().acquire() as connection:

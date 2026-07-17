@@ -21,6 +21,18 @@ class InMemoryRunStore:
     async def save(self, run: Run) -> None:
         self._runs[run.id] = run
 
+    async def create_if_below_inflight_limit(self, run: Run, limit: int) -> bool:
+        inflight = sum(
+            1
+            for stored in self._runs.values()
+            if stored.created_by == run.created_by
+            and stored.status in (RunStatus.QUEUED, RunStatus.RUNNING)
+        )
+        if inflight >= limit:
+            return False
+        self._runs[run.id] = run
+        return True
+
     async def get(self, run_id: str) -> Run:
         try:
             return self._runs[run_id]

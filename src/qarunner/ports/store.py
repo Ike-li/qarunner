@@ -29,6 +29,10 @@ class RunStore(Protocol):
 
     async def save(self, run: Run) -> None: ...
 
+    async def create_if_below_inflight_limit(self, run: Run, limit: int) -> bool:
+        """Atomically create a Run if its owner has fewer than ``limit`` in flight."""
+        ...
+
     async def get(self, run_id: str) -> Run:
         """Return the run or raise RunNotFound."""
         ...

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -1081,6 +1082,25 @@ async def test_count_inflight_runs(store: SqliteStore) -> None:
     assert await store.count_inflight_runs("alice") == 2
     assert await store.count_inflight_runs("bob") == 1
     assert await store.count_inflight_runs("nobody") == 0
+
+
+async def test_concurrent_inflight_limited_creates_respect_owner_cap(
+    store: SqliteStore,
+) -> None:
+    base = _make_run(id="limited-0", created_by="alice")
+
+    created = await asyncio.gather(
+        *(
+            store.create_if_below_inflight_limit(
+                base.model_copy(update={"id": f"limited-{index}"}),
+                2,
+            )
+            for index in range(5)
+        )
+    )
+
+    assert sum(created) == 2
+    assert await store.count_inflight_runs("alice") == 2
 
 
 async def test_enable_wal_tolerates_concurrent_lock() -> None:

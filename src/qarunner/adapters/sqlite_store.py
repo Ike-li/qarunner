@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -231,6 +232,7 @@ class SqliteStore:
         self._uri = False
         self._keepalive: aiosqlite.Connection | None = None
         self._cleanup_claims_recovered = False
+        self._inflight_create_lock = asyncio.Lock()
         if db_path == ":memory:":
             self._db_path = f"file:qarunner_mem_{uuid.uuid4().hex}?mode=memory&cache=shared"
             self._uri = True
@@ -520,48 +522,67 @@ class SqliteStore:
         # object whose in-memory `locked` is stale (BUG-4). On insert the VALUES
         # still seed `locked`; on update the stored value is preserved.
         async with self._connect() as db:
-            await db.execute(
-                "INSERT INTO runs "
-                "(id, status, runner, created_by, tests_path, args_json, allure_enabled, "
-                "timeout, executor_mode, summary_json, report_json, exit_code, error, "
-                "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
-                "profile_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET "
-                "status=excluded.status, runner=excluded.runner, "
-                "created_by=excluded.created_by, tests_path=excluded.tests_path, "
-                "args_json=excluded.args_json, allure_enabled=excluded.allure_enabled, "
-                "timeout=excluded.timeout, executor_mode=excluded.executor_mode, "
-                "summary_json=excluded.summary_json, report_json=excluded.report_json, "
-                "exit_code=excluded.exit_code, error=excluded.error, "
-                "created_at=excluded.created_at, started_at=excluded.started_at, "
-                "finished_at=excluded.finished_at, env_json=excluded.env_json, "
-                "worker_node_id=excluded.worker_node_id",
-                (
-                    run.id,
-                    run.status.value,
-                    run.runner,
-                    run.created_by,
-                    run.tests_path,
-                    json.dumps(run.args),
-                    int(run.allure_enabled),
-                    run.timeout,
-                    run.executor_mode,
-                    json.dumps(run.summary.model_dump()) if run.summary else None,
-                    json.dumps(run.report.model_dump()) if run.report else None,
-                    run.exit_code,
-                    run.error,
-                    _dt_to_iso(run.created_at),
-                    _dt_to_iso(run.started_at),
-                    _dt_to_iso(run.finished_at),
-                    json.dumps(run.env),
-                    1 if run.locked else 0,
-                    run.worker_node_id,
-                    run.profile_id,
-                ),
-            )
-
+            await self._save_run(db, run)
             await db.commit()
+
+    async def create_if_below_inflight_limit(self, run: Run, limit: int) -> bool:
+        async with self._inflight_create_lock, self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT count(*) FROM runs "
+                "WHERE created_by = ? AND status IN ('queued', 'running')",
+                (run.created_by,),
+            )
+            count = int((await cursor.fetchone())[0])  # type: ignore[index]
+            if count >= limit:
+                await db.rollback()
+                return False
+            await self._save_run(db, run)
+            await db.commit()
+        return True
+
+    @staticmethod
+    async def _save_run(db: aiosqlite.Connection, run: Run) -> None:
+        await db.execute(
+            "INSERT INTO runs "
+            "(id, status, runner, created_by, tests_path, args_json, allure_enabled, "
+            "timeout, executor_mode, summary_json, report_json, exit_code, error, "
+            "created_at, started_at, finished_at, env_json, locked, worker_node_id, "
+            "profile_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "status=excluded.status, runner=excluded.runner, "
+            "created_by=excluded.created_by, tests_path=excluded.tests_path, "
+            "args_json=excluded.args_json, allure_enabled=excluded.allure_enabled, "
+            "timeout=excluded.timeout, executor_mode=excluded.executor_mode, "
+            "summary_json=excluded.summary_json, report_json=excluded.report_json, "
+            "exit_code=excluded.exit_code, error=excluded.error, "
+            "created_at=excluded.created_at, started_at=excluded.started_at, "
+            "finished_at=excluded.finished_at, env_json=excluded.env_json, "
+            "worker_node_id=excluded.worker_node_id",
+            (
+                run.id,
+                run.status.value,
+                run.runner,
+                run.created_by,
+                run.tests_path,
+                json.dumps(run.args),
+                int(run.allure_enabled),
+                run.timeout,
+                run.executor_mode,
+                json.dumps(run.summary.model_dump()) if run.summary else None,
+                json.dumps(run.report.model_dump()) if run.report else None,
+                run.exit_code,
+                run.error,
+                _dt_to_iso(run.created_at),
+                _dt_to_iso(run.started_at),
+                _dt_to_iso(run.finished_at),
+                json.dumps(run.env),
+                1 if run.locked else 0,
+                run.worker_node_id,
+                run.profile_id,
+            ),
+        )
 
     async def get(self, run_id: str) -> Run:
         async with self._connect() as db:

@@ -5,6 +5,10 @@ class RunNotFound(KeyError):
     """Raised when a run ID does not exist in the store."""
 
 
+class InflightRunLimitExceeded(Exception):
+    """Raised when an atomic Run create would exceed the owner's in-flight cap."""
+
+
 class UnknownRunner(ValueError):
     """Raised when a requested runner name is not registered."""
 

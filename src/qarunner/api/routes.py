@@ -62,6 +62,7 @@ from qarunner.core.auth import create_access_token, hash_password, verify_passwo
 from qarunner.core.credentials import CredentialCipher
 from qarunner.core.failure_analysis import build_failure_context
 from qarunner.errors import (
+    InflightRunLimitExceeded,
     InvalidScheduleRequest,
     LoginLockedOut,
     ProfileNotFound,
@@ -1427,20 +1428,22 @@ async def _create_run_guarded(
     # authenticated user. Admins are exempt; a limit of 0 disables the check.
     await _require_tests_path_suite_access(container, req.tests_path, current_user)
 
-    limit = container.settings.max_inflight_runs_per_user
-    if limit and current_user.role != UserRole.ADMIN:
-        inflight = await container.store.count_inflight_runs(current_user.username)
-        if inflight >= limit:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many in-flight runs; wait for existing runs to finish.",
-            )
+    configured_limit = container.settings.max_inflight_runs_per_user
+    inflight_limit = (
+        configured_limit if configured_limit and current_user.role != UserRole.ADMIN else None
+    )
     try:
         return await container.orchestrator.create(
             req,
             created_by=current_user.username,
             profile_id=profile_id,
+            inflight_limit=inflight_limit,
         )
+    except InflightRunLimitExceeded as e:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many in-flight runs; wait for existing runs to finish.",
+        ) from e
     except UnknownRunner as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except UnsafePath as e:

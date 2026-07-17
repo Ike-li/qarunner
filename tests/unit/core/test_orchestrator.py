@@ -12,7 +12,12 @@ from qarunner.core.orchestrator import RunOrchestrator
 from qarunner.core.runners.playwright_runner import PlaywrightRunner
 from qarunner.core.runners.pytest_runner import PytestRunner
 from qarunner.core.runners.registry import RunnerRegistry
-from qarunner.errors import UnknownRunner, UnsafeArguments, UnsafePath
+from qarunner.errors import (
+    InflightRunLimitExceeded,
+    UnknownRunner,
+    UnsafeArguments,
+    UnsafePath,
+)
 from qarunner.models import (
     CollectResult,
     ProcessResult,
@@ -218,6 +223,28 @@ class TestCreate:
         orch = _make_orchestrator()
         req = RunRequest(tests_path="sample")
         await orch.create(req)
+        assert orch._scheduler.enqueued == 1
+
+    @pytest.mark.asyncio
+    async def test_create_with_inflight_limit_reserves_before_scheduling(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample")
+
+        run = await orch.create(req, created_by="alice", inflight_limit=1)
+
+        assert await orch._store.get(run.id) == run
+        assert orch._scheduler.enqueued == 1
+
+    @pytest.mark.asyncio
+    async def test_create_at_inflight_limit_does_not_persist_or_schedule(self):
+        orch = _make_orchestrator()
+        req = RunRequest(tests_path="sample")
+        await orch.create(req, created_by="alice", inflight_limit=1)
+
+        with pytest.raises(InflightRunLimitExceeded):
+            await orch.create(req, created_by="alice", inflight_limit=1)
+
+        assert len(await orch._store.list()) == 1
         assert orch._scheduler.enqueued == 1
 
     @pytest.mark.asyncio
