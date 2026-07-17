@@ -232,6 +232,7 @@ class SqliteStore:
         self._uri = False
         self._keepalive: aiosqlite.Connection | None = None
         self._cleanup_claims_recovered = False
+        self._admin_mutation_lock = asyncio.Lock()
         self._inflight_create_lock = asyncio.Lock()
         if db_path == ":memory:":
             self._db_path = f"file:qarunner_mem_{uuid.uuid4().hex}?mode=memory&cache=shared"
@@ -465,8 +466,13 @@ class SqliteStore:
         ]
 
     async def delete_user(self, username: str) -> bool:
-        async with self._connect() as db:
-            cursor = await db.execute("DELETE FROM users WHERE username = ?", (username,))
+        async with self._admin_mutation_lock, self._connect() as db:
+            cursor = await db.execute(
+                "DELETE FROM users WHERE username = ? "
+                "AND (role <> 'admin' "
+                "OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)",
+                (username,),
+            )
             await db.commit()
             return cursor.rowcount > 0
 
@@ -480,13 +486,21 @@ class SqliteStore:
             return cursor.rowcount > 0
 
     async def update_role(self, username: str, role: str) -> bool:
-        async with self._connect() as db:
+        async with self._admin_mutation_lock, self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
             cursor = await db.execute(
-                "UPDATE users SET role = ? WHERE username = ?",
-                (role, username),
+                "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)",
+                (username,),
+            )
+            exists = bool((await cursor.fetchone())[0])  # type: ignore[index]
+            await db.execute(
+                "UPDATE users SET role = ? WHERE username = ? "
+                "AND (role <> 'admin' OR ? = 'admin' "
+                "OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)",
+                (role, username, role),
             )
             await db.commit()
-            return cursor.rowcount > 0
+            return exists
 
     async def increment_token_version(self, username: str) -> bool:
         """BUG-5+13: bump token_version to invalidate all existing JWTs."""
@@ -505,9 +519,10 @@ class SqliteStore:
         admin (no-op). Prevents two concurrent demotion requests from both
         succeeding and leaving zero admins.
         """
-        async with self._connect() as db:
+        async with self._admin_mutation_lock, self._connect() as db:
             cursor = await db.execute(
                 "UPDATE users SET role = ? WHERE username = ? "
+                "AND role = 'admin' "
                 "AND (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1",
                 (new_role, username),
             )

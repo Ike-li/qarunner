@@ -331,6 +331,24 @@ async def test_user_delete_and_update(store: SqliteStore) -> None:
     assert await store.delete_user("dave") is False
 
 
+async def test_delete_user_no_op_when_sole_admin(store: SqliteStore) -> None:
+    sole_admin = next(
+        user["username"] for user in await store.list_users() if user["role"] == "admin"
+    )
+
+    assert await store.delete_user(sole_admin) is False
+    assert (await store.get_user(sole_admin))["role"] == "admin"
+
+
+async def test_update_role_no_op_when_sole_admin_but_reports_hit(store: SqliteStore) -> None:
+    sole_admin = next(
+        user["username"] for user in await store.list_users() if user["role"] == "admin"
+    )
+
+    assert await store.update_role(sole_admin, "user") is True
+    assert (await store.get_user(sole_admin))["role"] == "admin"
+
+
 async def test_demote_if_not_last_admin_no_op_when_sole_admin(store: SqliteStore) -> None:
     """BUG-6: the seeded default admin is the only admin — demoting it must
     be refused so the platform can't lock itself out of every admin route."""
@@ -351,6 +369,74 @@ async def test_demote_if_not_last_admin_succeeds_with_second_admin(store: Sqlite
 
     assert demoted is True
     assert (await store.get_user("second-admin"))["role"] == "user"
+
+
+async def test_demote_if_not_last_admin_rejects_non_admin(store: SqliteStore) -> None:
+    await store.create_user("second-admin", "hashed", "admin")
+    await store.create_user("ordinary-user", "hashed", "user")
+
+    assert await store.demote_if_not_last_admin("ordinary-user", "user") is False
+    assert (await store.get_user("ordinary-user"))["role"] == "user"
+
+
+async def test_concurrent_admin_deletes_leave_one_admin(store: SqliteStore) -> None:
+    first_admin = next(
+        user["username"] for user in await store.list_users() if user["role"] == "admin"
+    )
+    await store.create_user("second-admin", "hashed", "admin")
+
+    results = await asyncio.gather(
+        store.delete_user(first_admin),
+        store.delete_user("second-admin"),
+    )
+
+    assert sorted(results) == [False, True]
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+async def test_concurrent_admin_demotions_leave_one_admin(store: SqliteStore) -> None:
+    first_admin = next(
+        user["username"] for user in await store.list_users() if user["role"] == "admin"
+    )
+    await store.create_user("second-admin", "hashed", "admin")
+
+    results = await asyncio.gather(
+        store.demote_if_not_last_admin(first_admin, "user"),
+        store.demote_if_not_last_admin("second-admin", "user"),
+    )
+
+    assert sorted(results) == [False, True]
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+async def test_admin_delete_and_demotion_leave_one_admin(store: SqliteStore) -> None:
+    first_admin = next(
+        user["username"] for user in await store.list_users() if user["role"] == "admin"
+    )
+    await store.create_user("second-admin", "hashed", "admin")
+
+    results = await asyncio.gather(
+        store.delete_user(first_admin),
+        store.demote_if_not_last_admin("second-admin", "user"),
+    )
+
+    assert sorted(results) == [False, True]
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
+
+
+async def test_admin_role_update_and_delete_leave_one_admin(store: SqliteStore) -> None:
+    first_admin = next(
+        user["username"] for user in await store.list_users() if user["role"] == "admin"
+    )
+    await store.create_user("second-admin", "hashed", "admin")
+
+    results = await asyncio.gather(
+        store.update_role(first_admin, "user"),
+        store.delete_user("second-admin"),
+    )
+
+    assert results[0] is True
+    assert sum(user["role"] == "admin" for user in await store.list_users()) == 1
 
 
 async def test_cancel_if_inflight_transitions_queued_run(store: SqliteStore) -> None:
