@@ -5,16 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 
+from qarunner.core.flaky import FlakyPolicy, flakiness
 from qarunner.errors import RunNotFound
 from qarunner.models import (
+    CaseHistoryPoint,
     Credential,
     ReportRef,
     Run,
     RunStatus,
+    TestCaseResult,
     TestProfile,
     TestSchedule,
     TestSuite,
@@ -126,8 +129,28 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         )
         """,
     ),
+    (
+        7,
+        """
+        CREATE TABLE run_test_cases (
+            id BIGSERIAL PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            tests_path TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            suite TEXT NOT NULL,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            message TEXT
+        );
+        CREATE INDEX idx_cases_run ON run_test_cases(run_id);
+        CREATE INDEX idx_cases_case
+            ON run_test_cases(tests_path, suite, name, created_at)
+        """,
+    ),
 )
 _SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
+_MAX_CASE_MESSAGE_CHARS = 8192
 _ADMIN_MUTATION_LOCK_SQL = """
 SELECT pg_advisory_xact_lock(
     hashtextextended('qarunner-admin-role-change:' || current_schema(), 0)
@@ -439,6 +462,165 @@ class PostgresStore:
                 locked,
                 run_id,
             )
+
+    async def save_cases(
+        self,
+        run_id: str,
+        tests_path: str,
+        created_at: datetime,
+        cases: list[TestCaseResult],
+    ) -> None:
+        rows = [
+            (
+                run_id,
+                tests_path,
+                created_at,
+                case.suite,
+                case.name,
+                case.status,
+                case.duration_ms,
+                case.message[:_MAX_CASE_MESSAGE_CHARS] if case.message else None,
+            )
+            for case in cases
+        ]
+        async with self._require_pool().acquire() as connection, connection.transaction():
+            await connection.fetchval(
+                "SELECT id FROM runs WHERE id = $1 FOR UPDATE",
+                run_id,
+            )
+            await connection.execute("DELETE FROM run_test_cases WHERE run_id = $1", run_id)
+            if rows:
+                await connection.executemany(
+                    """
+                    INSERT INTO run_test_cases (
+                        run_id, tests_path, created_at, suite, name, status, duration_ms, message
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    """,
+                    rows,
+                )
+
+    async def get_cases_for_run(self, run_id: str) -> list[TestCaseResult]:
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(
+                """
+                SELECT suite, name, status, duration_ms, message
+                FROM run_test_cases
+                WHERE run_id = $1
+                ORDER BY id
+                """,
+                run_id,
+            )
+        return [TestCaseResult.model_validate(dict(record)) for record in records]
+
+    async def get_case_history(
+        self,
+        tests_path: str,
+        suite: str,
+        name: str,
+        limit: int = 20,
+        created_by: str | None = None,
+        profile_id: str | None = None,
+    ) -> list[CaseHistoryPoint]:
+        histories = await self.get_case_histories(
+            tests_path,
+            [(suite, name)],
+            limit,
+            created_by,
+            profile_id,
+        )
+        return histories[(suite, name)]
+
+    async def get_case_histories(
+        self,
+        tests_path: str,
+        cases: list[tuple[str, str]],
+        limit: int = 20,
+        created_by: str | None = None,
+        profile_id: str | None = None,
+    ) -> dict[tuple[str, str], list[CaseHistoryPoint]]:
+        result = {case: [] for case in cases}
+        if not result:
+            return result
+        suites = [suite for suite, _ in result]
+        names = [name for _, name in result]
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(
+                """
+                WITH requested(suite, name) AS (
+                    SELECT DISTINCT suite, name
+                    FROM unnest($2::text[], $3::text[]) AS input(suite, name)
+                ),
+                ranked AS (
+                    SELECT
+                        c.suite,
+                        c.name,
+                        c.created_at,
+                        c.status,
+                        c.run_id,
+                        c.id,
+                        row_number() OVER (
+                            PARTITION BY c.suite, c.name
+                            ORDER BY c.created_at DESC, c.run_id DESC, c.id DESC
+                        ) AS recent_rank
+                    FROM run_test_cases c
+                    JOIN requested q ON q.suite = c.suite AND q.name = c.name
+                    JOIN runs r ON r.id = c.run_id
+                    WHERE c.tests_path = $1
+                      AND ($4::text IS NULL OR r.created_by = $4)
+                      AND ($5::text IS NULL OR r.profile_id = $5)
+                )
+                SELECT suite, name, created_at, status
+                FROM ranked
+                WHERE recent_rank <= $6
+                ORDER BY suite, name, created_at, run_id, id
+                """,
+                tests_path,
+                suites,
+                names,
+                created_by,
+                profile_id,
+                limit,
+            )
+        for record in records:
+            result[(record["suite"], record["name"])].append(
+                CaseHistoryPoint(
+                    created_at=record["created_at"],
+                    status=record["status"],
+                )
+            )
+        return result
+
+    async def count_flaky_tests(
+        self,
+        days: int = 30,
+        created_by: str | None = None,
+        *,
+        min_observations: int = 4,
+        flip_threshold: int = 3,
+    ) -> int:
+        since = datetime.now(UTC) - timedelta(days=days)
+        query = """
+            SELECT c.tests_path, c.suite, c.name, c.status
+            FROM run_test_cases c
+            JOIN runs r ON r.id = c.run_id
+            WHERE r.status = 'completed' AND c.created_at >= $1
+        """
+        parameters: list[object] = [since]
+        if created_by is not None:
+            parameters.append(created_by)
+            query += " AND r.created_by = $2"
+        query += " ORDER BY c.tests_path, c.suite, c.name, c.created_at, c.run_id, c.id"
+        async with self._require_pool().acquire() as connection:
+            records = await connection.fetch(query, *parameters)
+        grouped: dict[tuple[str, str, str], list[str]] = {}
+        for record in records:
+            key = (record["tests_path"], record["suite"], record["name"])
+            grouped.setdefault(key, []).append(record["status"])
+        policy = FlakyPolicy(
+            min_observations=min_observations,
+            flip_threshold=flip_threshold,
+        )
+        return sum(1 for statuses in grouped.values() if flakiness(statuses, policy)[0])
 
     async def save_suite(self, suite: TestSuite) -> None:
         async with self._require_pool().acquire() as connection:

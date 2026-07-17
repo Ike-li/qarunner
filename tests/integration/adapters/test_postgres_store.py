@@ -17,6 +17,7 @@ from qarunner.models import (
     ReportRef,
     Run,
     RunStatus,
+    TestCaseResult,
     TestProfile,
     TestSchedule,
     TestSuite,
@@ -713,6 +714,342 @@ async def test_profile_upsert_keeps_bound_schedules(store: PostgresStore) -> Non
     await store.save_profile(profile.model_copy(update={"name": "Renamed Profile"}))
 
     assert await store.get_schedule(schedule.id) == schedule
+
+
+@pytest.mark.asyncio
+async def test_run_cases_round_trip_preserves_collection_order(store: PostgresStore) -> None:
+    run = Run(
+        id="run-cases",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    cases = [
+        TestCaseResult(suite="auth", name="test_login", status="passed", duration_ms=5),
+        TestCaseResult(
+            suite="auth",
+            name="test_logout",
+            status="failed",
+            duration_ms=9,
+            message="assertion failed",
+        ),
+    ]
+    await store.save(run)
+
+    await store.save_cases(run.id, run.tests_path, run.created_at, cases)
+
+    assert await store.get_cases_for_run(run.id) == cases
+
+
+@pytest.mark.asyncio
+async def test_run_cases_replay_replaces_prior_collection(store: PostgresStore) -> None:
+    run = Run(
+        id="run-cases-replay",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    original = TestCaseResult(suite="auth", name="test_login", status="failed", duration_ms=9)
+    replacement = TestCaseResult(suite="auth", name="test_login", status="passed", duration_ms=5)
+    await store.save(run)
+    await store.save_cases(run.id, run.tests_path, run.created_at, [original])
+
+    await store.save_cases(run.id, run.tests_path, run.created_at, [replacement])
+
+    assert await store.get_cases_for_run(run.id) == [replacement]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_run_case_replays_leave_one_complete_collection(
+    store: PostgresStore,
+) -> None:
+    run = Run(
+        id="run-cases-concurrent",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    collections = [
+        [
+            TestCaseResult(
+                suite="auth",
+                name=f"test_{index}_{case_index}",
+                status="passed",
+                duration_ms=5,
+            )
+            for case_index in range(2)
+        ]
+        for index in range(5)
+    ]
+    await store.save(run)
+
+    await asyncio.gather(
+        *(store.save_cases(run.id, run.tests_path, run.created_at, cases) for cases in collections)
+    )
+
+    persisted = await store.get_cases_for_run(run.id)
+    assert persisted in collections
+
+
+@pytest.mark.asyncio
+async def test_run_cases_empty_replay_clears_prior_collection(store: PostgresStore) -> None:
+    run = Run(
+        id="run-cases-clear",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    case = TestCaseResult(suite="auth", name="test_login", status="passed", duration_ms=5)
+    await store.save(run)
+    await store.save_cases(run.id, run.tests_path, run.created_at, [case])
+
+    await store.save_cases(run.id, run.tests_path, run.created_at, [])
+
+    assert await store.get_cases_for_run(run.id) == []
+
+
+@pytest.mark.asyncio
+async def test_run_case_messages_are_bounded(store: PostgresStore) -> None:
+    run = Run(
+        id="run-cases-message",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    case = TestCaseResult(
+        suite="auth",
+        name="test_login",
+        status="failed",
+        duration_ms=5,
+        message="x" * 9000,
+    )
+    await store.save(run)
+
+    await store.save_cases(run.id, run.tests_path, run.created_at, [case])
+
+    persisted = await store.get_cases_for_run(run.id)
+    assert persisted[0].message == "x" * 8192
+
+
+@pytest.mark.asyncio
+async def test_run_delete_cascades_to_cases(store: PostgresStore) -> None:
+    run = Run(
+        id="run-cases-cascade",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    case = TestCaseResult(suite="auth", name="test_login", status="passed", duration_ms=5)
+    await store.save(run)
+    await store.save_cases(run.id, run.tests_path, run.created_at, [case])
+
+    assert await store.delete_run(run.id) is True
+
+    assert await store.get_cases_for_run(run.id) == []
+
+
+@pytest.mark.asyncio
+async def test_case_history_returns_recent_window_oldest_first(store: PostgresStore) -> None:
+    for index, status in enumerate(["passed", "failed", "passed"]):
+        run = Run(
+            id=f"history-{index}",
+            status=RunStatus.COMPLETED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite-a",
+            created_at=datetime(2026, 7, 15 + index, tzinfo=UTC),
+        )
+        case = TestCaseResult(suite="auth", name="test_login", status=status, duration_ms=5)
+        await store.save(run)
+        await store.save_cases(run.id, run.tests_path, run.created_at, [case])
+
+    history = await store.get_case_history("suite-a", "auth", "test_login", limit=2)
+
+    assert [point.status for point in history] == ["failed", "passed"]
+    assert [point.created_at for point in history] == [
+        datetime(2026, 7, 16, tzinfo=UTC),
+        datetime(2026, 7, 17, tzinfo=UTC),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_case_history_has_stable_tie_break_at_limit_boundary(store: PostgresStore) -> None:
+    created_at = datetime(2026, 7, 17, tzinfo=UTC)
+    for suffix, status in [("a", "passed"), ("b", "failed"), ("c", "passed")]:
+        run = Run(
+            id=f"history-tie-{suffix}",
+            status=RunStatus.COMPLETED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite-a",
+            created_at=created_at,
+        )
+        await store.save(run)
+        await store.save_cases(
+            run.id,
+            run.tests_path,
+            run.created_at,
+            [TestCaseResult(suite="auth", name="test_tie", status=status, duration_ms=5)],
+        )
+
+    history = await store.get_case_history("suite-a", "auth", "test_tie", limit=2)
+
+    assert [point.status for point in history] == ["failed", "passed"]
+
+
+@pytest.mark.asyncio
+async def test_case_histories_batch_and_scope_by_owner_or_profile(store: PostgresStore) -> None:
+    inputs = [
+        ("history-alice", "alice", "profile-a", "auth", "test_login", "failed"),
+        ("history-bob", "bob", "profile-b", "auth", "test_login", "passed"),
+        ("history-other", "alice", "profile-a", "billing", "test_pay", "passed"),
+    ]
+    for index, (run_id, owner, profile_id, suite, name, status) in enumerate(inputs):
+        run = Run(
+            id=run_id,
+            status=RunStatus.COMPLETED,
+            runner="pytest",
+            created_by=owner,
+            tests_path="suite-a",
+            profile_id=profile_id,
+            created_at=datetime(2026, 7, 15 + index, tzinfo=UTC),
+        )
+        await store.save(run)
+        await store.save_cases(
+            run.id,
+            run.tests_path,
+            run.created_at,
+            [TestCaseResult(suite=suite, name=name, status=status, duration_ms=5)],
+        )
+
+    admin = await store.get_case_histories(
+        "suite-a", [("auth", "test_login"), ("billing", "test_pay")]
+    )
+    alice = await store.get_case_histories("suite-a", [("auth", "test_login")], created_by="alice")
+    profile_b = await store.get_case_histories(
+        "suite-a", [("auth", "test_login")], profile_id="profile-b"
+    )
+
+    assert [point.status for point in admin[("auth", "test_login")]] == [
+        "failed",
+        "passed",
+    ]
+    assert [point.status for point in admin[("billing", "test_pay")]] == ["passed"]
+    assert [point.status for point in alice[("auth", "test_login")]] == ["failed"]
+    assert [point.status for point in profile_b[("auth", "test_login")]] == ["passed"]
+    assert await store.get_case_histories("suite-a", []) == {}
+
+
+@pytest.mark.asyncio
+async def test_flaky_count_uses_completed_recent_owner_scoped_histories(
+    store: PostgresStore,
+) -> None:
+    now = datetime.now(UTC)
+    for index, status in enumerate(["passed", "failed", "passed", "failed"]):
+        run = Run(
+            id=f"flaky-alice-{index}",
+            status=RunStatus.COMPLETED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite-a",
+            created_at=now - timedelta(hours=4 - index),
+        )
+        await store.save(run)
+        await store.save_cases(
+            run.id,
+            run.tests_path,
+            run.created_at,
+            [TestCaseResult(suite="auth", name="test_login", status=status, duration_ms=5)],
+        )
+    bob = Run(
+        id="flaky-bob-stable",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="bob",
+        tests_path="suite-a",
+        created_at=now - timedelta(hours=1),
+    )
+    await store.save(bob)
+    await store.save_cases(
+        bob.id,
+        bob.tests_path,
+        bob.created_at,
+        [TestCaseResult(suite="auth", name="test_other", status="passed", duration_ms=5)],
+    )
+    for category, run_status, created_at in [
+        ("running", RunStatus.RUNNING, now - timedelta(minutes=30)),
+        ("old", RunStatus.COMPLETED, now - timedelta(days=31)),
+    ]:
+        for index, status in enumerate(["passed", "failed", "passed", "failed"]):
+            excluded = Run(
+                id=f"flaky-{category}-{index}",
+                status=run_status,
+                runner="pytest",
+                created_by="alice",
+                tests_path="suite-a",
+                created_at=created_at + timedelta(seconds=index),
+            )
+            await store.save(excluded)
+            await store.save_cases(
+                excluded.id,
+                excluded.tests_path,
+                excluded.created_at,
+                [
+                    TestCaseResult(
+                        suite="auth",
+                        name=f"test_{category}",
+                        status=status,
+                        duration_ms=5,
+                    )
+                ],
+            )
+
+    assert await store.count_flaky_tests(days=30) == 1
+    assert await store.count_flaky_tests(days=30, created_by="alice") == 1
+    assert await store.count_flaky_tests(days=30, created_by="bob") == 0
+    assert await store.count_flaky_tests(days=30, min_observations=5, flip_threshold=4) == 0
+
+
+@pytest.mark.asyncio
+async def test_flaky_count_has_stable_tie_break_for_equal_timestamps(
+    store: PostgresStore,
+) -> None:
+    created_at = datetime.now(UTC) - timedelta(hours=1)
+    for suffix, status in [
+        ("a", "passed"),
+        ("b", "failed"),
+        ("c", "passed"),
+        ("d", "failed"),
+    ]:
+        run = Run(
+            id=f"flaky-tie-{suffix}",
+            status=RunStatus.COMPLETED,
+            runner="pytest",
+            created_by="alice",
+            tests_path="suite-a",
+            created_at=created_at,
+        )
+        await store.save(run)
+        await store.save_cases(
+            run.id,
+            run.tests_path,
+            run.created_at,
+            [TestCaseResult(suite="auth", name="test_tie", status=status, duration_ms=5)],
+        )
+
+    assert await store.count_flaky_tests(days=30) == 1
 
 
 @pytest.mark.asyncio
