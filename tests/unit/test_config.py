@@ -17,6 +17,8 @@ _SETTINGS_ENV_KEYS = [
     "QARUNNER_DATABASE_URL",
     "QARUNNER_DATABASE_SCHEMA",
     "QARUNNER_DATABASE_HEALTH_TIMEOUT_SECONDS",
+    "QARUNNER_DATABASE_POOL_MIN_SIZE",
+    "QARUNNER_DATABASE_POOL_MAX_SIZE",
     "QARUNNER_ALLURE_BIN",
     "QARUNNER_EXECUTABLE",
     "QARUNNER_DEFAULT_TIMEOUT_SECONDS",
@@ -51,6 +53,8 @@ class TestSettings:
         assert s.executable == ""
         assert s.default_timeout_seconds == 1800
         assert s.database_health_timeout_seconds == 2.0
+        assert s.database_pool_min_size == 1
+        assert s.database_pool_max_size == 10
         assert s.max_concurrency == 4
         assert s.flaky_min_observations == 4
         assert s.flaky_flip_threshold == 3
@@ -66,6 +70,8 @@ class TestSettings:
     def test_override(self, monkeypatch):
         monkeypatch.setenv("QARUNNER_TESTS_ROOT", "/custom/tests")
         monkeypatch.setenv("QARUNNER_MAX_CONCURRENCY", "8")
+        monkeypatch.setenv("QARUNNER_DATABASE_POOL_MIN_SIZE", "2")
+        monkeypatch.setenv("QARUNNER_DATABASE_POOL_MAX_SIZE", "7")
         monkeypatch.setenv("QARUNNER_FLAKY_MIN_OBSERVATIONS", "6")
         monkeypatch.setenv("QARUNNER_FLAKY_FLIP_THRESHOLD", "4")
         monkeypatch.setenv("QARUNNER_AI_PROVIDER", "openai")
@@ -79,6 +85,8 @@ class TestSettings:
         s = Settings()
         assert s.tests_root == "/custom/tests"
         assert s.max_concurrency == 8
+        assert s.database_pool_min_size == 2
+        assert s.database_pool_max_size == 7
         assert s.flaky_min_observations == 6
         assert s.flaky_flip_threshold == 4
         assert s.ai_provider == "openai"
@@ -96,6 +104,10 @@ class TestSettings:
                 database_backend="postgres",
                 database_url="sqlite:///artifacts/qarunner.db",
             )
+
+    def test_rejects_database_pool_min_larger_than_max(self):
+        with pytest.raises(ValidationError, match="pool min size"):
+            Settings(database_pool_min_size=3, database_pool_max_size=2)
 
 
 @pytest.mark.parametrize(

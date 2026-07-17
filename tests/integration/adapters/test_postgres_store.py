@@ -1555,6 +1555,19 @@ def test_store_rejects_unsafe_schema_identifiers() -> None:
         PostgresStore(os.environ["QARUNNER_TEST_DATABASE_URL"], schema="public; DROP SCHEMA")
 
 
+@pytest.mark.parametrize(
+    ("pool_min_size", "pool_max_size"),
+    [(0, 1), (1, 0), (2, 1)],
+)
+def test_store_rejects_invalid_pool_bounds(pool_min_size: int, pool_max_size: int) -> None:
+    with pytest.raises(ValueError, match="pool sizes must satisfy"):
+        PostgresStore(
+            os.environ["QARUNNER_TEST_DATABASE_URL"],
+            pool_min_size=pool_min_size,
+            pool_max_size=pool_max_size,
+        )
+
+
 @pytest.mark.asyncio
 async def test_concurrent_initialization_shares_one_usable_store(
     monkeypatch: pytest.MonkeyPatch,

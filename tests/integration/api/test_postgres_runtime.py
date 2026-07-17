@@ -328,6 +328,8 @@ def test_postgres_health_recovers_after_connection_is_terminated(
             database_backend="postgres",
             database_url=database_url,
             database_schema=schema,
+            database_pool_min_size=1,
+            database_pool_max_size=1,
             crash_recovery_on_startup=False,
             tests_root=str(tmp_path),
             artifacts_root=str(tmp_path),
@@ -351,6 +353,8 @@ def test_postgres_health_recovers_after_connection_is_terminated(
     with TestClient(create_app(container)) as client:
         assert client.get("/health").status_code == 200
         assert client.portal is not None
+        assert container.store._require_pool().get_min_size() == 1
+        assert container.store._require_pool().get_max_size() == 1
         client.portal.call(terminate_current_connection)
 
         recovered = client.get("/health")

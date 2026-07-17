@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     database_url: str = ""
     database_schema: str = "public"
     database_health_timeout_seconds: float = Field(default=2.0, gt=0)
+    database_pool_min_size: int = Field(default=1, ge=1)
+    database_pool_max_size: int = Field(default=10, ge=1)
     allure_bin: str = "allure"
     executable: str = ""  # empty → sys.executable at runtime
     default_timeout_seconds: int = 1800
@@ -137,6 +139,8 @@ class Settings(BaseSettings):
                 "QARUNNER_DATABASE_URL must be a PostgreSQL connection URL when "
                 "QARUNNER_DATABASE_BACKEND=postgres"
             )
+        if self.database_pool_min_size > self.database_pool_max_size:
+            raise ValueError("database pool min size cannot exceed max size")
         return self
 
     @field_validator("secret_key")

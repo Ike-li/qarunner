@@ -198,11 +198,22 @@ SELECT pg_advisory_xact_lock(
 class PostgresStore:
     """Application store backed by a bounded asyncpg connection pool."""
 
-    def __init__(self, database_url: str, *, schema: str = "public") -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        schema: str = "public",
+        pool_min_size: int = 1,
+        pool_max_size: int = 10,
+    ) -> None:
         if _SCHEMA_PATTERN.fullmatch(schema) is None:
             raise ValueError("PostgreSQL schema must be a safe lowercase identifier")
+        if not 1 <= pool_min_size <= pool_max_size:
+            raise ValueError("PostgreSQL pool sizes must satisfy 1 <= min <= max")
         self._database_url = database_url
         self._schema = schema
+        self._pool_min_size = pool_min_size
+        self._pool_max_size = pool_max_size
         self._pool: asyncpg.Pool | None = None
         self._initialization_lock = asyncio.Lock()
 
@@ -219,6 +230,8 @@ class PostgresStore:
         if created_pool:
             self._pool = await asyncpg.create_pool(
                 self._database_url,
+                min_size=self._pool_min_size,
+                max_size=self._pool_max_size,
                 server_settings={"search_path": self._schema},
             )
 

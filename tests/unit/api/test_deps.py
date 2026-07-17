@@ -51,6 +51,21 @@ def test_create_container_rejects_unsafe_postgres_schema() -> None:
         create_container(cfg)
 
 
+def test_create_container_wires_postgres_pool_bounds() -> None:
+    cfg = Settings(
+        database_backend="postgres",
+        database_url="postgresql://unit-test.invalid/qarunner",
+        database_pool_min_size=2,
+        database_pool_max_size=6,
+    )
+
+    container = create_container(cfg)
+
+    assert isinstance(container.store, PostgresStore)
+    assert container.store._pool_min_size == 2
+    assert container.store._pool_max_size == 6
+
+
 def test_create_container_uses_sys_executable_by_default() -> None:
     import sys
 
