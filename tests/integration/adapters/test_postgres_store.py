@@ -1083,6 +1083,57 @@ async def test_run_cases_replay_replaces_prior_collection(store: PostgresStore) 
 
 
 @pytest.mark.asyncio
+async def test_run_case_replay_rolls_back_after_connection_termination_and_retries(
+    store: PostgresStore,
+) -> None:
+    run = Run(
+        id="run-cases-connection-loss",
+        status=RunStatus.COMPLETED,
+        runner="pytest",
+        created_by="alice",
+        tests_path="suite-a",
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+    original = TestCaseResult(suite="auth", name="original", status="failed", duration_ms=9)
+    replacement = TestCaseResult(suite="auth", name="replacement", status="passed", duration_ms=5)
+    await store.save(run)
+    await store.save_cases(run.id, run.tests_path, run.created_at, [original])
+
+    async with store._require_pool().acquire() as connection:
+        await connection.execute(
+            """
+            CREATE FUNCTION terminate_case_insert() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+                PERFORM pg_terminate_backend(pg_backend_pid());
+                RETURN NEW;
+            END
+            $$;
+            CREATE TRIGGER terminate_case_insert
+            BEFORE INSERT ON run_test_cases
+            FOR EACH ROW EXECUTE FUNCTION terminate_case_insert()
+            """
+        )
+
+    with pytest.raises((asyncpg.ConnectionDoesNotExistError, asyncpg.InterfaceError)):
+        await store.save_cases(run.id, run.tests_path, run.created_at, [replacement])
+
+    assert await store.get_cases_for_run(run.id) == [original]
+
+    async with store._require_pool().acquire() as connection:
+        await connection.execute(
+            """
+            DROP TRIGGER terminate_case_insert ON run_test_cases;
+            DROP FUNCTION terminate_case_insert()
+            """
+        )
+
+    await store.save_cases(run.id, run.tests_path, run.created_at, [replacement])
+
+    assert await store.get_cases_for_run(run.id) == [replacement]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_run_case_replays_leave_one_complete_collection(
     store: PostgresStore,
 ) -> None:
