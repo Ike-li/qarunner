@@ -1411,6 +1411,32 @@ async def test_save_cases_is_idempotent(store: SqliteStore) -> None:
     assert len(got) == 1  # cleared before reinsert — no duplicate rows
 
 
+async def test_concurrent_run_case_replays_leave_one_complete_collection(
+    store: SqliteStore,
+) -> None:
+    run = _make_run(id="run-cases-concurrent")
+    collections = [
+        [
+            TestCaseResult(
+                suite="auth",
+                name=f"test_{index}_{case_index}",
+                status="passed",
+                duration_ms=5,
+            )
+            for case_index in range(2)
+        ]
+        for index in range(5)
+    ]
+    await store.save(run)
+
+    await asyncio.gather(
+        *(store.save_cases(run.id, run.tests_path, run.created_at, cases) for cases in collections)
+    )
+
+    persisted = await store.get_cases_for_run(run.id)
+    assert persisted in collections
+
+
 async def test_save_cases_truncates_long_message(store: SqliteStore) -> None:
     from qarunner.adapters.sqlite_store import _MAX_CASE_MESSAGE_CHARS
 

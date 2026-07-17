@@ -233,6 +233,7 @@ class SqliteStore:
         self._keepalive: aiosqlite.Connection | None = None
         self._cleanup_claims_recovered = False
         self._admin_mutation_lock = asyncio.Lock()
+        self._case_save_lock = asyncio.Lock()
         self._inflight_create_lock = asyncio.Lock()
         if db_path == ":memory:":
             self._db_path = f"file:qarunner_mem_{uuid.uuid4().hex}?mode=memory&cache=shared"
@@ -656,7 +657,7 @@ class SqliteStore:
             )
             for c in cases
         ]
-        async with self._connect() as db:
+        async with self._case_save_lock, self._connect() as db:
             await db.execute("DELETE FROM run_test_cases WHERE run_id = ?", (run_id,))
             if rows:
                 await db.executemany(
