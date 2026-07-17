@@ -1630,6 +1630,19 @@ async def test_dequeue_next_queued_returns_oldest_fifo(store: SqliteStore) -> No
 
 
 @pytest.mark.asyncio
+async def test_dequeue_next_queued_uses_id_tie_break_for_equal_created_at(
+    store: SqliteStore,
+) -> None:
+    created_at = datetime(2026, 7, 17, tzinfo=UTC)
+    for run_id in ["queued-b", "queued-a", "queued-c"]:
+        await store.save(_make_run(id=run_id, status=RunStatus.QUEUED, created_at=created_at))
+
+    claimed = [await store.dequeue_next_queued() for _ in range(3)]
+
+    assert claimed == ["queued-a", "queued-b", "queued-c"]
+
+
+@pytest.mark.asyncio
 async def test_dequeue_next_queued_marks_running(store: SqliteStore) -> None:
     """Dequeued run has status RUNNING and a started_at timestamp."""
     run = _make_run(id="r1", status=RunStatus.QUEUED)

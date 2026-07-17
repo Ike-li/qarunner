@@ -1146,7 +1146,7 @@ class SqliteStore:
                 "UPDATE runs SET status = ?, started_at = ? "
                 "WHERE id = ("
                 "SELECT id FROM runs WHERE status = ? "
-                "ORDER BY created_at ASC LIMIT 1"
+                "ORDER BY created_at ASC, id ASC LIMIT 1"
                 ") RETURNING id",
                 (
                     RunStatus.RUNNING.value,

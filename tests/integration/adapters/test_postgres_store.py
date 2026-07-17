@@ -449,6 +449,26 @@ async def test_dequeue_is_fifo_and_each_queued_run_has_one_winner(store: Postgre
 
 
 @pytest.mark.asyncio
+async def test_dequeue_uses_id_tie_break_for_equal_created_at(store: PostgresStore) -> None:
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    for run_id in ["queued-b", "queued-a", "queued-c"]:
+        await store.save(
+            Run(
+                id=run_id,
+                status=RunStatus.QUEUED,
+                runner="pytest",
+                created_by="alice",
+                tests_path="suite/tests",
+                created_at=created_at,
+            )
+        )
+
+    claimed = [await store.dequeue_next_queued() for _ in range(3)]
+
+    assert claimed == ["queued-a", "queued-b", "queued-c"]
+
+
+@pytest.mark.asyncio
 async def test_missing_run_raises_domain_error(store: PostgresStore) -> None:
     with pytest.raises(RunNotFound):
         await store.get("missing-run")
