@@ -81,11 +81,43 @@ def build_rejection_conflict_handoff(
     write_epoch: int,
 ) -> BatchMaterializedScopeHandoff:
     """Build the execution-path observation for a rejection racing materialized Runs."""
-    return _build_handoff(
-        trigger_kind=HandoffTriggerKind.REJECTION_CONFLICT,
-        trigger_digest=rejection.digest,
+    return build_rejection_conflict_handoff_from_digest(
+        rejection_digest=rejection.digest,
         batch_id=rejection.batch_id,
         source_batch_version=rejection.source_batch_version,
+        project_id=project_id,
+        suite_revision_id=suite_revision_id,
+        preplan_scope_digest=preplan_scope_digest,
+        manifest_digest=manifest_digest,
+        shard_plan_version=shard_plan_version,
+        shard_plan_digest=shard_plan_digest,
+        authoritative_run_set_digest=authoritative_run_set_digest,
+        authority_digest=authority_digest,
+        write_epoch=write_epoch,
+    )
+
+
+def build_rejection_conflict_handoff_from_digest(
+    *,
+    rejection_digest: Digest,
+    batch_id: str,
+    source_batch_version: int,
+    project_id: str,
+    suite_revision_id: str,
+    preplan_scope_digest: Digest | None,
+    manifest_digest: Digest | None,
+    shard_plan_version: int | None,
+    shard_plan_digest: Digest | None,
+    authoritative_run_set_digest: Digest,
+    authority_digest: Digest,
+    write_epoch: int,
+) -> BatchMaterializedScopeHandoff:
+    """Rebuild a rejection handoff from its verified semantic trigger digest."""
+    return _build_handoff(
+        trigger_kind=HandoffTriggerKind.REJECTION_CONFLICT,
+        trigger_digest=rejection_digest,
+        batch_id=batch_id,
+        source_batch_version=source_batch_version,
         project_id=project_id,
         suite_revision_id=suite_revision_id,
         preplan_scope_digest=preplan_scope_digest,

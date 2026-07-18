@@ -13,11 +13,13 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionStamp,
     BatchCancellationAuthority,
     BatchClosureAuthority,
+    BatchRejectionAuthority,
 )
 from qarunner.application.ports.common import PortContractError
 from qarunner.domain import (
     BatchCancellationScope,
     BatchCancellationScopeKind,
+    BatchRejectionStage,
     CancellationSource,
     canonical_digest,
 )
@@ -65,6 +67,27 @@ def test_constructor_requires_a_complete_closure_authority_binding(mode: str) ->
     assert invalid.value.reason == "closure_authority_binding_invalid"
 
 
+@pytest.mark.parametrize("mode", ["cancel_with_rejection_fields", "incomplete_rejection"])
+def test_constructor_requires_a_complete_rejection_authority_binding(mode: str) -> None:
+    values: dict[str, object]
+    if mode == "cancel_with_rejection_fields":
+        values = {
+            "authority": _authority(),
+            "rejection_phase_owner_id": "coordinator-001",
+            "rejection_checked_at": datetime(2026, 7, 18, 10, tzinfo=UTC),
+        }
+    else:
+        values = {"rejection_authority": _rejection_authority()}
+
+    with pytest.raises(PortContractError) as invalid:
+        PostgresBatchCancellationUnitOfWork(
+            cast(asyncpg.Pool, object()),
+            **values,  # type: ignore[arg-type]
+        )
+
+    assert invalid.value.reason == "rejection_authority_binding_invalid"
+
+
 @pytest.mark.asyncio
 async def test_each_authority_mode_rejects_the_other_mode_port() -> None:
     closure_pool = RecordingPool()
@@ -88,9 +111,16 @@ async def test_each_authority_mode_rejects_the_other_mode_port() -> None:
                 reconciler_id="reconciler-001",
                 closure_epoch=1,
             )
+        with pytest.raises(PortContractError) as rejection_port:
+            await unit_of_work.require_rejection_authority(
+                batch_id="batch-001",
+                phase_owner_id="coordinator-001",
+                rejection_epoch=1,
+            )
 
     assert cancel_port.value.reason == "cancel_authority_not_configured"
     assert closure_port.value.reason == "closure_authority_not_configured"
+    assert rejection_port.value.reason == "rejection_authority_not_configured"
     assert closure_pool.connection.transaction_value.commits == 1
     assert cancel_pool.connection.transaction_value.commits == 1
 
@@ -158,5 +188,24 @@ def _closure_authority() -> BatchClosureAuthority:
         ),
         scope=cancel_authority.scope,
         projection=cancel_authority.projection,
+        write_epoch=1,
+    )
+
+
+def _rejection_authority() -> BatchRejectionAuthority:
+    cancel_authority = _authority()
+    return BatchRejectionAuthority(
+        batch_id=cancel_authority.batch_id,
+        project_id=cancel_authority.project_id,
+        suite_revision_id=cancel_authority.suite_revision_id,
+        source_batch_version=3,
+        stage=BatchRejectionStage.COLLECTION,
+        authority_digest=canonical_digest(
+            schema_version="qep.test-rejection-authority.v1",
+            payload={"batch_id": "batch-001", "write_epoch": 1},
+        ),
+        scope=cancel_authority.scope,
+        projection=cancel_authority.projection,
+        recorded_at=datetime(2026, 7, 18, 10, tzinfo=UTC),
         write_epoch=1,
     )

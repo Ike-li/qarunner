@@ -22,6 +22,9 @@ from qarunner.application.batch_preexecution import (
     PreexecutionStateConflict,
     ReconcilePreexecutionCancellation,
     ReconcilePreexecutionCancellationCommand,
+    RecordPreexecutionRejection,
+    RecordPreexecutionRejectionCommand,
+    RejectionMaterializedConflict,
     RequestBatchCancellation,
     RequestBatchCancellationCommand,
     TemporarilyUnavailable,
@@ -32,6 +35,7 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityStateConflict,
     BatchCancellationAuthority,
     BatchClosureAuthority,
+    BatchRejectionAuthority,
     InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import PortContractError
@@ -322,6 +326,480 @@ async def test_materialized_cancel_reconciliation_atomically_publishes_one_hando
 
 
 @pytest.mark.asyncio
+async def test_materialized_rejection_atomically_publishes_one_handoff_without_terminal(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _rejection_authority()
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    command = RecordPreexecutionRejectionCommand(
+        batch_id="batch-001",
+        rejection_id="rejection-001",
+        reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+        reason_code="source_collection_failed",
+        input_digest=_named_digest("rejection-input"),
+        phase_owner_id="coordinator-001",
+        rejection_epoch=1,
+    )
+
+    async def reject() -> BatchMaterializedScopeHandoff:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=authority.recorded_at,
+        ) as gateway:
+            with pytest.raises(RejectionMaterializedConflict) as conflict:
+                await RecordPreexecutionRejection(
+                    gateway=gateway,
+                    proof=ProvePreexecutionClosure(gateway=gateway),
+                ).execute(command)
+        return conflict.value.handoff
+
+    first = await reject()
+    replay = await reject()
+
+    assert replay == first
+    assert first.trigger_kind.value == "rejection_conflict"
+    assert first.authoritative_run_set_digest == canonical_materialized_run_set_digest(
+        batch_id="batch-001",
+        run_ids=("run-001",),
+    )
+    async with pool.acquire() as connection:
+        batch = await connection.fetchrow(
+            "SELECT state, version FROM qep_batches WHERE id = 'batch-001'"
+        )
+        side_effects = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+        audit = await connection.fetchrow("SELECT actor_id, action FROM qep_audit_events")
+    assert dict(batch) == {"state": "collecting", "version": 3}
+    assert dict(side_effects) == {
+        "rejection_count": 0,
+        "basis_count": 0,
+        "handoff_count": 1,
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
+    assert dict(audit) == {
+        "actor_id": "coordinator-001",
+        "action": "publish_batch_materialized_handoff",
+    }
+
+
+@pytest.mark.asyncio
+async def test_rejection_handoff_run_set_drift_is_an_idempotency_conflict(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _rejection_authority()
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    command = RecordPreexecutionRejectionCommand(
+        batch_id="batch-001",
+        rejection_id="rejection-001",
+        reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+        reason_code="source_collection_failed",
+        input_digest=_named_digest("rejection-input"),
+        phase_owner_id="coordinator-001",
+        rejection_epoch=1,
+    )
+
+    async def reject() -> BatchMaterializedScopeHandoff:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=authority.recorded_at,
+        ) as gateway:
+            with pytest.raises(RejectionMaterializedConflict) as conflict:
+                await RecordPreexecutionRejection(
+                    gateway=gateway,
+                    proof=ProvePreexecutionClosure(gateway=gateway),
+                ).execute(command)
+        return conflict.value.handoff
+
+    first = await reject()
+    await _seed_additional_materialized_run(pool)
+
+    with pytest.raises(IdempotencyConflict) as drift:
+        await reject()
+
+    assert drift.value.stored_digest == first.handoff_digest
+    assert drift.value.received_digest != first.handoff_digest
+
+
+@pytest.mark.asyncio
+async def test_caught_missing_rejection_handoff_audit_rolls_back_every_side_effect(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _rejection_authority()
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            CREATE FUNCTION suppress_rejection_handoff_audit() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.action = 'publish_batch_materialized_handoff' THEN
+                    RETURN NULL;
+                END IF;
+                RETURN NEW;
+            END
+            $$
+            """
+        )
+        await connection.execute(
+            """
+            CREATE TRIGGER suppress_rejection_handoff_audit
+            BEFORE INSERT ON qep_audit_events
+            FOR EACH ROW EXECUTE FUNCTION suppress_rejection_handoff_audit()
+            """
+        )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+    ) as gateway:
+        with pytest.raises(AuthorityStateConflict) as missing:
+            await RecordPreexecutionRejection(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                RecordPreexecutionRejectionCommand(
+                    batch_id="batch-001",
+                    rejection_id="rejection-001",
+                    reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                    reason_code="source_collection_failed",
+                    input_digest=_named_digest("rejection-input"),
+                    phase_owner_id="coordinator-001",
+                    rejection_epoch=1,
+                )
+            )
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.scan_execution_children(batch_id="batch-001")
+
+    assert missing.value.reason == "batch_materialized_handoff_audit_write_missing"
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 0, "audit_count": 0, "outbox_count": 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "scalar",
+        "bool_source_version",
+        "missing_authority_digest",
+        "non_string_ownership",
+        "cross_trigger",
+        "unknown_trigger",
+    ],
+)
+async def test_rejection_handoff_replay_rejects_malformed_stored_envelopes(
+    batch_cancellation_store: PostgresStore,
+    corruption: str,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority, first = await _seed_and_publish_rejection_handoff(pool)
+    async with pool.acquire() as connection:
+        if corruption == "scalar":
+            await connection.execute(
+                "UPDATE qep_materialized_scope_handoffs SET payload = '7'::jsonb WHERE id = $1",
+                first.handoff_id,
+            )
+        elif corruption == "bool_source_version":
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = jsonb_set(payload, '{source_batch_version}', 'true'::jsonb)
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+        elif corruption == "missing_authority_digest":
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = payload - 'authority_digest'
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+        elif corruption == "non_string_ownership":
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = jsonb_set(payload, '{project_id}', 'true'::jsonb)
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+        elif corruption == "cross_trigger":
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = jsonb_set(payload, '{trigger_kind}', '"cancel_intent"'::jsonb)
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+        else:
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = jsonb_set(payload, '{trigger_kind}', '"unknown"'::jsonb)
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+
+    with pytest.raises(AuthorityStateConflict) as corrupt:
+        await _reconcile_rejection_materialized_handoff(pool, authority=authority)
+
+    assert corrupt.value.reason == "stored_materialized_handoff_integrity_invalid"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected_type", "expected_reason"),
+    [
+        ("expired", TemporarilyUnavailable, None),
+        ("retired_owner", PreexecutionStateConflict, "phase_owner_authority_retired"),
+        ("command_epoch", PreexecutionStateConflict, "phase_epoch_superseded"),
+        ("project", PreexecutionStateConflict, "phase_owner_authority_denied"),
+        ("write_epoch", PreexecutionStateConflict, "phase_epoch_superseded"),
+        ("source_version", PreexecutionStateConflict, "source_binding_superseded"),
+        ("stage", PreexecutionStateConflict, "source_binding_superseded"),
+        ("state", PreexecutionStateConflict, "rejection_phase_not_current"),
+    ],
+)
+async def test_rejection_authority_drift_fails_before_proof_or_handoff(
+    batch_cancellation_store: PostgresStore,
+    case: str,
+    expected_type: type[Exception],
+    expected_reason: str | None,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _rejection_authority()
+    phase_owner_id = "coordinator-001"
+    rejection_epoch = 1
+    checked_at = authority.recorded_at
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    if case == "expired":
+        checked_at = authority.projection.expires_at
+    elif case == "retired_owner":
+        phase_owner_id = "retired-owner"
+    elif case == "command_epoch":
+        rejection_epoch = 2
+    elif case == "project":
+        authority = replace(authority, project_id="project-attacker")
+    elif case == "write_epoch":
+        authority = replace(authority, write_epoch=2)
+        rejection_epoch = 2
+    elif case == "source_version":
+        authority = replace(authority, source_batch_version=4)
+    elif case == "stage":
+        authority = replace(authority, stage=BatchRejectionStage.VALIDATION)
+    elif case == "state":
+        async with pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE qep_batches SET state = 'queued' WHERE id = 'batch-001'"
+            )
+
+    with pytest.raises(expected_type) as rejected:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=checked_at,
+        ) as gateway:
+            await RecordPreexecutionRejection(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                RecordPreexecutionRejectionCommand(
+                    batch_id="batch-001",
+                    rejection_id="rejection-001",
+                    reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                    reason_code="source_collection_failed",
+                    input_digest=_named_digest("rejection-input"),
+                    phase_owner_id=phase_owner_id,
+                    rejection_epoch=rejection_epoch,
+                )
+            )
+
+    if expected_reason is not None:
+        assert rejected.value.reason == expected_reason
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 0, "audit_count": 0, "outbox_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_cached_rejection_authority_revalidates_owner_epoch_and_aggregate(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _rejection_authority()
+    await _seed_batch(pool)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+    ) as gateway:
+        accepted = await gateway.require_rejection_authority(
+            batch_id="batch-001",
+            phase_owner_id="coordinator-001",
+            rejection_epoch=1,
+        )
+        replayed = await gateway.require_rejection_authority(
+            batch_id="batch-001",
+            phase_owner_id="coordinator-001",
+            rejection_epoch=1,
+        )
+        with pytest.raises(PortContractError) as wrong_batch:
+            await gateway.require_rejection_authority(
+                batch_id="batch-002",
+                phase_owner_id="coordinator-001",
+                rejection_epoch=1,
+            )
+        with pytest.raises(InternalAuthorityRetired):
+            await gateway.require_rejection_authority(
+                batch_id="batch-001",
+                phase_owner_id="retired-owner",
+                rejection_epoch=1,
+            )
+        with pytest.raises(AuthorityStateConflict) as superseded:
+            await gateway.require_rejection_authority(
+                batch_id="batch-001",
+                phase_owner_id="coordinator-001",
+                rejection_epoch=2,
+            )
+
+    assert accepted == authority
+    assert replayed == authority
+    assert wrong_batch.value.reason == "aggregate_already_locked"
+    assert superseded.value.reason == "phase_epoch_superseded"
+
+
+@pytest.mark.asyncio
+async def test_rejection_handoff_preserves_the_existing_cancellation_intent_winner(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    await _seed_materialized_run(pool)
+    authority = replace(
+        _rejection_authority(),
+        source_batch_version=intent.source_batch_version + 1,
+    )
+
+    with pytest.raises(PreexecutionStateConflict) as winner:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=authority.recorded_at,
+        ) as gateway:
+            await RecordPreexecutionRejection(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                RecordPreexecutionRejectionCommand(
+                    batch_id="batch-001",
+                    rejection_id="rejection-001",
+                    reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                    reason_code="source_collection_failed",
+                    input_digest=_named_digest("rejection-input"),
+                    phase_owner_id="coordinator-001",
+                    rejection_epoch=1,
+                )
+            )
+
+    assert winner.value.reason == "cancellation_intent_winner"
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 0, "audit_count": 1, "outbox_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_rejection_handoff_port_rejects_a_forged_authority_binding(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority, first = await _seed_and_publish_rejection_handoff(pool)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+    ) as gateway:
+        await gateway.require_rejection_authority(
+            batch_id="batch-001",
+            phase_owner_id="coordinator-001",
+            rejection_epoch=1,
+        )
+        await gateway.get_batch_for_update(batch_id="batch-001")
+        await gateway.scan_execution_children(batch_id="batch-001")
+        with pytest.raises(AuthorityStateConflict) as forged:
+            await gateway.publish_materialized_handoff(
+                handoff=replace(first, authority_digest=_named_digest("forged-authority"))
+            )
+
+    assert forged.value.reason == "materialized_handoff_authority_superseded"
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 1, "audit_count": 1, "outbox_count": 1}
+
+
+@pytest.mark.asyncio
 async def test_materialized_handoff_replay_fails_closed_when_stored_payload_is_corrupt(
     batch_cancellation_store: PostgresStore,
 ) -> None:
@@ -561,6 +1039,48 @@ async def test_closure_without_a_cancellation_intent_fails_before_child_scan(
             )
 
     assert missing.value.reason == "closure_command_missing"
+
+
+@pytest.mark.asyncio
+async def test_closure_port_cannot_publish_a_cancel_handoff_without_the_stored_intent(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    candidate_intent = _intent(_authority())
+    closure_authority = replace(
+        _closure_authority(candidate_intent),
+        source_batch_version=3,
+    )
+    handoff = build_cancel_handoff(
+        intent=candidate_intent,
+        source_batch_version=3,
+        authoritative_run_set_digest=canonical_materialized_run_set_digest(
+            batch_id="batch-001",
+            run_ids=("run-001",),
+        ),
+        authority_digest=closure_authority.authority_digest,
+        write_epoch=closure_authority.write_epoch,
+    )
+
+    with pytest.raises(AuthorityStateConflict) as missing:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=closure_authority,
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=candidate_intent.recorded_at + timedelta(minutes=1),
+        ) as gateway:
+            await gateway.require_closure_authority(
+                batch_id="batch-001",
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+            await gateway.get_batch_for_update(batch_id="batch-001")
+            await gateway.scan_execution_children(batch_id="batch-001")
+            await gateway.publish_materialized_handoff(handoff=handoff)
+
+    assert missing.value.reason == "materialized_handoff_source_missing"
 
 
 @pytest.mark.asyncio
@@ -1656,6 +2176,47 @@ async def _seed_and_publish_materialized_handoff(
     return intent, await _reconcile_materialized_handoff(pool, intent=intent)
 
 
+async def _seed_and_publish_rejection_handoff(
+    pool: asyncpg.Pool,
+) -> tuple[BatchRejectionAuthority, BatchMaterializedScopeHandoff]:
+    authority = _rejection_authority()
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    return authority, await _reconcile_rejection_materialized_handoff(
+        pool,
+        authority=authority,
+    )
+
+
+async def _reconcile_rejection_materialized_handoff(
+    pool: asyncpg.Pool,
+    *,
+    authority: BatchRejectionAuthority,
+) -> BatchMaterializedScopeHandoff:
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+    ) as gateway:
+        with pytest.raises(RejectionMaterializedConflict) as conflict:
+            await RecordPreexecutionRejection(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                RecordPreexecutionRejectionCommand(
+                    batch_id="batch-001",
+                    rejection_id="rejection-001",
+                    reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                    reason_code="source_collection_failed",
+                    input_digest=_named_digest("rejection-input"),
+                    phase_owner_id="coordinator-001",
+                    rejection_epoch=1,
+                )
+            )
+    return conflict.value.handoff
+
+
 async def _seed_cancellation_intent(pool: asyncpg.Pool) -> BatchCancellationIntent:
     cancel_authority = _authority()
     await _seed_batch(pool)
@@ -1983,6 +2544,29 @@ def _closure_authority(intent: BatchCancellationIntent) -> BatchClosureAuthority
             revocation_watermark=11,
             expires_at=intent.recorded_at + timedelta(minutes=5),
         ),
+        write_epoch=1,
+    )
+
+
+def _rejection_authority() -> BatchRejectionAuthority:
+    cancel_authority = _authority()
+    return BatchRejectionAuthority(
+        batch_id=cancel_authority.batch_id,
+        project_id=cancel_authority.project_id,
+        suite_revision_id=cancel_authority.suite_revision_id,
+        source_batch_version=3,
+        stage=BatchRejectionStage.COLLECTION,
+        authority_digest=canonical_digest(
+            schema_version="qep.test-batch-rejection-authority.v1",
+            payload={
+                "batch_id": "batch-001",
+                "phase_owner_id": "coordinator-001",
+                "write_epoch": 1,
+            },
+        ),
+        scope=cancel_authority.scope,
+        projection=cancel_authority.projection,
+        recorded_at=cancel_authority.recorded_at,
         write_epoch=1,
     )
 

@@ -1,17 +1,18 @@
-"""PostgreSQL Batch-local UoW for cancellation intent and materialized handoff."""
+"""PostgreSQL Batch-local UoW for cancellation and rejection materialized handoffs."""
 
 from __future__ import annotations
 
 import json
 from datetime import datetime
 from types import TracebackType
-from typing import Self
+from typing import Self, cast
 
 import asyncpg
 
 from qarunner.application.handoff import (
     BatchMaterializedScopeHandoff,
     build_cancel_handoff,
+    build_rejection_conflict_handoff_from_digest,
 )
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
@@ -19,6 +20,7 @@ from qarunner.application.ports.batch_preexecution import (
     AuthorityStateConflict,
     BatchCancellationAuthority,
     BatchClosureAuthority,
+    BatchRejectionAuthority,
     InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import PortContractError, ReplayResult
@@ -44,7 +46,7 @@ from qarunner.domain.errors import IdempotencyConflict, VersionConflict
 
 
 class PostgresBatchCancellationUnitOfWork:
-    """One-shot transaction for Batch cancellation and its materialized handoff."""
+    """One-shot transaction for Batch cancellation and materialized-scope handoffs."""
 
     def __init__(
         self,
@@ -54,22 +56,34 @@ class PostgresBatchCancellationUnitOfWork:
         closure_authority: BatchClosureAuthority | None = None,
         closure_reconciler_id: str | None = None,
         closure_checked_at: datetime | None = None,
+        rejection_authority: BatchRejectionAuthority | None = None,
+        rejection_phase_owner_id: str | None = None,
+        rejection_checked_at: datetime | None = None,
     ) -> None:
         cancel_mode = authority is not None
         closure_mode = closure_authority is not None
-        if cancel_mode == closure_mode:
+        rejection_mode = rejection_authority is not None
+        if sum((cancel_mode, closure_mode, rejection_mode)) != 1:
             self._state_error("authority_mode_invalid")
         if closure_mode != (closure_reconciler_id is not None and closure_checked_at is not None):
             self._state_error("closure_authority_binding_invalid")
+        if rejection_mode != (
+            rejection_phase_owner_id is not None and rejection_checked_at is not None
+        ):
+            self._state_error("rejection_authority_binding_invalid")
         self._pool = pool
         self._candidate_authority = authority
         self._candidate_closure_authority = closure_authority
         self._closure_reconciler_id = closure_reconciler_id
         self._closure_checked_at = closure_checked_at
+        self._candidate_rejection_authority = rejection_authority
+        self._rejection_phase_owner_id = rejection_phase_owner_id
+        self._rejection_checked_at = rejection_checked_at
         self._connection: asyncpg.Connection | None = None
         self._transaction: asyncpg.Transaction | None = None
         self._authority: BatchCancellationAuthority | None = None
         self._closure_authority: BatchClosureAuthority | None = None
+        self._rejection_authority: BatchRejectionAuthority | None = None
         self._locked_batch_id: str | None = None
         self._materialized_run_set_digest: Digest | None = None
         self._snapshot: Batch | None = None
@@ -239,6 +253,74 @@ class PostgresBatchCancellationUnitOfWork:
             ):
                 raise AuthorityStateConflict(reason="source_binding_superseded")
         self._closure_authority = authority
+        self._locked_batch_id = authority.batch_id
+        return authority
+
+    async def require_rejection_authority(
+        self,
+        *,
+        batch_id: str,
+        phase_owner_id: str,
+        rejection_epoch: int,
+    ) -> BatchRejectionAuthority:
+        connection = self._require_connection()
+        if self._rejection_authority is not None:
+            if self._rejection_authority.batch_id != batch_id:
+                self._state_error("aggregate_already_locked")
+            if phase_owner_id != self._rejection_phase_owner_id:
+                raise InternalAuthorityRetired(reason="phase_owner_authority_retired")
+            if rejection_epoch != self._rejection_authority.write_epoch:
+                raise AuthorityStateConflict(reason="phase_epoch_superseded")
+            return self._rejection_authority
+        authority = self._candidate_rejection_authority
+        checked_at = self._rejection_checked_at
+        if authority is None or checked_at is None:
+            self._state_error("rejection_authority_not_configured")
+        if authority.projection.expires_at <= checked_at:
+            raise AuthorityProjectionUnavailable
+        if phase_owner_id != self._rejection_phase_owner_id:
+            raise InternalAuthorityRetired(reason="phase_owner_authority_retired")
+        if rejection_epoch != authority.write_epoch:
+            raise AuthorityStateConflict(reason="phase_epoch_superseded")
+        row = await connection.fetchrow(
+            """
+            SELECT
+                batch.id,
+                batch.project_id,
+                batch.suite_revision_id,
+                batch.state,
+                batch.version,
+                batch.write_epoch
+            FROM qep_batches AS batch
+            JOIN qep_suite_revisions AS revision ON revision.id = batch.suite_revision_id
+            JOIN qep_suites AS suite ON suite.id = revision.suite_id
+            WHERE batch.id = $1
+              AND suite.project_id = batch.project_id
+            FOR UPDATE OF batch
+            """,
+            batch_id,
+        )
+        if row is None or (
+            authority.batch_id != row["id"]
+            or authority.project_id != row["project_id"]
+            or authority.suite_revision_id != row["suite_revision_id"]
+        ):
+            raise AuthorityPermissionDenied
+        if authority.write_epoch != row["write_epoch"]:
+            raise AuthorityStateConflict(reason="phase_epoch_superseded")
+        if authority.source_batch_version != row["version"]:
+            raise AuthorityStateConflict(reason="source_binding_superseded")
+        expected_stage = {
+            BatchState.VALIDATING: BatchRejectionStage.VALIDATION,
+            BatchState.COLLECTING: BatchRejectionStage.COLLECTION,
+            BatchState.PLANNING: BatchRejectionStage.PLANNING,
+            BatchState.AWAITING_ADMISSION: BatchRejectionStage.ADMISSION,
+        }.get(BatchState(row["state"]))
+        if expected_stage is None:
+            raise AuthorityStateConflict(reason="rejection_phase_not_current")
+        if authority.stage is not expected_stage:
+            raise AuthorityStateConflict(reason="source_binding_superseded")
+        self._rejection_authority = authority
         self._locked_batch_id = authority.batch_id
         return authority
 
@@ -428,23 +510,44 @@ class PostgresBatchCancellationUnitOfWork:
     ) -> ReplayResult[BatchMaterializedScopeHandoff]:
         connection = self._require_connection()
         self._require_locked_batch(handoff.batch_id)
-        authority = self._closure_authority
+        closure_authority = self._closure_authority
+        rejection_authority = self._rejection_authority
         snapshot = self._snapshot
-        if authority is None:
+        if closure_authority is None and rejection_authority is None:
             self._state_error("closure_authority_not_locked")
         if snapshot is None:
             self._state_error("snapshot_not_loaded")
         intent = snapshot.cancellation_intent
         run_set_digest = self._materialized_run_set_digest
-        if intent is None or run_set_digest is None:
+        if run_set_digest is None:
             raise AuthorityStateConflict(reason="materialized_handoff_source_missing")
-        expected = build_cancel_handoff(
-            intent=intent,
-            source_batch_version=authority.source_batch_version,
-            authoritative_run_set_digest=run_set_digest,
-            authority_digest=authority.authority_digest,
-            write_epoch=authority.write_epoch,
-        )
+        if closure_authority is not None:
+            if intent is None:
+                raise AuthorityStateConflict(reason="materialized_handoff_source_missing")
+            expected = build_cancel_handoff(
+                intent=intent,
+                source_batch_version=closure_authority.source_batch_version,
+                authoritative_run_set_digest=run_set_digest,
+                authority_digest=closure_authority.authority_digest,
+                write_epoch=closure_authority.write_epoch,
+            )
+        else:
+            assert rejection_authority is not None
+            scope = rejection_authority.scope
+            expected = build_rejection_conflict_handoff_from_digest(
+                rejection_digest=handoff.command_or_observation_digest,
+                batch_id=rejection_authority.batch_id,
+                source_batch_version=rejection_authority.source_batch_version,
+                project_id=rejection_authority.project_id,
+                suite_revision_id=rejection_authority.suite_revision_id,
+                preplan_scope_digest=scope.preplan_scope_digest,
+                manifest_digest=scope.manifest_digest,
+                shard_plan_version=scope.shard_plan_version,
+                shard_plan_digest=scope.shard_plan_digest,
+                authoritative_run_set_digest=run_set_digest,
+                authority_digest=rejection_authority.authority_digest,
+                write_epoch=rejection_authority.write_epoch,
+            )
         if handoff != expected:
             raise AuthorityStateConflict(reason="materialized_handoff_authority_superseded")
         row = await connection.fetchrow(
@@ -680,6 +783,12 @@ class PostgresBatchCancellationUnitOfWork:
         connection: asyncpg.Connection,
         handoff: BatchMaterializedScopeHandoff,
     ) -> None:
+        actor_id = cast(str, self._closure_reconciler_id or self._rejection_phase_owner_id)
+        reason_code = (
+            "batch_cancellation_materialized_scope_handoff_committed"
+            if self._closure_authority is not None
+            else "batch_rejection_materialized_scope_handoff_committed"
+        )
         status = await connection.execute(
             """
             INSERT INTO qep_audit_events (
@@ -687,13 +796,14 @@ class PostgresBatchCancellationUnitOfWork:
                 before_digest, after_digest, payload, occurred_at
             ) VALUES (
                 $1, $2, 'publish_batch_materialized_handoff', 'batch', $3, 'allowed',
-                'batch_cancellation_materialized_scope_handoff_committed', $4, $5, $6,
+                $4, $5, $6, $7,
                 transaction_timestamp()
             )
             """,
             f"batch-materialized-handoff-audit-{_digest_hex(handoff.handoff_digest)}",
-            self._closure_reconciler_id,
+            actor_id,
             handoff.batch_id,
+            reason_code,
             _digest_hex(handoff.command_or_observation_digest),
             _digest_hex(handoff.handoff_digest),
             _json(
@@ -987,11 +1097,13 @@ def _decode_handoff_payload(value: str) -> dict[str, object]:
 def _rebuild_stored_handoff(
     *,
     payload: dict[str, object],
-    intent: BatchCancellationIntent,
+    intent: BatchCancellationIntent | None,
 ) -> BatchMaterializedScopeHandoff:
     try:
+        trigger_kind = payload["trigger_kind"]
         source_batch_version = payload["source_batch_version"]
         write_epoch = payload["write_epoch"]
+        shard_plan_version = payload["shard_plan_version"]
         if (
             isinstance(source_batch_version, bool)
             or not isinstance(source_batch_version, int)
@@ -999,15 +1111,51 @@ def _rebuild_stored_handoff(
             or isinstance(write_epoch, bool)
             or not isinstance(write_epoch, int)
             or write_epoch < 0
+            or (
+                shard_plan_version is not None
+                and (
+                    isinstance(shard_plan_version, bool)
+                    or not isinstance(shard_plan_version, int)
+                    or shard_plan_version < 0
+                )
+            )
         ):
             raise ValueError("invalid stored handoff version")
-        rebuilt = build_cancel_handoff(
-            intent=intent,
-            source_batch_version=source_batch_version,
-            authoritative_run_set_digest=Digest(payload["authoritative_run_set_digest"]),
-            authority_digest=Digest(payload["authority_digest"]),
-            write_epoch=write_epoch,
-        )
+        if trigger_kind == "cancel_intent":
+            if intent is None:
+                raise ValueError("stored cancellation intent missing")
+            rebuilt = build_cancel_handoff(
+                intent=intent,
+                source_batch_version=source_batch_version,
+                authoritative_run_set_digest=Digest(payload["authoritative_run_set_digest"]),
+                authority_digest=Digest(payload["authority_digest"]),
+                write_epoch=write_epoch,
+            )
+        elif trigger_kind == "rejection_conflict":
+            text_values = (
+                payload["batch_id"],
+                payload["project_id"],
+                payload["suite_revision_id"],
+            )
+            if any(not isinstance(value, str) for value in text_values):
+                raise ValueError("invalid stored handoff ownership")
+            batch_id, project_id, suite_revision_id = text_values
+            rebuilt = build_rejection_conflict_handoff_from_digest(
+                rejection_digest=Digest(payload["command_or_observation_digest"]),
+                batch_id=batch_id,
+                source_batch_version=source_batch_version,
+                project_id=project_id,
+                suite_revision_id=suite_revision_id,
+                preplan_scope_digest=_optional_digest_from_value(payload["preplan_scope_digest"]),
+                manifest_digest=_optional_digest_from_value(payload["manifest_digest"]),
+                shard_plan_version=shard_plan_version,
+                shard_plan_digest=_optional_digest_from_value(payload["shard_plan_digest"]),
+                authoritative_run_set_digest=Digest(payload["authoritative_run_set_digest"]),
+                authority_digest=Digest(payload["authority_digest"]),
+                write_epoch=write_epoch,
+            )
+        else:
+            raise ValueError("invalid stored handoff trigger")
     except (KeyError, TypeError, ValueError) as error:
         raise AuthorityStateConflict(
             reason="stored_materialized_handoff_integrity_invalid"
