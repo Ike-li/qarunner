@@ -12,6 +12,7 @@ from qarunner.adapters.postgres_batch_cancellation import (
 from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionStamp,
     BatchCancellationAuthority,
+    BatchClosureAuthority,
 )
 from qarunner.application.ports.common import PortContractError
 from qarunner.domain import (
@@ -20,7 +21,78 @@ from qarunner.domain import (
     CancellationSource,
     canonical_digest,
 )
-from tests.fakes.greenfield.postgres_transactions import StartFailingPool
+from tests.fakes.greenfield.postgres_transactions import RecordingPool, StartFailingPool
+
+
+@pytest.mark.parametrize("mode", ["missing", "ambiguous"])
+def test_constructor_requires_exactly_one_authority_mode(mode: str) -> None:
+    values: dict[str, object] = {}
+    if mode == "ambiguous":
+        values = {
+            "authority": _authority(),
+            "closure_authority": _closure_authority(),
+            "closure_reconciler_id": "reconciler-001",
+            "closure_checked_at": datetime(2026, 7, 18, 10, tzinfo=UTC),
+        }
+
+    with pytest.raises(PortContractError) as invalid:
+        PostgresBatchCancellationUnitOfWork(
+            cast(asyncpg.Pool, object()),
+            **values,  # type: ignore[arg-type]
+        )
+
+    assert invalid.value.reason == "authority_mode_invalid"
+
+
+@pytest.mark.parametrize("mode", ["cancel_with_closure_fields", "incomplete_closure"])
+def test_constructor_requires_a_complete_closure_authority_binding(mode: str) -> None:
+    values: dict[str, object]
+    if mode == "cancel_with_closure_fields":
+        values = {
+            "authority": _authority(),
+            "closure_reconciler_id": "reconciler-001",
+            "closure_checked_at": datetime(2026, 7, 18, 10, tzinfo=UTC),
+        }
+    else:
+        values = {"closure_authority": _closure_authority()}
+
+    with pytest.raises(PortContractError) as invalid:
+        PostgresBatchCancellationUnitOfWork(
+            cast(asyncpg.Pool, object()),
+            **values,  # type: ignore[arg-type]
+        )
+
+    assert invalid.value.reason == "closure_authority_binding_invalid"
+
+
+@pytest.mark.asyncio
+async def test_each_authority_mode_rejects_the_other_mode_port() -> None:
+    closure_pool = RecordingPool()
+    async with PostgresBatchCancellationUnitOfWork(
+        cast(asyncpg.Pool, closure_pool),
+        closure_authority=_closure_authority(),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=datetime(2026, 7, 18, 10, tzinfo=UTC),
+    ) as unit_of_work:
+        with pytest.raises(PortContractError) as cancel_port:
+            await unit_of_work.require_cancel_authority(batch_id="batch-001")
+
+    cancel_pool = RecordingPool()
+    async with PostgresBatchCancellationUnitOfWork(
+        cast(asyncpg.Pool, cancel_pool),
+        authority=_authority(),
+    ) as unit_of_work:
+        with pytest.raises(PortContractError) as closure_port:
+            await unit_of_work.require_closure_authority(
+                batch_id="batch-001",
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+
+    assert cancel_port.value.reason == "cancel_authority_not_configured"
+    assert closure_port.value.reason == "closure_authority_not_configured"
+    assert closure_pool.connection.transaction_value.commits == 1
+    assert cancel_pool.connection.transaction_value.commits == 1
 
 
 @pytest.mark.asyncio
@@ -70,4 +142,21 @@ def _authority() -> BatchCancellationAuthority:
             expires_at=recorded_at + timedelta(minutes=1),
         ),
         recorded_at=recorded_at,
+    )
+
+
+def _closure_authority() -> BatchClosureAuthority:
+    cancel_authority = _authority()
+    return BatchClosureAuthority(
+        batch_id=cancel_authority.batch_id,
+        project_id=cancel_authority.project_id,
+        suite_revision_id=cancel_authority.suite_revision_id,
+        source_batch_version=4,
+        authority_digest=canonical_digest(
+            schema_version="qep.test-closure-authority.v1",
+            payload={"batch_id": "batch-001", "write_epoch": 1},
+        ),
+        scope=cancel_authority.scope,
+        projection=cancel_authority.projection,
+        write_epoch=1,
     )

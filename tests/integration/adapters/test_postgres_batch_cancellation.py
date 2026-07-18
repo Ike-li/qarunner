@@ -20,16 +20,22 @@ from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.application.batch_preexecution import (
     ObjectForbidden,
     PreexecutionStateConflict,
+    ReconcilePreexecutionCancellation,
+    ReconcilePreexecutionCancellationCommand,
     RequestBatchCancellation,
     RequestBatchCancellationCommand,
     TemporarilyUnavailable,
 )
+from qarunner.application.handoff import BatchMaterializedScopeHandoff, build_cancel_handoff
 from qarunner.application.ports.batch_preexecution import (
     AuthorityProjectionStamp,
     AuthorityStateConflict,
     BatchCancellationAuthority,
+    BatchClosureAuthority,
+    InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import PortContractError
+from qarunner.application.preexecution_proof import ProvePreexecutionClosure
 from qarunner.domain import (
     Batch,
     BatchCancellationIntent,
@@ -42,8 +48,10 @@ from qarunner.domain import (
     BatchRejectionStage,
     BatchState,
     CancellationSource,
+    IdempotencyConflict,
     VersionConflict,
     canonical_digest,
+    canonical_materialized_run_set_digest,
 )
 
 
@@ -204,6 +212,732 @@ async def test_authorized_cancellation_atomically_publishes_batch_intent_audit_a
             payload=outbox_payload,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_materialized_cancel_reconciliation_atomically_publishes_one_handoff(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    cancel_authority = _authority()
+    await _seed_batch(pool)
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=cancel_authority,
+    ) as gateway:
+        intent = await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-001",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+    await _seed_materialized_run(pool)
+    closure_authority = _closure_authority(intent)
+    command = ReconcilePreexecutionCancellationCommand(
+        batch_id="batch-001",
+        reconciler_id="reconciler-001",
+        closure_epoch=1,
+    )
+
+    async def reconcile() -> BatchMaterializedScopeHandoff:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=closure_authority,
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        ) as gateway:
+            result = await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(command)
+        assert isinstance(result, BatchMaterializedScopeHandoff)
+        return result
+
+    first = await reconcile()
+    replay = await reconcile()
+
+    assert replay == first
+    assert first.authoritative_run_set_digest == canonical_materialized_run_set_digest(
+        batch_id="batch-001",
+        run_ids=("run-001",),
+    )
+    assert first.command_or_observation_digest == intent.digest
+    async with pool.acquire() as connection:
+        batch = await connection.fetchrow(
+            "SELECT state, version FROM qep_batches WHERE id = 'batch-001'"
+        )
+        handoff = await connection.fetchrow(
+            """
+            SELECT
+                id, schema_version, batch_id, trigger_kind, trigger_digest,
+                source_batch_version, materialized_run_set_digest, handoff_digest,
+                event_id, payload
+            FROM qep_materialized_scope_handoffs
+            WHERE batch_id = 'batch-001'
+            """
+        )
+        side_effects = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count,
+                (SELECT count(*) FROM qep_outbox_events
+                    WHERE event_type = 'batch.materialized-scope-handoff.v1')
+                    AS handoff_event_count
+            """
+        )
+    assert dict(batch) == {"state": "collecting", "version": 4}
+    assert handoff is not None
+    assert (
+        handoff["id"],
+        handoff["schema_version"],
+        handoff["batch_id"],
+        handoff["trigger_kind"],
+        handoff["trigger_digest"],
+        handoff["source_batch_version"],
+        handoff["materialized_run_set_digest"],
+        handoff["handoff_digest"],
+        handoff["event_id"],
+    ) == (
+        first.handoff_id,
+        first.schema_version,
+        first.batch_id,
+        first.trigger_kind.value,
+        _digest_hex(first.command_or_observation_digest),
+        first.source_batch_version,
+        _digest_hex(first.authoritative_run_set_digest),
+        _digest_hex(first.handoff_digest),
+        first.event_id,
+    )
+    assert json.loads(handoff["payload"])["handoff_digest"] == first.handoff_digest.value
+    assert dict(side_effects) == {
+        "basis_count": 0,
+        "audit_count": 2,
+        "outbox_count": 2,
+        "handoff_event_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_replay_fails_closed_when_stored_payload_is_corrupt(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    cancel_authority = _authority()
+    await _seed_batch(pool)
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=cancel_authority,
+    ) as gateway:
+        intent = await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-001",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+    await _seed_materialized_run(pool)
+    closure_authority = _closure_authority(intent)
+    command = ReconcilePreexecutionCancellationCommand(
+        batch_id="batch-001",
+        reconciler_id="reconciler-001",
+        closure_epoch=1,
+    )
+
+    async def reconcile() -> BatchMaterializedScopeHandoff:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=closure_authority,
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        ) as gateway:
+            result = await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(command)
+        assert isinstance(result, BatchMaterializedScopeHandoff)
+        return result
+
+    first = await reconcile()
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            UPDATE qep_materialized_scope_handoffs
+            SET payload = jsonb_set(payload, '{destination}', '"corrupt"'::jsonb)
+            WHERE id = $1
+            """,
+            first.handoff_id,
+        )
+
+    with pytest.raises(AuthorityStateConflict) as corrupt:
+        await reconcile()
+
+    assert corrupt.value.reason == "stored_materialized_handoff_integrity_invalid"
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 1, "audit_count": 2, "outbox_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_cached_closure_authority_rejects_a_changed_epoch(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    cancel_authority = _authority()
+    await _seed_batch(pool)
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=cancel_authority,
+    ) as gateway:
+        intent = await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-001",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+    closure_authority = _closure_authority(intent)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=closure_authority,
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        accepted = await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        replayed = await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        with pytest.raises(InternalAuthorityRetired):
+            await gateway.require_closure_authority(
+                batch_id="batch-001",
+                reconciler_id="retired-reconciler",
+                closure_epoch=1,
+            )
+        with pytest.raises(PortContractError) as wrong_batch:
+            await gateway.require_closure_authority(
+                batch_id="batch-002",
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        with pytest.raises(AuthorityStateConflict) as superseded:
+            await gateway.require_closure_authority(
+                batch_id="batch-001",
+                reconciler_id="reconciler-001",
+                closure_epoch=2,
+            )
+
+    assert accepted == closure_authority
+    assert replayed == closure_authority
+    assert wrong_batch.value.reason == "aggregate_already_locked"
+    assert superseded.value.reason == "closure_epoch_superseded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected_type", "expected_reason"),
+    [
+        ("expired", TemporarilyUnavailable, None),
+        ("retired_reconciler", PreexecutionStateConflict, "reconciler_authority_retired"),
+        ("command_epoch", PreexecutionStateConflict, "closure_epoch_superseded"),
+        ("project", PreexecutionStateConflict, "reconciler_authority_denied"),
+        ("write_epoch", PreexecutionStateConflict, "closure_epoch_superseded"),
+        ("source_version", PreexecutionStateConflict, "source_binding_superseded"),
+        ("scope", PreexecutionStateConflict, "source_binding_superseded"),
+    ],
+)
+async def test_closure_authority_drift_fails_before_proof_or_handoff(
+    batch_cancellation_store: PostgresStore,
+    case: str,
+    expected_type: type[Exception],
+    expected_reason: str | None,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    closure_authority = _closure_authority(intent)
+    reconciler_id = "reconciler-001"
+    closure_epoch = 1
+    checked_at = intent.recorded_at + timedelta(minutes=1)
+    if case == "expired":
+        checked_at = closure_authority.projection.expires_at
+    elif case == "retired_reconciler":
+        reconciler_id = "retired-reconciler"
+    elif case == "command_epoch":
+        closure_epoch = 2
+    elif case == "project":
+        closure_authority = replace(closure_authority, project_id="project-attacker")
+    elif case == "write_epoch":
+        closure_authority = replace(closure_authority, write_epoch=2)
+        closure_epoch = 2
+    elif case == "source_version":
+        closure_authority = replace(closure_authority, source_batch_version=5)
+    else:
+        closure_authority = replace(
+            closure_authority,
+            scope=replace(
+                closure_authority.scope,
+                preplan_scope_digest=_named_digest("changed-closure-scope"),
+            ),
+        )
+
+    with pytest.raises(expected_type) as rejected:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=closure_authority,
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=checked_at,
+        ) as gateway:
+            await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id=reconciler_id,
+                    closure_epoch=closure_epoch,
+                )
+            )
+
+    if expected_reason is not None:
+        assert rejected.value.reason == expected_reason
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 0, "audit_count": 1, "outbox_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_closure_without_a_cancellation_intent_fails_before_child_scan(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    candidate_intent = _intent(_authority())
+    closure_authority = replace(
+        _closure_authority(candidate_intent),
+        source_batch_version=3,
+    )
+
+    with pytest.raises(PreexecutionStateConflict) as missing:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=closure_authority,
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=candidate_intent.recorded_at + timedelta(minutes=1),
+        ) as gateway:
+            await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id="reconciler-001",
+                    closure_epoch=1,
+                )
+            )
+
+    assert missing.value.reason == "closure_command_missing"
+
+
+@pytest.mark.asyncio
+async def test_closure_fails_closed_when_one_batch_has_multiple_cancellation_intents(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_batch_cancellation_intents (
+                id, batch_id, project_id, suite_revision_id, source_batch_version,
+                idempotency_key, source, actor_id, reason, request_digest,
+                authorization_digest, scope_kind, preplan_scope_digest, manifest_digest,
+                shard_plan_version, shard_plan_digest, canonical_run_set_digest,
+                intent_digest, payload, recorded_at
+            )
+            SELECT
+                'corrupt-closure-second-intent', batch_id, project_id, suite_revision_id,
+                source_batch_version, 'cancel-002', source, actor_id, reason, $1,
+                authorization_digest, scope_kind, preplan_scope_digest, manifest_digest,
+                shard_plan_version, shard_plan_digest, canonical_run_set_digest,
+                $2, payload, recorded_at
+            FROM qep_batch_cancellation_intents
+            WHERE idempotency_key = 'cancel-001'
+            """,
+            "e" * 64,
+            "d" * 64,
+        )
+
+    with pytest.raises(PreexecutionStateConflict) as corrupt:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=_closure_authority(intent),
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        ) as gateway:
+            await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id="reconciler-001",
+                    closure_epoch=1,
+                )
+            )
+
+    assert corrupt.value.reason == "stored_cancellation_cardinality_invalid"
+
+
+@pytest.mark.asyncio
+async def test_integrity_quarantine_aborts_the_current_unit_of_work(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        await gateway.quarantine_integrity_failure(batch_id="batch-001")
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.get_batch_for_update(batch_id="batch-001")
+
+    assert aborted.value.reason == "aborted"
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_ports_fail_closed_when_called_out_of_order_or_forged(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    await _seed_materialized_run(pool)
+    closure_authority = _closure_authority(intent)
+    run_set_digest = canonical_materialized_run_set_digest(
+        batch_id="batch-001",
+        run_ids=("run-001",),
+    )
+    handoff = build_cancel_handoff(
+        intent=intent,
+        source_batch_version=closure_authority.source_batch_version,
+        authoritative_run_set_digest=run_set_digest,
+        authority_digest=closure_authority.authority_digest,
+        write_epoch=closure_authority.write_epoch,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        await gateway.get_batch_for_update(batch_id="batch-001")
+        await gateway.scan_execution_children(batch_id="batch-001")
+        with pytest.raises(PortContractError) as missing_closure_authority:
+            await gateway.publish_materialized_handoff(handoff=handoff)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=closure_authority,
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        await gateway.scan_execution_children(batch_id="batch-001")
+        with pytest.raises(PortContractError) as missing_snapshot:
+            await gateway.publish_materialized_handoff(handoff=handoff)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=closure_authority,
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        snapshot = await gateway.get_batch_for_update(batch_id="batch-001")
+        with pytest.raises(AuthorityStateConflict) as missing_scan:
+            await gateway.publish_materialized_handoff(handoff=handoff)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=closure_authority,
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        await gateway.get_batch_for_update(batch_id="batch-001")
+        await gateway.scan_execution_children(batch_id="batch-001")
+        with pytest.raises(AuthorityStateConflict) as forged:
+            await gateway.publish_materialized_handoff(
+                handoff=replace(handoff, destination="forged")
+            )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=closure_authority,
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        await gateway.get_batch_for_update(batch_id="batch-001")
+        with pytest.raises(PortContractError) as missing_cancel_authority:
+            await gateway.publish_cancellation(batch=snapshot, intent=intent)
+
+    assert missing_closure_authority.value.reason == "closure_authority_not_locked"
+    assert missing_snapshot.value.reason == "snapshot_not_loaded"
+    assert missing_scan.value.reason == "materialized_handoff_source_missing"
+    assert forged.value.reason == "materialized_handoff_authority_superseded"
+    assert missing_cancel_authority.value.reason == "cancel_authority_not_locked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    ["scalar_payload", "invalid_source_version", "missing_authority_digest"],
+)
+async def test_materialized_handoff_replay_rejects_malformed_stored_envelopes(
+    batch_cancellation_store: PostgresStore,
+    corruption: str,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent, first = await _seed_and_publish_materialized_handoff(pool)
+    async with pool.acquire() as connection:
+        if corruption == "scalar_payload":
+            await connection.execute(
+                "UPDATE qep_materialized_scope_handoffs SET payload = '7'::jsonb WHERE id = $1",
+                first.handoff_id,
+            )
+        elif corruption == "invalid_source_version":
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = jsonb_set(payload, '{source_batch_version}', 'true'::jsonb)
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+        else:
+            await connection.execute(
+                """
+                UPDATE qep_materialized_scope_handoffs
+                SET payload = payload - 'authority_digest'
+                WHERE id = $1
+                """,
+                first.handoff_id,
+            )
+
+    with pytest.raises(AuthorityStateConflict) as corrupt:
+        await _reconcile_materialized_handoff(pool, intent=intent)
+
+    assert corrupt.value.reason == "stored_materialized_handoff_integrity_invalid"
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_replay_rejects_a_corrupt_stored_digest(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent, first = await _seed_and_publish_materialized_handoff(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            UPDATE qep_materialized_scope_handoffs
+            SET handoff_digest = $1
+            WHERE id = $2
+            """,
+            "e" * 64,
+            first.handoff_id,
+        )
+
+    with pytest.raises(AuthorityStateConflict) as corrupt:
+        await _reconcile_materialized_handoff(pool, intent=intent)
+
+    assert corrupt.value.reason == "stored_materialized_handoff_integrity_invalid"
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_replay_rejects_coordinated_payload_corruption(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent, first = await _seed_and_publish_materialized_handoff(pool)
+    corrupt_run_set = _named_digest("corrupt-materialized-run-set")
+    async with pool.acquire() as connection:
+        payload = json.loads(
+            await connection.fetchval(
+                "SELECT payload FROM qep_materialized_scope_handoffs WHERE id = $1",
+                first.handoff_id,
+            )
+        )
+        payload["authoritative_run_set_digest"] = corrupt_run_set.value
+        payload["handoff_digest"] = f"sha256:{'e' * 64}"
+        await connection.execute(
+            """
+            UPDATE qep_materialized_scope_handoffs
+            SET materialized_run_set_digest = $1,
+                handoff_digest = $2,
+                payload = $3
+            WHERE id = $4
+            """,
+            _digest_hex(corrupt_run_set),
+            "e" * 64,
+            json.dumps(payload),
+            first.handoff_id,
+        )
+
+    with pytest.raises(AuthorityStateConflict) as corrupt:
+        await _reconcile_materialized_handoff(pool, intent=intent)
+
+    assert corrupt.value.reason == "stored_materialized_handoff_integrity_invalid"
+
+
+@pytest.mark.asyncio
+async def test_materialized_handoff_run_set_drift_is_an_idempotency_conflict(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent, first = await _seed_and_publish_materialized_handoff(pool)
+    await _seed_additional_materialized_run(pool)
+
+    with pytest.raises(IdempotencyConflict) as drift:
+        await _reconcile_materialized_handoff(pool, intent=intent)
+
+    assert drift.value.stored_digest == first.handoff_digest
+    assert drift.value.received_digest != first.handoff_digest
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 1, "audit_count": 2, "outbox_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_caught_missing_handoff_audit_aborts_and_rolls_back_the_handoff(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    cancel_authority = _authority()
+    await _seed_batch(pool)
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=cancel_authority,
+    ) as gateway:
+        intent = await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-001",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+    await _seed_materialized_run(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            CREATE FUNCTION suppress_handoff_audit() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.action = 'publish_batch_materialized_handoff' THEN
+                    RETURN NULL;
+                END IF;
+                RETURN NEW;
+            END
+            $$
+            """
+        )
+        await connection.execute(
+            """
+            CREATE TRIGGER suppress_handoff_audit
+            BEFORE INSERT ON qep_audit_events
+            FOR EACH ROW EXECUTE FUNCTION suppress_handoff_audit()
+            """
+        )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        with pytest.raises(AuthorityStateConflict) as missing:
+            await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id="reconciler-001",
+                    closure_epoch=1,
+                )
+            )
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.scan_execution_children(batch_id="batch-001")
+
+    assert missing.value.reason == "batch_materialized_handoff_audit_write_missing"
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        counts = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(counts) == {"handoff_count": 0, "audit_count": 1, "outbox_count": 1}
 
 
 @pytest.mark.asyncio
@@ -914,6 +1648,126 @@ async def _seed_batch(pool: asyncpg.Pool) -> None:
         )
 
 
+async def _seed_and_publish_materialized_handoff(
+    pool: asyncpg.Pool,
+) -> tuple[BatchCancellationIntent, BatchMaterializedScopeHandoff]:
+    intent = await _seed_cancellation_intent(pool)
+    await _seed_materialized_run(pool)
+    return intent, await _reconcile_materialized_handoff(pool, intent=intent)
+
+
+async def _seed_cancellation_intent(pool: asyncpg.Pool) -> BatchCancellationIntent:
+    cancel_authority = _authority()
+    await _seed_batch(pool)
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=cancel_authority,
+    ) as gateway:
+        intent = await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-001",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+    return intent
+
+
+async def _reconcile_materialized_handoff(
+    pool: asyncpg.Pool,
+    *,
+    intent: BatchCancellationIntent,
+) -> BatchMaterializedScopeHandoff:
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        result = await ReconcilePreexecutionCancellation(
+            gateway=gateway,
+            proof=ProvePreexecutionClosure(gateway=gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id="batch-001",
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+    assert isinstance(result, BatchMaterializedScopeHandoff)
+    return result
+
+
+async def _seed_materialized_run(pool: asyncpg.Pool) -> None:
+    recorded_at = datetime(2026, 7, 18, 10, 3, tzinfo=UTC)
+    empty = json.dumps({})
+    async with pool.acquire() as connection, connection.transaction():
+        await connection.execute(
+            """
+            INSERT INTO qep_resource_profiles (
+                id, name, profile_version, framework, requests, limits,
+                internal_workers, security_profile_id, approved_at, created_at
+            ) VALUES ($1, $2, 1, 'pytest', $3, $3, 1, $4, $5, $5)
+            """,
+            "profile-001",
+            "Default",
+            empty,
+            "security-profile-001",
+            recorded_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_shard_plans (
+                id, batch_id, algorithm_version, digest, run_count,
+                total_estimated_duration_ms, status, payload, created_at
+            ) VALUES ($1, $2, 'single-shard.v1', $3, 2, 1, 'approved', $4, $5)
+            """,
+            "plan-001",
+            "batch-001",
+            "4" * 64,
+            empty,
+            recorded_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_runs (
+                id, batch_id, plan_id, shard_index, resource_profile_id,
+                orchestration_phase, current_fence, attempt_count, version,
+                run_item_set_digest, created_at, updated_at, payload
+            ) VALUES ($1, $2, $3, 0, $4, 'planned', 0, 0, 0, $5, $6, $6, $7)
+            """,
+            "run-001",
+            "batch-001",
+            "plan-001",
+            "profile-001",
+            "5" * 64,
+            recorded_at,
+            empty,
+        )
+
+
+async def _seed_additional_materialized_run(pool: asyncpg.Pool) -> None:
+    recorded_at = datetime(2026, 7, 18, 10, 4, tzinfo=UTC)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_runs (
+                id, batch_id, plan_id, shard_index, resource_profile_id,
+                orchestration_phase, current_fence, attempt_count, version,
+                run_item_set_digest, created_at, updated_at, payload
+            ) VALUES ($1, $2, $3, 1, $4, 'planned', 0, 0, 0, $5, $6, $6, $7)
+            """,
+            "run-002",
+            "batch-001",
+            "plan-001",
+            "profile-001",
+            "6" * 64,
+            recorded_at,
+            json.dumps({}),
+        )
+
+
 async def _seed_rejected_batch(pool: asyncpg.Pool) -> None:
     await _seed_batch(pool)
     recorded_at = datetime(2026, 7, 18, 10, 2, tzinfo=UTC)
@@ -1105,6 +1959,31 @@ def _authority() -> BatchCancellationAuthority:
             expires_at=recorded_at + timedelta(minutes=5),
         ),
         recorded_at=recorded_at,
+    )
+
+
+def _closure_authority(intent: BatchCancellationIntent) -> BatchClosureAuthority:
+    return BatchClosureAuthority(
+        batch_id=intent.batch_id,
+        project_id=intent.project_id,
+        suite_revision_id=intent.suite_revision_id,
+        source_batch_version=intent.source_batch_version + 1,
+        authority_digest=canonical_digest(
+            schema_version="qep.test-batch-closure-authority.v1",
+            payload={
+                "batch_id": intent.batch_id,
+                "reconciler_id": "reconciler-001",
+                "write_epoch": 1,
+            },
+        ),
+        scope=intent.scope,
+        projection=AuthorityProjectionStamp(
+            source="local-authority-projection",
+            projection_version=7,
+            revocation_watermark=11,
+            expires_at=intent.recorded_at + timedelta(minutes=5),
+        ),
+        write_epoch=1,
     )
 
 
