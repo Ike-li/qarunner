@@ -13,6 +13,10 @@ qarunner 提供两套 Docker Compose 配置，**日常开发用 dev，验证部�
 
 ## 开发模式（推荐日常使用）
 
+> 新建 PostgreSQL volume 或未确认 revision 时，先按下方 **PostgreSQL migration operator**
+> 段落完成 `upgrade head`（或 exact legacy adoption）；backend 在迁移前会按设计 fail closed。
+> 已经处于 `m1_greenfield_facts` head 的数据库可以直接执行下面的完整启动命令。
+
 ### 首次启动
 
 ```bash
@@ -27,6 +31,34 @@ docker compose -f docker-compose.dev.yml ps
 - **前端**: http://localhost:5173（主要入口，Vite 代理 API 请求到后端）
 - **后端 API**: http://localhost:8000/docs（Swagger 文档）
 - **默认管理员**: admin / admin123
+
+### PostgreSQL migration operator
+
+开发 Compose 的 PostgreSQL DDL 由显式 operator 命令执行，backend 启动不会隐式迁移。
+首次使用空数据库时先启动 PostgreSQL，再在一次性 backend 容器中升级到 head：
+
+```bash
+docker compose -f docker-compose.dev.yml up -d postgres
+docker compose -f docker-compose.dev.yml run --rm \
+  -e QARUNNER_MIGRATION_DATABASE_URL='postgresql://qarunner@postgres:5432/qarunner' \
+  -e QARUNNER_MIGRATION_SCHEMA=public \
+  backend uv run python -m qarunner.migrations upgrade head
+docker compose -f docker-compose.dev.yml up -d backend frontend
+```
+
+如果目标是未接管的 exact legacy v10 Schema，必须先显式 adoption，再执行同一条
+`upgrade head`；adoption 会严格校验 v1-v10 checksum 和物理 catalog，失败时不会 stamp：
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm \
+  -e QARUNNER_MIGRATION_DATABASE_URL='postgresql://qarunner@postgres:5432/qarunner' \
+  -e QARUNNER_MIGRATION_SCHEMA=public \
+  backend uv run python -m qarunner.migrations adopt-legacy
+```
+
+运行时若 `alembic_version` 缺失、落后、超前、分支或未知，backend 会 fail closed。生产默认
+只允许 expand/forward-fix；`downgrade` 仅用于 disposable Schema，并且必须显式设置
+`QARUNNER_MIGRATION_ALLOW_DOWNGRADE=true`。迁移前应先完成并验证可恢复的 `pg_dump`。
 
 ### 更新代码后
 

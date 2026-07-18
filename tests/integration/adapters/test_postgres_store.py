@@ -9,9 +9,11 @@ from uuid import uuid4
 
 import asyncpg
 import pytest
+from tests.integration.migration_operator import run_migration_operator
 
 from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.errors import RunNotFound
+from qarunner.migrations.legacy import LEGACY_CHECKSUMS
 from qarunner.models import (
     Credential,
     DiagnosisConfidence,
@@ -27,6 +29,19 @@ from qarunner.models import (
     TestSummary,
 )
 
+_FROZEN_LEGACY_CHECKSUMS = {
+    1: "5e0368dd264939ed351dd648f3823eb75f9d0a30822f92fb698e74e961a79649",
+    2: "d5acf5ca434f255cffdb0bca9a47df4e1479e6c30822af346209a9635ac3bddc",
+    3: "7ba8b0c38c026a1d9dbd2aa525aa3e7758df20366541bc20bd0d6fb71d572eb0",
+    4: "6868130b09dca1ce014387ffe1d4bdca053afdb433ccb029a9ccdd200f6d24cb",
+    5: "f51c4b0cf68d7c14bd9115b52918445cab4c6bd2e8713765f09a66a3a8bca579",
+    6: "05c50a5ba326487299e86103cd6ecbf0368418761d1200ffdf5c3e01a1072984",
+    7: "01efa06009f71d2be806d7059e6971164d56bf551b556a42bfb7fc5b6e4a5f44",
+    8: "1fda3f9644e1a7a303af21f0a930391871c34a6846018d3611ace1fbaa74f514",
+    9: "3c3cd518c1644a3124d84fbaa510f0a22457e69a98d1429ebb521b4b4715854a",
+    10: "33261da079124517d1ba3ca6c2edecf1b0710c50a143c29eb9dcd391e7a812cb",
+}
+
 
 @pytest.fixture
 async def store(monkeypatch: pytest.MonkeyPatch) -> PostgresStore:
@@ -41,6 +56,14 @@ async def store(monkeypatch: pytest.MonkeyPatch) -> PostgresStore:
         await connection.execute(f'CREATE SCHEMA "{schema}"')
     finally:
         await connection.close()
+    migration = await asyncio.to_thread(
+        run_migration_operator,
+        database_url,
+        schema,
+        "upgrade",
+        "head",
+    )
+    assert migration.returncode == 0, migration.stderr
     value = PostgresStore(database_url, schema=schema)
     try:
         await value.initialize()
@@ -68,73 +91,78 @@ async def test_empty_database_initialization_is_repeatable_and_seeds_admin(
 
 
 @pytest.mark.asyncio
-async def test_migrations_record_checksums_and_reject_ddl_drift(store: PostgresStore) -> None:
+async def test_head_migration_records_exact_frozen_legacy_checksums(
+    store: PostgresStore,
+) -> None:
     async with store._require_pool().acquire() as connection:
         migrations = await connection.fetch(
             "SELECT version, checksum FROM schema_migrations ORDER BY version"
         )
 
-        assert [row["version"] for row in migrations] == list(range(1, 11))
-        assert all(len(row["checksum"]) == 64 for row in migrations)
-
-        await connection.execute(
-            "UPDATE schema_migrations SET checksum = $1 WHERE version = 1", "0" * 64
-        )
-
-    with pytest.raises(RuntimeError, match="migration 1 checksum mismatch"):
-        await store.initialize()
+    actual = {row["version"]: row["checksum"] for row in migrations}
+    assert actual == _FROZEN_LEGACY_CHECKSUMS
+    assert actual == LEGACY_CHECKSUMS
 
 
 @pytest.mark.asyncio
-async def test_existing_migration_ledger_is_bootstrapped_once(store: PostgresStore) -> None:
+async def test_runtime_restart_leaves_legacy_ledger_read_only(store: PostgresStore) -> None:
     async with store._require_pool().acquire() as connection:
-        await connection.execute(
-            "ALTER TABLE schema_migrations ALTER COLUMN checksum DROP NOT NULL"
+        ledger_before = await connection.fetch(
+            "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version"
         )
-        await connection.execute("UPDATE schema_migrations SET checksum = NULL WHERE version = 1")
 
     await store.initialize()
 
     async with store._require_pool().acquire() as connection:
-        checksum = await connection.fetchval(
-            "SELECT checksum FROM schema_migrations WHERE version = 1"
-        )
-        nullable = await connection.fetchval(
-            """
-            SELECT is_nullable
-            FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = 'schema_migrations'
-              AND column_name = 'checksum'
-            """
+        ledger_after = await connection.fetch(
+            "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version"
         )
 
-    assert len(checksum) == 64
-    assert nullable == "NO"
+    assert ledger_after == ledger_before
 
 
 @pytest.mark.asyncio
-async def test_initialization_rejects_schema_version_newer_than_code(store: PostgresStore) -> None:
+async def test_runtime_does_not_rewrite_unknown_legacy_ledger_rows(
+    store: PostgresStore,
+) -> None:
     async with store._require_pool().acquire() as connection:
         await connection.execute(
             "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
             999,
             "0" * 64,
         )
+        ledger_before = await connection.fetch(
+            "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version"
+        )
 
-    with pytest.raises(RuntimeError, match="unknown applied migration 999"):
-        await store.initialize()
+    await store.initialize()
+
+    async with store._require_pool().acquire() as connection:
+        ledger_after = await connection.fetch(
+            "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version"
+        )
+
+    assert ledger_after == ledger_before
 
 
 @pytest.mark.asyncio
-async def test_initialization_rejects_non_contiguous_migration_ledger(
+async def test_runtime_does_not_repair_non_contiguous_legacy_ledger(
     store: PostgresStore,
 ) -> None:
     async with store._require_pool().acquire() as connection:
         await connection.execute("DELETE FROM schema_migrations WHERE version = 2")
+        ledger_before = await connection.fetch(
+            "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version"
+        )
 
-    with pytest.raises(RuntimeError, match="non-contiguous migration ledger"):
-        await store.initialize()
+    await store.initialize()
+
+    async with store._require_pool().acquire() as connection:
+        ledger_after = await connection.fetch(
+            "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version"
+        )
+
+    assert ledger_after == ledger_before
 
 
 @pytest.mark.asyncio
@@ -1782,6 +1810,14 @@ async def test_concurrent_initialization_shares_one_usable_store(
     connection = await asyncpg.connect(database_url)
     await connection.execute(f'CREATE SCHEMA "{schema}"')
     await connection.close()
+    migration = await asyncio.to_thread(
+        run_migration_operator,
+        database_url,
+        schema,
+        "upgrade",
+        "head",
+    )
+    assert migration.returncode == 0, migration.stderr
     store = PostgresStore(database_url, schema=schema)
     try:
         await asyncio.gather(store.initialize(), store.initialize())
@@ -1802,6 +1838,14 @@ async def test_failed_initialization_releases_resources_and_can_retry(
     connection = await asyncpg.connect(database_url)
     await connection.execute(f'CREATE SCHEMA "{schema}"')
     await connection.close()
+    migration = await asyncio.to_thread(
+        run_migration_operator,
+        database_url,
+        schema,
+        "upgrade",
+        "head",
+    )
+    assert migration.returncode == 0, migration.stderr
     store = PostgresStore(database_url, schema=schema)
     try:
         monkeypatch.setenv("QARUNNER_ADMIN_PASSWORD", "admin123")

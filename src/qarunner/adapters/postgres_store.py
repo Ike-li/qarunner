@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -13,6 +12,7 @@ import asyncpg
 
 from qarunner.core.flaky import FlakyPolicy, flakiness
 from qarunner.errors import RunNotFound
+from qarunner.migrations.runtime import validate_schema_revision
 from qarunner.models import (
     CaseHistoryPoint,
     Credential,
@@ -29,163 +29,6 @@ from qarunner.models import (
 
 logger = logging.getLogger(__name__)
 
-_MIGRATIONS: tuple[tuple[int, str], ...] = (
-    (
-        1,
-        """
-        CREATE TABLE users (
-            username TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL,
-            token_version INTEGER NOT NULL DEFAULT 0
-        )
-        """,
-    ),
-    (
-        2,
-        """
-        CREATE TABLE runs (
-            id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            runner TEXT NOT NULL,
-            created_by TEXT NOT NULL,
-            tests_path TEXT NOT NULL,
-            args_json JSONB NOT NULL DEFAULT '[]',
-            allure_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            timeout INTEGER,
-            executor_mode TEXT NOT NULL DEFAULT 'docker',
-            summary_json JSONB,
-            report_json JSONB,
-            exit_code INTEGER,
-            error TEXT,
-            created_at TIMESTAMPTZ NOT NULL,
-            started_at TIMESTAMPTZ,
-            finished_at TIMESTAMPTZ,
-            env_json JSONB NOT NULL DEFAULT '{}',
-            locked BOOLEAN NOT NULL DEFAULT FALSE,
-            worker_node_id TEXT,
-            profile_id TEXT
-        )
-        """,
-    ),
-    (
-        3,
-        """
-        CREATE TABLE suites (
-            name TEXT PRIMARY KEY,
-            source TEXT NOT NULL DEFAULT 'local',
-            repo_url TEXT,
-            ref TEXT,
-            credential_ref TEXT,
-            created_by TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
-        )
-        """,
-    ),
-    (
-        4,
-        """
-        CREATE TABLE credentials (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            type TEXT NOT NULL,
-            enc_secret TEXT NOT NULL,
-            created_by TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
-        )
-        """,
-    ),
-    (
-        5,
-        """
-        CREATE TABLE test_profiles (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            tests_path TEXT NOT NULL,
-            runner TEXT NOT NULL DEFAULT 'pytest',
-            selected_files_json JSONB NOT NULL DEFAULT '[]',
-            selected_markers_json JSONB NOT NULL DEFAULT '[]',
-            extra_args TEXT NOT NULL DEFAULT '',
-            executor_mode TEXT NOT NULL DEFAULT 'docker',
-            timeout INTEGER,
-            created_by TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL,
-            env_json JSONB NOT NULL DEFAULT '{}',
-            webhook_url TEXT
-        )
-        """,
-    ),
-    (
-        6,
-        """
-        CREATE TABLE test_schedules (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            profile_id TEXT NOT NULL REFERENCES test_profiles(id) ON DELETE CASCADE,
-            cron_expression TEXT NOT NULL,
-            enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            timezone TEXT NOT NULL DEFAULT 'UTC',
-            last_run_at TIMESTAMPTZ,
-            next_run_at TIMESTAMPTZ,
-            created_by TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
-        )
-        """,
-    ),
-    (
-        7,
-        """
-        CREATE TABLE run_test_cases (
-            id BIGSERIAL PRIMARY KEY,
-            run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-            tests_path TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL,
-            suite TEXT NOT NULL,
-            name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            duration_ms INTEGER NOT NULL DEFAULT 0,
-            message TEXT
-        );
-        CREATE INDEX idx_cases_run ON run_test_cases(run_id);
-        CREATE INDEX idx_cases_case
-            ON run_test_cases(tests_path, suite, name, created_at)
-        """,
-    ),
-    (
-        8,
-        """
-        CREATE INDEX idx_runs_running_worker
-            ON runs(worker_node_id)
-            WHERE status = 'running'
-        """,
-    ),
-    (
-        9,
-        """
-        ALTER TABLE runs
-            ADD COLUMN cleanup_claimed BOOLEAN NOT NULL DEFAULT FALSE;
-        CREATE INDEX idx_runs_cleanup_candidates
-            ON runs(finished_at)
-            WHERE cleanup_claimed = FALSE
-              AND locked = FALSE
-              AND status IN ('completed', 'failed', 'timeout')
-        """,
-    ),
-    (
-        10,
-        """
-        CREATE TABLE run_ai_diagnosis (
-            run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
-            diagnosis_json JSONB NOT NULL,
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
-        )
-        """,
-    ),
-)
 _SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
 _MAX_CASE_MESSAGE_CHARS = 8192
 _ADMIN_MUTATION_LOCK_SQL = """
@@ -218,7 +61,7 @@ class PostgresStore:
         self._initialization_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Open the pool, migrate an empty database, and seed the initial admin."""
+        """Open the pool only after the operator-owned Schema is exactly at head."""
         async with self._initialization_lock:
             await self._initialize_locked()
 
@@ -237,63 +80,7 @@ class PostgresStore:
 
         try:
             async with self._require_pool().acquire() as connection, connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext('qarunner-schema-migrations'))"
-                )
-                await connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        checksum TEXT NOT NULL,
-                        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                    )
-                    """
-                )
-                await connection.execute(
-                    "ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT"
-                )
-                known_migrations = {
-                    version: hashlib.sha256(ddl.encode("utf-8")).hexdigest()
-                    for version, ddl in _MIGRATIONS
-                }
-                applied_records = await connection.fetch(
-                    "SELECT version, checksum FROM schema_migrations"
-                )
-                applied: set[int] = set()
-                for record in applied_records:
-                    version = record["version"]
-                    checksum = record["checksum"]
-                    expected_checksum = known_migrations.get(version)
-                    if expected_checksum is None:
-                        raise RuntimeError(f"unknown applied migration {version}")
-                    if checksum is None:
-                        await connection.execute(
-                            "UPDATE schema_migrations SET checksum = $1 WHERE version = $2",
-                            expected_checksum,
-                            version,
-                        )
-                    elif checksum != expected_checksum:
-                        raise RuntimeError(f"migration {version} checksum mismatch")
-                    applied.add(version)
-
-                if applied:
-                    expected_prefix = {
-                        version for version, _ddl in _MIGRATIONS if version <= max(applied)
-                    }
-                    if applied != expected_prefix:
-                        raise RuntimeError("non-contiguous migration ledger")
-
-                for version, ddl in _MIGRATIONS:
-                    if version not in applied:
-                        await connection.execute(ddl)
-                        await connection.execute(
-                            "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
-                            version,
-                            known_migrations[version],
-                        )
-                await connection.execute(
-                    "ALTER TABLE schema_migrations ALTER COLUMN checksum SET NOT NULL"
-                )
+                await validate_schema_revision(connection, schema=self._schema)
 
                 if created_pool:
                     await connection.execute(

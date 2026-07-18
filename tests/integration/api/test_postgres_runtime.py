@@ -17,6 +17,7 @@ import asyncpg
 import httpx
 import pytest
 from starlette.testclient import TestClient
+from tests.integration.migration_operator import run_migration_operator
 
 from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.api.app import create_app
@@ -49,6 +50,8 @@ def postgres_schema() -> Iterator[tuple[str, str]]:
             await connection.close()
 
     asyncio.run(create())
+    migration = run_migration_operator(database_url, schema, "upgrade", "head")
+    assert migration.returncode == 0, migration.stderr
     try:
         yield database_url, schema
     finally:
