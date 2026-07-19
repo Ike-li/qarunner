@@ -17,6 +17,7 @@ from qarunner.application.ports.batch_finalization import (
     BatchFinalizationSourceSnapshot,
     FinalizeBatchAuthority,
 )
+from qarunner.application.ports.batch_finalization_readiness import READINESS_SCHEMA
 from qarunner.application.ports.batch_preexecution import (
     AuthorityPermissionDenied,
     AuthorityStateConflict,
@@ -54,6 +55,7 @@ class PostgresBatchFinalizationUnitOfWork:
         self._authority: FinalizeBatchAuthority | None = None
         self._snapshot: BatchFinalizationMutationSnapshot | None = None
         self._suite_id: str | None = None
+        self._readiness_ref: str | None = None
         self._locked_batch_id: str | None = None
         self._locked_batch_version: int | None = None
         self._aborted = False
@@ -113,14 +115,29 @@ class PostgresBatchFinalizationUnitOfWork:
                 batch.version,
                 batch.state,
                 batch.write_epoch,
+                batch.finalization_readiness_ref,
                 revision.suite_id,
+                readiness.source_batch_version AS readiness_source_batch_version,
+                readiness.batch_version AS readiness_batch_version,
+                readiness.manifest_digest AS readiness_manifest_digest,
+                readiness.shard_plan_digest AS readiness_shard_plan_digest,
+                readiness.canonical_run_set_digest AS readiness_run_set_digest,
+                readiness.success_policy_digest AS readiness_policy_digest,
+                readiness.readiness_digest,
+                readiness.compatibility_epoch,
+                readiness.state_model_version,
+                readiness.payload AS readiness_payload,
                 basis.source_batch_version AS stored_source_batch_version,
-                basis.batch_outcome AS stored_batch_outcome
+                basis.batch_outcome AS stored_batch_outcome,
+                basis.readiness_ref AS stored_basis_readiness_ref
             FROM qep_batches AS batch
             JOIN qep_suite_revisions AS revision ON revision.id = batch.suite_revision_id
             JOIN qep_suites AS suite
               ON suite.id = revision.suite_id
              AND suite.project_id = batch.project_id
+            LEFT JOIN qep_batch_finalization_readiness_facts AS readiness
+              ON readiness.ref = batch.finalization_readiness_ref
+             AND readiness.batch_id = batch.id
             LEFT JOIN qep_batch_finalization_bases AS basis ON basis.batch_id = batch.id
             WHERE batch.id = $1
             FOR UPDATE OF batch
@@ -143,12 +160,16 @@ class PostgresBatchFinalizationUnitOfWork:
             or row["version"] != candidate.source_batch_version + 1
             or row["state"] != row["stored_batch_outcome"]
             or row["state"] not in _TERMINAL_BATCH_STATES
+            or row["stored_basis_readiness_ref"] != row["finalization_readiness_ref"]
         ):
             raise AuthorityStateConflict(reason="stored_batch_finalization_binding_invalid")
+
+        _validate_readiness_binding(row=row, expected=candidate.source_snapshot)
 
         self._locked_batch_id = batch_id
         self._locked_batch_version = row["version"]
         self._suite_id = row["suite_id"]
+        self._readiness_ref = row["finalization_readiness_ref"]
         actual = await self._read_source_snapshot(expected=candidate.source_snapshot)
         if actual != candidate.source_snapshot:
             raise AuthorityStateConflict(reason="batch_finalization_source_snapshot_mismatch")
@@ -179,6 +200,8 @@ class PostgresBatchFinalizationUnitOfWork:
                 basis.batch_outcome,
                 basis.basis_digest,
                 basis.payload,
+                basis.readiness_ref,
+                batch.finalization_readiness_ref,
                 batch.state,
                 batch.version
             FROM qep_batch_finalization_bases AS basis
@@ -238,6 +261,8 @@ class PostgresBatchFinalizationUnitOfWork:
                 basis.batch_outcome,
                 basis.basis_digest,
                 basis.payload,
+                basis.readiness_ref,
+                batch.finalization_readiness_ref,
                 batch.state,
                 batch.version
             FROM qep_batch_finalization_bases AS basis
@@ -620,10 +645,11 @@ class PostgresBatchFinalizationUnitOfWork:
             INSERT INTO qep_batch_finalization_bases (
                 id, batch_id, source_batch_version, manifest_digest, shard_plan_digest,
                 canonical_run_set_digest, batch_item_resolution_set_digest,
-                original_denominator, batch_outcome, basis_digest, payload, created_at
+                original_denominator, batch_outcome, basis_digest, payload,
+                readiness_ref, created_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                transaction_timestamp()
+                $12, transaction_timestamp()
             )
             """,
             f"batch-finalization-basis-{_digest_hex(basis.basis_digest)}",
@@ -637,6 +663,7 @@ class PostgresBatchFinalizationUnitOfWork:
             basis.batch_outcome.value,
             _digest_hex(basis.basis_digest),
             _json(basis.canonical_payload()),
+            self._readiness_ref,
         )
         _require_inserted(status, reason="batch_finalization_basis_write_missing")
 
@@ -938,6 +965,67 @@ def _stored_projection(*, batch_id: str, row: asyncpg.Record) -> BatchFinalizati
         ) from error
 
 
+def _validate_readiness_binding(
+    *, expected: BatchFinalizationSourceSnapshot, row: asyncpg.Record
+) -> None:
+    ref = row["finalization_readiness_ref"]
+    if not ref or row["readiness_payload"] is None:
+        raise AuthorityStateConflict(reason="batch_finalization_readiness_binding_missing")
+    if expected.source_batch_version < 1:
+        raise AuthorityStateConflict(reason="batch_finalization_readiness_binding_invalid")
+    payload = _json_object(row["readiness_payload"])
+    expected_run_basis_digests = [
+        value.run_basis_digest.value for value in expected.terminal_run_refs
+    ]
+    required = {
+        "batch_id",
+        "source_batch_version",
+        "manifest_id",
+        "manifest_digest",
+        "item_count",
+        "shard_plan_id",
+        "shard_plan_version",
+        "shard_plan_digest",
+        "canonical_run_set_digest",
+        "success_policy_digest",
+        "batch_cancellation_intent_digest",
+        "run_basis_digests",
+        "pending_retry_intents",
+        "attempt_creation_opportunities",
+    }
+    if not required.issubset(payload):
+        raise AuthorityStateConflict(reason="batch_finalization_readiness_integrity_invalid")
+    readiness_digest = canonical_digest(schema_version=READINESS_SCHEMA, payload=payload)
+    if (
+        row["readiness_source_batch_version"] != expected.source_batch_version - 1
+        or row["readiness_batch_version"] != expected.source_batch_version
+        or row["readiness_manifest_digest"] != _digest_hex(expected.manifest_digest)
+        or row["readiness_shard_plan_digest"] != _digest_hex(expected.shard_plan_digest)
+        or row["readiness_run_set_digest"] != _digest_hex(expected.canonical_run_set_digest)
+        or row["readiness_policy_digest"] != _digest_hex(expected.success_policy_digest)
+        or row["readiness_digest"] != _digest_hex(readiness_digest)
+        or row["compatibility_epoch"] != "M0-STATE-V1"
+        or row["state_model_version"] != 1
+        or payload["batch_id"] != expected.batch_id
+        or payload["source_batch_version"] != expected.source_batch_version - 1
+        or payload["manifest_id"] != expected.manifest_id
+        or payload["manifest_digest"] != expected.manifest_digest.value
+        or payload["item_count"] != expected.item_count
+        or payload["shard_plan_id"] != expected.shard_plan_id
+        or payload["shard_plan_version"] != expected.shard_plan_version
+        or payload["shard_plan_digest"] != expected.shard_plan_digest.value
+        or payload["canonical_run_set_digest"] != expected.canonical_run_set_digest.value
+        or payload["success_policy_digest"] != expected.success_policy_digest.value
+        or payload["batch_cancellation_intent_digest"]
+        != _optional_digest_value_text(expected.batch_cancellation_intent_digest)
+        or payload["run_basis_digests"] != expected_run_basis_digests
+        or payload["pending_retry_intents"] != []
+        or payload["attempt_creation_opportunities"] != []
+        or ref != f"batch-finalization-readiness-{_digest_hex(readiness_digest)}"
+    ):
+        raise AuthorityStateConflict(reason="batch_finalization_readiness_binding_invalid")
+
+
 def _validated_stored_projection(
     *, batch_id: str, row: asyncpg.Record
 ) -> BatchFinalizationProjection:
@@ -967,6 +1055,7 @@ def _validated_stored_projection(
         or payload["original_denominator"] != row["original_denominator"]
         or payload["batch_outcome"] != row["batch_outcome"]
         or basis_digest != _digest(row["basis_digest"])
+        or row["readiness_ref"] != row["finalization_readiness_ref"]
         or row["state"] != row["batch_outcome"]
         or row["version"] != row["source_batch_version"] + 1
     ):

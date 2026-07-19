@@ -97,7 +97,11 @@ async def test_batch_finalization_commits_all_facts_once_and_exactly_replays(
     async with pool.acquire() as connection:
         persisted = await _publication_snapshot(connection)
         basis_row = await connection.fetchrow(
-            "SELECT basis_digest, payload FROM qep_batch_finalization_bases"
+            "SELECT basis_digest, payload, readiness_ref FROM qep_batch_finalization_bases"
+        )
+        readiness_ref = await connection.fetchval(
+            "SELECT finalization_readiness_ref FROM qep_batches WHERE id = $1",
+            candidate.batch_id,
         )
         resolution_rows = await connection.fetch(
             """
@@ -131,6 +135,8 @@ async def test_batch_finalization_commits_all_facts_once_and_exactly_replays(
         "outbox_count": 1,
     }
     assert basis_row is not None
+    assert basis_row["readiness_ref"] is not None
+    assert basis_row["readiness_ref"] == readiness_ref
     assert basis_row["basis_digest"] == _digest_hex(candidate.basis_digest)
     assert json.loads(basis_row["payload"]) == candidate.canonical_payload()
     assert [json.loads(row["payload"]) for row in resolution_rows] == [
@@ -764,6 +770,113 @@ async def test_corrupt_stored_basis_payload_fails_with_integrity_conflict(
 
 
 @pytest.mark.asyncio
+async def test_terminal_replay_rejects_basis_bound_to_a_different_readiness_fact(
+    batch_finalization_store: PostgresStore,
+) -> None:
+    from qarunner.adapters.postgres_batch_finalization import (
+        PostgresBatchFinalizationUnitOfWork,
+    )
+    from qarunner.application.ports.batch_preexecution import AuthorityStateConflict
+
+    candidate = BatchFinalizationBasis.build(**_basis_inputs())
+    pool = batch_finalization_store._require_pool()
+    await _seed_batch_finalization_sources(pool, candidate)
+    authority = _authority(candidate)
+    async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+        await FinalizeBatch(gateway=gateway).execute(
+            FinalizeBatchCommand(candidate, candidate.source_batch_version)
+        )
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_batch_finalization_readiness_facts (
+                ref, batch_id, source_batch_version, batch_version,
+                manifest_digest, shard_plan_digest, canonical_run_set_digest,
+                success_policy_digest, batch_cancellation_intent_digest,
+                readiness_digest, authority_digest, write_epoch,
+                compatibility_epoch, state_model_version, payload, recorded_at
+            )
+            SELECT
+                'readiness-other', batch_id, 0, 1,
+                manifest_digest, shard_plan_digest, canonical_run_set_digest,
+                success_policy_digest, batch_cancellation_intent_digest,
+                $1, authority_digest, write_epoch,
+                compatibility_epoch, state_model_version, payload, recorded_at
+            FROM qep_batch_finalization_readiness_facts
+            """,
+            "f" * 64,
+        )
+        await connection.execute(
+            "UPDATE qep_batch_finalization_bases SET readiness_ref = 'readiness-other'"
+        )
+
+    with pytest.raises(AuthorityStateConflict) as invalid:
+        async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+            await FinalizeBatch(gateway=gateway).execute(
+                FinalizeBatchCommand(candidate, expected_batch_version=99)
+            )
+
+    assert invalid.value.reason == "stored_batch_finalization_binding_invalid"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("corruption", "reason"),
+    [
+        ("missing_ref", "batch_finalization_readiness_binding_missing"),
+        ("payload_fields", "batch_finalization_readiness_integrity_invalid"),
+        ("payload_binding", "batch_finalization_readiness_binding_invalid"),
+    ],
+)
+async def test_finalization_authority_rejects_readiness_fact_corruption(
+    batch_finalization_store: PostgresStore,
+    corruption: str,
+    reason: str,
+) -> None:
+    from qarunner.adapters.postgres_batch_finalization import (
+        PostgresBatchFinalizationUnitOfWork,
+    )
+    from qarunner.application.ports.batch_preexecution import AuthorityStateConflict
+
+    candidate = BatchFinalizationBasis.build(**_basis_inputs())
+    pool = batch_finalization_store._require_pool()
+    await _seed_batch_finalization_sources(pool, candidate)
+    authority = _authority(candidate)
+    async with pool.acquire() as connection:
+        if corruption == "missing_ref":
+            await connection.execute("UPDATE qep_batches SET finalization_readiness_ref = NULL")
+        elif corruption == "payload_fields":
+            await connection.execute(
+                "UPDATE qep_batch_finalization_readiness_facts SET payload = '{}'::jsonb"
+            )
+        else:
+            payload = json.loads(
+                await connection.fetchval(
+                    "SELECT payload FROM qep_batch_finalization_readiness_facts"
+                )
+            )
+            payload["manifest_id"] = "manifest-other"
+            readiness_digest = canonical_digest(
+                schema_version="qep.batch-finalization-readiness.v1",
+                payload=payload,
+            )
+            await connection.execute(
+                """
+                UPDATE qep_batch_finalization_readiness_facts
+                SET payload = $1, readiness_digest = $2
+                """,
+                json.dumps(payload, sort_keys=True),
+                _digest_hex(readiness_digest),
+            )
+
+    with pytest.raises(AuthorityStateConflict) as invalid:
+        async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+            await gateway.require_finalization_authority(batch_id=candidate.batch_id)
+
+    assert invalid.value.reason == reason
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("after_finalization", "reason"),
     [
@@ -1133,6 +1246,79 @@ async def _seed_batch_finalization_sources(
                 json.dumps(item.canonical_payload(), sort_keys=True),
                 item.recorded_at,
             )
+        await _seed_readiness_binding(connection, candidate, now)
+
+
+async def _seed_readiness_binding(
+    connection: asyncpg.Connection,
+    candidate: BatchFinalizationBasis,
+    now: datetime,
+) -> None:
+    source_batch_version = candidate.source_batch_version - 1
+    payload = {
+        "batch_id": candidate.batch_id,
+        "source_batch_version": source_batch_version,
+        "manifest_id": candidate.manifest_id,
+        "manifest_digest": candidate.manifest_digest.value,
+        "item_count": candidate.item_count,
+        "shard_plan_id": candidate.shard_plan_id,
+        "shard_plan_version": candidate.shard_plan_version,
+        "shard_plan_digest": candidate.shard_plan_digest.value,
+        "canonical_run_ids": sorted(value.run_id for value in candidate.run_bases),
+        "canonical_run_set_digest": candidate.canonical_run_set_digest.value,
+        "success_policy_digest": candidate.policy.policy_digest.value,
+        "batch_cancellation_intent_digest": _optional_digest_value(
+            candidate.batch_cancellation_intent_digest
+        ),
+        "run_basis_digests": [value.basis_digest.value for value in candidate.run_bases],
+        "pending_retry_intents": [],
+        "attempt_creation_opportunities": [],
+    }
+    readiness_digest = canonical_digest(
+        schema_version="qep.batch-finalization-readiness.v1",
+        payload=payload,
+    )
+    ref = f"batch-finalization-readiness-{_digest_hex(readiness_digest)}"
+    authority_digest = canonical_digest(
+        schema_version="qep.batch-finalization-readiness-authority.v1",
+        payload={
+            "batch_id": candidate.batch_id,
+            "source_batch_version": source_batch_version,
+            "write_epoch": 1,
+        },
+    )
+    await connection.execute(
+        """
+        INSERT INTO qep_batch_finalization_readiness_facts (
+            ref, batch_id, source_batch_version, batch_version,
+            manifest_digest, shard_plan_digest, canonical_run_set_digest,
+            success_policy_digest, batch_cancellation_intent_digest,
+            readiness_digest, authority_digest, write_epoch,
+            compatibility_epoch, state_model_version, payload, recorded_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1,
+            'M0-STATE-V1', 1, $12, $13
+        )
+        """,
+        ref,
+        candidate.batch_id,
+        source_batch_version,
+        candidate.source_batch_version,
+        _digest_hex(candidate.manifest_digest),
+        _digest_hex(candidate.shard_plan_digest),
+        _digest_hex(candidate.canonical_run_set_digest),
+        _digest_hex(candidate.policy.policy_digest),
+        _optional_digest_hex(candidate.batch_cancellation_intent_digest),
+        _digest_hex(readiness_digest),
+        _digest_hex(authority_digest),
+        json.dumps(payload, sort_keys=True),
+        now,
+    )
+    await connection.execute(
+        "UPDATE qep_batches SET finalization_readiness_ref = $1 WHERE id = $2",
+        ref,
+        candidate.batch_id,
+    )
 
 
 def _policy_payload(candidate: BatchFinalizationBasis) -> dict[str, object]:
@@ -1311,3 +1497,11 @@ async def _publication_snapshot(connection: asyncpg.Connection) -> dict[str, obj
 def _digest_hex(value) -> str:
     assert value is not None
     return value.value.removeprefix("sha256:")
+
+
+def _optional_digest_hex(value) -> str | None:
+    return None if value is None else _digest_hex(value)
+
+
+def _optional_digest_value(value) -> str | None:
+    return None if value is None else value.value

@@ -7,6 +7,7 @@ import pytest
 
 from qarunner.adapters.postgres_batch_finalization import (
     PostgresBatchFinalizationUnitOfWork,
+    _validate_readiness_binding,
 )
 from qarunner.application.ports.batch_finalization import (
     BatchFinalizationSourceSnapshot,
@@ -45,3 +46,24 @@ def _authority() -> FinalizeBatchAuthority:
         ),
         write_epoch=1,
     )
+
+
+def test_readiness_binding_rejects_terminal_source_without_predecessor_version() -> None:
+    from qarunner.application.ports.batch_preexecution import AuthorityStateConflict
+
+    authority = _authority()
+    source = authority.source_snapshot
+    source = type(source)(
+        **{
+            field: (0 if field == "source_batch_version" else getattr(source, field))
+            for field in source.__dataclass_fields__
+        }
+    )
+    with pytest.raises(AuthorityStateConflict, match="readiness_binding_invalid"):
+        _validate_readiness_binding(
+            expected=source,
+            row={
+                "finalization_readiness_ref": "readiness-1",
+                "readiness_payload": {},
+            },
+        )
