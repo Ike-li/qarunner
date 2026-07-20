@@ -35,6 +35,7 @@ from qarunner.migrations.runtime import (
 )
 from qarunner.migrations.versions import (
     legacy_baseline,
+    m1_application_uow,
     m1_batch_readiness,
     m1_greenfield_core,
     m1_greenfield_facts,
@@ -90,6 +91,8 @@ _EXPECTED_GREENFIELD_TABLES = {
     "qep_unknown_adjudications",
     "qep_unknown_observations",
     "qep_unknown_review_policies",
+    "qep_versioned_fact_commands",
+    "qep_versioned_fact_snapshots",
     "qep_worker_generations",
     "qep_workers",
 }
@@ -203,6 +206,12 @@ def test_in_process_revision_scripts_execute_upgrade_and_downgrade() -> None:
                 )
                 await sql_connection.run_sync(
                     lambda sync: invoke(sync, m1_batch_readiness, "upgrade")
+                )
+                await sql_connection.run_sync(
+                    lambda sync: invoke(sync, m1_application_uow, "upgrade")
+                )
+                await sql_connection.run_sync(
+                    lambda sync: invoke(sync, m1_application_uow, "downgrade")
                 )
                 await sql_connection.run_sync(
                     lambda sync: invoke(sync, m1_batch_readiness, "downgrade")
@@ -347,7 +356,7 @@ def test_migration_config_rejects_unsafe_inputs_and_supports_postgres_urls(
         schema="safe_schema",
     )
     assert config.attributes["qarunner_schema"] == "safe_schema"
-    assert expected_heads() == ("m1_batch_readiness",)
+    assert expected_heads() == ("m1_application_uow",)
 
 
 @pytest.mark.asyncio
@@ -435,7 +444,7 @@ async def test_empty_schema_upgrade_matches_authorized_catalog(
         await connection.close()
 
     assert tables == {"alembic_version"} | _EXPECTED_LEGACY_TABLES | _EXPECTED_GREENFIELD_TABLES
-    assert revision == "m1_batch_readiness"
+    assert revision == "m1_application_uow"
     assert [row["version"] for row in legacy_ledger] == list(range(1, 11))
     assert all(len(row["checksum"]) == 64 for row in legacy_ledger)
 
@@ -445,7 +454,7 @@ async def test_batch_readiness_migration_adds_authoritative_fact_and_ref_binding
     empty_postgres_schema: tuple[str, str],
 ) -> None:
     database_url, schema = empty_postgres_schema
-    result = run_migration_operator(database_url, schema, "upgrade", "head")
+    result = run_migration_operator(database_url, schema, "upgrade", "m1_batch_readiness")
     assert result.returncode == 0, result.stderr
 
     connection = await asyncpg.connect(database_url)
@@ -507,6 +516,73 @@ async def test_batch_readiness_migration_adds_authoritative_fact_and_ref_binding
         ("qep_batch_finalization_bases", "readiness_ref"),
     }
     assert revision == "m1_batch_readiness"
+
+
+@pytest.mark.asyncio
+async def test_application_uow_migration_adds_generic_fact_and_replay_relations(
+    empty_postgres_schema: tuple[str, str],
+) -> None:
+    database_url, schema = empty_postgres_schema
+    result = run_migration_operator(database_url, schema, "upgrade", "head")
+    assert result.returncode == 0, result.stderr
+
+    connection = await asyncpg.connect(database_url)
+    try:
+        columns = {
+            (row["table_name"], row["column_name"])
+            for row in await connection.fetch(
+                """
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = $1
+                  AND table_name IN (
+                    'qep_versioned_fact_snapshots',
+                    'qep_versioned_fact_commands'
+                  )
+                """,
+                schema,
+            )
+        }
+        foreign_keys = {
+            row["constraint_name"]
+            for row in await connection.fetch(
+                """
+                SELECT constraint_name
+                FROM information_schema.table_constraints
+                WHERE table_schema = $1
+                  AND table_name = 'qep_versioned_fact_commands'
+                  AND constraint_type = 'FOREIGN KEY'
+                """,
+                schema,
+            )
+        }
+        revision = await connection.fetchval(f'SELECT version_num FROM "{schema}".alembic_version')
+    finally:
+        await connection.close()
+
+    assert columns == {
+        ("qep_versioned_fact_snapshots", "fact_kind"),
+        ("qep_versioned_fact_snapshots", "fact_key"),
+        ("qep_versioned_fact_snapshots", "version"),
+        ("qep_versioned_fact_snapshots", "fact_id"),
+        ("qep_versioned_fact_snapshots", "codec_schema_version"),
+        ("qep_versioned_fact_snapshots", "payload_digest"),
+        ("qep_versioned_fact_snapshots", "payload"),
+        ("qep_versioned_fact_snapshots", "recorded_at"),
+        ("qep_versioned_fact_commands", "idempotency_scope"),
+        ("qep_versioned_fact_commands", "idempotency_key"),
+        ("qep_versioned_fact_commands", "request_digest"),
+        ("qep_versioned_fact_commands", "command_digest"),
+        ("qep_versioned_fact_commands", "response_status"),
+        ("qep_versioned_fact_commands", "response_ref"),
+        ("qep_versioned_fact_commands", "fact_kind"),
+        ("qep_versioned_fact_commands", "fact_key"),
+        ("qep_versioned_fact_commands", "fact_version"),
+        ("qep_versioned_fact_commands", "fact_payload_digest"),
+        ("qep_versioned_fact_commands", "recorded_at"),
+    }
+    assert len(foreign_keys) == 1
+    assert revision == "m1_application_uow"
 
 
 @pytest.mark.asyncio
@@ -660,7 +736,7 @@ async def test_exact_legacy_v10_schema_can_be_adopted_then_upgraded(
         "password_hash": "legacy-hash",
         "role": "user",
     }
-    assert revision == "m1_batch_readiness"
+    assert revision == "m1_application_uow"
 
 
 @pytest.mark.asyncio

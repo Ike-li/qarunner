@@ -35,6 +35,30 @@ class StartFailingPool:
         self.releases += 1
 
 
+class TransactionFactoryFailingConnection:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def transaction(self, *, isolation: str) -> None:
+        assert isolation == "read_committed"
+        raise self.error
+
+
+class TransactionFactoryFailingPool:
+    def __init__(self, error: Exception) -> None:
+        self.connection = TransactionFactoryFailingConnection(error)
+        self.acquires = 0
+        self.releases = 0
+
+    async def acquire(self) -> TransactionFactoryFailingConnection:
+        self.acquires += 1
+        return self.connection
+
+    async def release(self, connection: TransactionFactoryFailingConnection) -> None:
+        assert connection is self.connection
+        self.releases += 1
+
+
 class RecordingTransaction:
     def __init__(self) -> None:
         self.starts = 0
@@ -73,3 +97,25 @@ class RecordingPool:
     async def release(self, connection: RecordingConnection) -> None:
         assert connection is self.connection
         self.releases += 1
+
+
+class CommitFailingTransaction(RecordingTransaction):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    async def commit(self) -> None:
+        self.commits += 1
+        raise self.error
+
+
+class CommitFailingConnection(RecordingConnection):
+    def __init__(self, error: Exception) -> None:
+        self.transaction_value = CommitFailingTransaction(error)
+
+
+class CommitFailingPool(RecordingPool):
+    def __init__(self, error: Exception) -> None:
+        self.connection = CommitFailingConnection(error)
+        self.acquires = 0
+        self.releases = 0
