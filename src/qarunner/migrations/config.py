@@ -10,12 +10,16 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 _SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]*\Z")
+_MAX_POSTGRES_IDENTIFIER_BYTES = 63
 _SCRIPT_LOCATION = Path(__file__).resolve().parent
 
 
 def validate_schema_name(schema: str) -> str:
     """Reject identifiers that cannot be safely used as PostgreSQL Schema names."""
-    if _SCHEMA_PATTERN.fullmatch(schema) is None:
+    if (
+        _SCHEMA_PATTERN.fullmatch(schema) is None
+        or len(schema.encode("ascii")) > _MAX_POSTGRES_IDENTIFIER_BYTES
+    ):
         raise ValueError("PostgreSQL schema must be a safe lowercase identifier")
     return schema
 

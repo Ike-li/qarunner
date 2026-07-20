@@ -342,6 +342,8 @@ def test_migration_config_rejects_unsafe_inputs_and_supports_postgres_urls(
     assert validate_schema_name("safe_schema") == "safe_schema"
     with pytest.raises(ValueError, match="safe lowercase identifier"):
         validate_schema_name("Unsafe-Schema")
+    with pytest.raises(ValueError, match="safe lowercase identifier"):
+        validate_schema_name("s" * 64)
     assert to_async_sqlalchemy_url("postgresql+asyncpg://db") == "postgresql+asyncpg://db"
     assert to_async_sqlalchemy_url("postgresql://db") == "postgresql+asyncpg://db"
     assert to_async_sqlalchemy_url("postgres://db") == "postgresql+asyncpg://db"
