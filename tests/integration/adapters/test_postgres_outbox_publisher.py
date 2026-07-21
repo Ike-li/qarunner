@@ -193,6 +193,76 @@ async def test_not_yet_available_pending_rows_are_not_claimed(
     assert status == "pending"
 
 
+async def test_repair_scan_reclaims_a_lease_stuck_past_its_timeout(
+    outbox_store: PostgresStore,
+) -> None:
+    pool = outbox_store._require_pool()
+    stuck_since = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_leased_event(pool, event_id="event-00", leased_at=stuck_since)
+    sink = InMemoryOutboxSink()
+    publisher = PostgresOutboxPublisher(pool, sink=sink, max_attempts=3, retry_backoff_seconds=30)
+
+    repaired = await publisher.repair_stuck_leases(lease_timeout_seconds=300)
+
+    assert repaired == 1
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(
+            "SELECT status, available_at FROM qep_outbox_events WHERE event_id = 'event-00'"
+        )
+    assert row["status"] == "pending"
+    assert row["available_at"] <= datetime.now(UTC)
+
+    report = await publisher.publish_pending(limit=10)
+    assert report == OutboxPublicationReport(published=("event-00",), retried=(), quarantined=())
+
+    # Idempotent: nothing left to repair once the lease has been reclaimed and delivered.
+    again = await publisher.repair_stuck_leases(lease_timeout_seconds=300)
+    assert again == 0
+
+
+async def test_repair_scan_leaves_a_fresh_lease_untouched(
+    outbox_store: PostgresStore,
+) -> None:
+    pool = outbox_store._require_pool()
+    await _seed_leased_event(pool, event_id="event-00", leased_at=datetime.now(UTC))
+    publisher = PostgresOutboxPublisher(
+        pool, sink=InMemoryOutboxSink(), max_attempts=3, retry_backoff_seconds=30
+    )
+
+    repaired = await publisher.repair_stuck_leases(lease_timeout_seconds=300)
+
+    assert repaired == 0
+    async with pool.acquire() as connection:
+        status = await connection.fetchval(
+            "SELECT status FROM qep_outbox_events WHERE event_id = 'event-00'"
+        )
+    assert status == "leased"
+
+
+async def _seed_leased_event(
+    pool: asyncpg.Pool,
+    *,
+    event_id: str,
+    leased_at: datetime,
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_outbox_events (
+                id, event_id, aggregate_type, aggregate_id, event_type,
+                payload_digest, payload, status, available_at, attempts, leased_at, created_at
+            ) VALUES (
+                $1, $1, 'test_aggregate', $2, 'test.event.v1', $3, $4, 'leased', $5, 0, $5, $5
+            )
+            """,
+            event_id,
+            f"aggregate-{event_id}",
+            "a" * 64,
+            json.dumps({"event_id": event_id}),
+            leased_at,
+        )
+
+
 async def _seed_pending_events(
     pool: asyncpg.Pool,
     *,

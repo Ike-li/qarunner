@@ -69,6 +69,27 @@ class PostgresOutboxPublisher:
             quarantined=tuple(quarantined),
         )
 
+    async def repair_stuck_leases(self, *, lease_timeout_seconds: int) -> int:
+        """Return leases stuck past a bounded timeout to pending; idempotent and safe to poll.
+
+        A crash between claim and result-recording leaves a row `leased` forever otherwise;
+        returning it to `pending` (with `available_at` reset to now) never touches domain facts,
+        matching the outbox contract's repair-scan requirement.
+        """
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                UPDATE qep_outbox_events
+                SET status = 'pending',
+                    available_at = transaction_timestamp()
+                WHERE status = 'leased'
+                  AND leased_at < transaction_timestamp() - make_interval(secs => $1)
+                RETURNING id
+                """,
+                lease_timeout_seconds,
+            )
+        return len(rows)
+
     async def _claim_batch(self, *, limit: int) -> list[asyncpg.Record]:
         async with self._pool.acquire() as connection:
             return await connection.fetch(
