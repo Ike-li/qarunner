@@ -178,6 +178,79 @@ async def test_run_finalization_commits_all_facts_once_and_exactly_replays(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_identical_run_finalizations_commit_once_and_exactly_replay(
+    run_finalization_store: PostgresStore,
+) -> None:
+    expected = command()
+    pool = run_finalization_store._require_pool()
+    await _seed_finalizable_run(pool, expected)
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def finalize():
+        await start.wait()
+        async with PostgresRunFinalizationUnitOfWork(pool) as gateway:
+            return await FinalizeRun(gateway=gateway).execute(expected)
+
+    results = await asyncio.gather(*(finalize() for _ in range(contenders)))
+
+    assert sum(result.replayed for result in results) == contenders - 1
+    assert {result.projection for result in results} == {results[0].projection}
+    async with pool.acquire() as connection:
+        assert await _publication_snapshot(connection) == {
+            "run_phase": "closed",
+            "run_disposition": "closed_no_retry",
+            "run_outcome": "passed",
+            "run_version": 1,
+            "attempt_state": "passed",
+            "attempt_version": 1,
+            "basis_count": 1,
+            "resolution_count": 1,
+            "audit_count": 1,
+            "outbox_count": 1,
+            "outbox_event_type": "run.closed.v1",
+        }
+
+
+@pytest.mark.asyncio
+async def test_concurrent_conflicting_run_finalizations_elect_one_terminal_basis(
+    run_finalization_store: PostgresStore,
+) -> None:
+    first = command()
+    changed = command(candidate_basis=replace(bound_basis(), terminal_rule_digest=d("e")))
+    pool = run_finalization_store._require_pool()
+    await _seed_finalizable_run(pool, first)
+    start = asyncio.Barrier(2)
+
+    async def finalize(finalize_command):
+        await start.wait()
+        async with PostgresRunFinalizationUnitOfWork(pool) as gateway:
+            return await FinalizeRun(gateway=gateway).execute(finalize_command)
+
+    results = await asyncio.gather(
+        finalize(first),
+        finalize(changed),
+        return_exceptions=True,
+    )
+
+    conflicts = [result for result in results if isinstance(result, IdempotencyConflict)]
+    winners = [result for result in results if not isinstance(result, BaseException)]
+    assert len(conflicts) == 1
+    assert len(winners) == 1
+    winner = winners[0]
+    async with pool.acquire() as connection:
+        persisted = await _publication_snapshot(connection)
+        stored_basis_digest = await connection.fetchval(
+            "SELECT basis_digest FROM qep_run_finalization_bases"
+        )
+    assert stored_basis_digest == _digest_hex(winner.projection.basis_digest)
+    assert persisted["basis_count"] == 1
+    assert persisted["resolution_count"] == 1
+    assert persisted["audit_count"] == 1
+    assert persisted["outbox_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_outbox_conflict_rolls_back_every_run_finalization_participant(
     run_finalization_store: PostgresStore,
 ) -> None:

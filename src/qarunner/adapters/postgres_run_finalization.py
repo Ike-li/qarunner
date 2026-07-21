@@ -97,11 +97,9 @@ class PostgresRunFinalizationUnitOfWork:
                 run.version,
                 run.current_fence,
                 run.orchestration_phase,
-                batch.write_epoch,
-                basis.source_run_version AS terminal_source_run_version
+                batch.write_epoch
             FROM qep_runs AS run
             JOIN qep_batches AS batch ON batch.id = run.batch_id
-            LEFT JOIN qep_run_finalization_bases AS basis ON basis.run_id = run.id
             WHERE run.id = $1
             FOR UPDATE OF run
             """,
@@ -111,7 +109,12 @@ class PostgresRunFinalizationUnitOfWork:
             raise AuthorityPermissionDenied
         if row["write_epoch"] < 1:
             raise AuthorityStateConflict(reason="run_finalization_authority_missing")
-        terminal_source_version = row["terminal_source_run_version"]
+        # A waiter needs a fresh READ COMMITTED snapshot after acquiring the Run lock so it can see
+        # the winner's basis instead of retaining the pre-wait LEFT JOIN result.
+        terminal_source_version = await connection.fetchval(
+            "SELECT source_run_version FROM qep_run_finalization_bases WHERE run_id = $1",
+            run_id,
+        )
         if (row["orchestration_phase"] == RunPhase.CLOSED.value) != (
             terminal_source_version is not None
         ):
