@@ -2649,6 +2649,77 @@ async def test_zero_child_closure_atomically_publishes_basis_terminal_audit_and_
     assert json.loads(basis_row["payload"]) == _basis_payload(basis)
 
 
+async def test_concurrent_identical_zero_child_closures_commit_exactly_once(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def reconcile():
+        await start.wait()
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=_closure_authority(intent),
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+            trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        ) as gateway:
+            return await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id="reconciler-001",
+                    closure_epoch=1,
+                )
+            )
+
+    results = await asyncio.gather(
+        *(reconcile() for _ in range(contenders)), return_exceptions=True
+    )
+
+    winners = [result for result in results if isinstance(result, Batch)]
+    conflicts = [result for result in results if isinstance(result, PreexecutionStateConflict)]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    assert all(winner.state is BatchState.CANCELLED for winner in winners)
+    assert len({winner.preexecution_closure_basis.digest for winner in winners}) == 1
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    # one pair from _seed_cancellation_intent's RequestBatchCancellation, one from the closure
+    assert dict(persisted) == {
+        "batch_state": "cancelled",
+        "basis_count": 1,
+        "audit_count": 2,
+        "outbox_count": 2,
+    }
+
+
 async def test_zero_child_closure_replay_within_the_same_authority_short_circuits(
     batch_cancellation_store: PostgresStore,
 ) -> None:
@@ -3054,6 +3125,81 @@ async def test_zero_child_rejection_atomically_publishes_rejection_basis_audit_a
     assert basis_row is not None
     assert basis_row["basis_digest"] == _digest_hex(basis.digest)
     assert json.loads(basis_row["payload"]) == _basis_payload(basis)
+
+
+async def test_concurrent_identical_zero_child_rejections_commit_exactly_once(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    authority = _rejection_authority()
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def record():
+        await start.wait()
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=authority.recorded_at,
+            trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        ) as gateway:
+            return await RecordPreexecutionRejection(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                RecordPreexecutionRejectionCommand(
+                    batch_id="batch-001",
+                    rejection_id="rejection-001",
+                    reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                    reason_code="source_collection_failed",
+                    input_digest=_named_digest("rejection-input"),
+                    phase_owner_id="coordinator-001",
+                    rejection_epoch=1,
+                )
+            )
+
+    results = await asyncio.gather(*(record() for _ in range(contenders)), return_exceptions=True)
+
+    winners = [result for result in results if isinstance(result, Batch)]
+    conflicts = [result for result in results if isinstance(result, PreexecutionStateConflict)]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    assert all(winner.state is BatchState.REJECTED for winner in winners)
+    assert len({winner.preexecution_closure_basis.digest for winner in winners}) == 1
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {
+        "batch_state": "rejected",
+        "rejection_count": 1,
+        "basis_count": 1,
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
 
 
 async def test_zero_child_rejection_replay_within_the_same_authority_short_circuits(
