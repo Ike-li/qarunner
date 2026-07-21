@@ -2568,6 +2568,843 @@ async def test_preexecution_proof_binds_planned_scope_seal_to_current_shard_plan
         assert item.resolution == "not_started"
 
 
+async def test_zero_child_closure_atomically_publishes_basis_terminal_audit_and_outbox(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        result = await ReconcilePreexecutionCancellation(
+            gateway=gateway,
+            proof=ProvePreexecutionClosure(gateway=gateway),
+        ).execute(
+            ReconcilePreexecutionCancellationCommand(
+                batch_id="batch-001",
+                reconciler_id="reconciler-001",
+                closure_epoch=1,
+            )
+        )
+
+    assert isinstance(result, Batch)
+    assert result.state is BatchState.CANCELLED
+    assert result.version == 5
+    basis = result.preexecution_closure_basis
+    assert basis is not None
+    assert basis.terminal_kind is BatchPreexecutionTerminalKind.PRESTART_CANCEL
+    assert basis.batch_cancellation_intent_digest == intent.digest
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count,
+                (
+                    SELECT event_type FROM qep_outbox_events
+                    ORDER BY created_at DESC LIMIT 1
+                ) AS latest_outbox_event_type
+            """
+        )
+        basis_row = await connection.fetchrow(
+            "SELECT basis_digest, payload FROM qep_batch_preexecution_closure_bases"
+        )
+    assert dict(persisted) == {
+        "batch_state": "cancelled",
+        "batch_version": 5,
+        "basis_count": 1,
+        # one pair from _seed_cancellation_intent's RequestBatchCancellation, one from closure
+        "audit_count": 2,
+        "outbox_count": 2,
+        "latest_outbox_event_type": "batch.cancelled.v1",
+    }
+    assert basis_row is not None
+    assert basis_row["basis_digest"] == _digest_hex(basis.digest)
+    assert json.loads(basis_row["payload"]) == _basis_payload(basis)
+
+
+async def test_zero_child_closure_replay_within_the_same_authority_short_circuits(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        command = ReconcilePreexecutionCancellationCommand(
+            batch_id="batch-001",
+            reconciler_id="reconciler-001",
+            closure_epoch=1,
+        )
+        reconcile = ReconcilePreexecutionCancellation(
+            gateway=gateway,
+            proof=ProvePreexecutionClosure(gateway=gateway),
+        )
+        first = await reconcile.execute(command)
+        # A retried command within the same still-open authority (e.g. an application-level
+        # retry before the caller observed the first response) must see the already-stored
+        # basis and short-circuit before calling publish_preexecution_closure again.
+        second = await reconcile.execute(command)
+
+    assert first == second
+    assert second.state is BatchState.CANCELLED
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {"basis_count": 1, "audit_count": 2, "outbox_count": 2}
+
+
+async def test_zero_child_closure_publish_fails_closed_without_prior_authority_or_snapshot(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    naked_batch = Batch(id="batch-001", state=BatchState.DRAFT, version=0)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(PortContractError) as missing_authority:
+            await gateway.publish_preexecution_closure(batch=naked_batch)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001", reconciler_id="reconciler-001", closure_epoch=1
+        )
+        with pytest.raises(PortContractError) as missing_snapshot:
+            await gateway.publish_preexecution_closure(batch=naked_batch)
+
+    assert missing_authority.value.reason == "closure_authority_not_locked"
+    assert missing_snapshot.value.reason == "snapshot_not_loaded"
+
+
+async def test_zero_child_rejection_publish_fails_closed_without_prior_authority_or_snapshot(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    authority = _rejection_authority()
+    naked_batch = Batch(id="batch-001", state=BatchState.DRAFT, version=0)
+    naked_rejection = BatchRejection(
+        rejection_id="rejection-001",
+        batch_id="batch-001",
+        source_batch_version=authority.source_batch_version,
+        stage=authority.stage,
+        reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+        reason_code="source_collection_failed",
+        input_digest=_named_digest("rejection-input"),
+        authority_digest=authority.authority_digest,
+        recorded_at=authority.recorded_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(PortContractError) as missing_authority:
+            await gateway.publish_preexecution_rejection(
+                batch=naked_batch, rejection=naked_rejection
+            )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+    ) as gateway:
+        await gateway.require_rejection_authority(
+            batch_id="batch-001", phase_owner_id="coordinator-001", rejection_epoch=1
+        )
+        with pytest.raises(PortContractError) as missing_snapshot:
+            await gateway.publish_preexecution_rejection(
+                batch=naked_batch, rejection=naked_rejection
+            )
+
+    assert missing_authority.value.reason == "rejection_authority_not_locked"
+    assert missing_snapshot.value.reason == "snapshot_not_loaded"
+
+
+async def test_zero_child_closure_rejects_a_batch_without_a_closure_basis(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_closure_authority(
+            batch_id="batch-001", reconciler_id="reconciler-001", closure_epoch=1
+        )
+        unclosed = await gateway.get_batch_for_update(batch_id="batch-001")
+        assert unclosed.preexecution_closure_basis is None
+        with pytest.raises(PortContractError) as missing_basis:
+            await gateway.publish_preexecution_closure(batch=unclosed)
+        assert missing_basis.value.reason == "preexecution_closure_basis_not_transitioned"
+
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.get_batch_for_update(batch_id="batch-001")
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count
+            """
+        )
+    assert dict(persisted) == {"batch_state": "collecting", "basis_count": 0}
+
+
+async def test_zero_child_closure_publication_called_twice_fails_closed_on_stale_snapshot(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        closure_authority=_closure_authority(intent),
+        closure_reconciler_id="reconciler-001",
+        closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        authority = await gateway.require_closure_authority(
+            batch_id="batch-001", reconciler_id="reconciler-001", closure_epoch=1
+        )
+        batch = await gateway.get_batch_for_update(batch_id="batch-001")
+        proof = await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id=authority.project_id,
+                suite_revision_id=authority.suite_revision_id,
+                source_batch_version=authority.source_batch_version,
+                scope=authority.scope,
+                terminal_kind=BatchPreexecutionTerminalKind.PRESTART_CANCEL,
+                command_digest=intent.digest,
+            )
+        )
+        closed = batch.finalize_unmaterialized_cancel(
+            snapshot=proof, expected_version=authority.source_batch_version
+        )
+        await gateway.publish_preexecution_closure(batch=closed)
+        # self._snapshot was captured by the single get_batch_for_update call above and is now
+        # stale; a second publish attempt with the same closed batch must fail closed rather than
+        # silently double-write.
+        with pytest.raises(VersionConflict):
+            await gateway.publish_preexecution_closure(batch=closed)
+
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.get_batch_for_update(batch_id="batch-001")
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count
+            """
+        )
+    assert dict(persisted) == {"batch_state": "collecting", "batch_version": 4, "basis_count": 0}
+
+
+async def test_zero_child_closure_suppressed_audit_insert_fails_closed_and_rolls_back(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    intent = await _seed_cancellation_intent(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            CREATE FUNCTION suppress_preexecution_closure_audit() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NULL;
+            END
+            $$
+            """
+        )
+        await connection.execute(
+            """
+            CREATE TRIGGER suppress_preexecution_closure_audit
+            BEFORE INSERT ON qep_audit_events
+            FOR EACH ROW EXECUTE FUNCTION suppress_preexecution_closure_audit()
+            """
+        )
+
+    with pytest.raises(AuthorityStateConflict) as missing:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=_closure_authority(intent),
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+            trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        ) as gateway:
+            await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id="reconciler-001",
+                    closure_epoch=1,
+                )
+            )
+    assert missing.value.reason == "batch_preexecution_terminal_audit_write_missing"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {
+        "batch_state": "collecting",
+        "batch_version": 4,
+        "basis_count": 0,
+        # the one audit/outbox pair from _seed_cancellation_intent's RequestBatchCancellation
+        # survives; the suppressed closure audit insert rolled back everything after it
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
+
+
+async def test_zero_child_rejection_atomically_publishes_rejection_basis_audit_and_outbox(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    authority = _rejection_authority()
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        result = await RecordPreexecutionRejection(
+            gateway=gateway,
+            proof=ProvePreexecutionClosure(gateway=gateway),
+        ).execute(
+            RecordPreexecutionRejectionCommand(
+                batch_id="batch-001",
+                rejection_id="rejection-001",
+                reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                reason_code="source_collection_failed",
+                input_digest=_named_digest("rejection-input"),
+                phase_owner_id="coordinator-001",
+                rejection_epoch=1,
+            )
+        )
+
+    assert isinstance(result, Batch)
+    assert result.state is BatchState.REJECTED
+    assert result.version == 4
+    assert result.rejection_fact is not None
+    assert result.rejection_fact.rejection_id == "rejection-001"
+    basis = result.preexecution_closure_basis
+    assert basis is not None
+    assert basis.terminal_kind is BatchPreexecutionTerminalKind.REJECTION
+    assert basis.rejection_fact_digest == result.rejection_fact.digest
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count,
+                (
+                    SELECT event_type FROM qep_outbox_events
+                    ORDER BY created_at DESC LIMIT 1
+                ) AS latest_outbox_event_type
+            """
+        )
+        rejection_row = await connection.fetchrow(
+            "SELECT rejection_digest, payload FROM qep_batch_rejections"
+        )
+        basis_row = await connection.fetchrow(
+            "SELECT basis_digest, payload FROM qep_batch_preexecution_closure_bases"
+        )
+    assert dict(persisted) == {
+        "batch_state": "rejected",
+        "batch_version": 4,
+        "rejection_count": 1,
+        "basis_count": 1,
+        "audit_count": 1,
+        "outbox_count": 1,
+        "latest_outbox_event_type": "batch.rejected.v1",
+    }
+    assert rejection_row is not None
+    assert rejection_row["rejection_digest"] == _digest_hex(result.rejection_fact.digest)
+    assert json.loads(rejection_row["payload"]) == _rejection_payload(result.rejection_fact)
+    assert basis_row is not None
+    assert basis_row["basis_digest"] == _digest_hex(basis.digest)
+    assert json.loads(basis_row["payload"]) == _basis_payload(basis)
+
+
+async def test_zero_child_rejection_replay_within_the_same_authority_short_circuits(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    authority = _rejection_authority()
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        command = RecordPreexecutionRejectionCommand(
+            batch_id="batch-001",
+            rejection_id="rejection-001",
+            reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+            reason_code="source_collection_failed",
+            input_digest=_named_digest("rejection-input"),
+            phase_owner_id="coordinator-001",
+            rejection_epoch=1,
+        )
+        record = RecordPreexecutionRejection(
+            gateway=gateway,
+            proof=ProvePreexecutionClosure(gateway=gateway),
+        )
+        first = await record.execute(command)
+        second = await record.execute(command)
+
+    assert first == second
+    assert second.state is BatchState.REJECTED
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {
+        "rejection_count": 1,
+        "basis_count": 1,
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
+
+
+async def test_zero_child_rejection_rejects_a_batch_without_a_rejection_basis(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    authority = _rejection_authority()
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_rejection_authority(
+            batch_id="batch-001", phase_owner_id="coordinator-001", rejection_epoch=1
+        )
+        unrejected = await gateway.get_batch_for_update(batch_id="batch-001")
+        assert unrejected.preexecution_closure_basis is None
+        rejection = BatchRejection(
+            rejection_id="rejection-001",
+            batch_id="batch-001",
+            source_batch_version=authority.source_batch_version,
+            stage=authority.stage,
+            reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+            reason_code="source_collection_failed",
+            input_digest=_named_digest("rejection-input"),
+            authority_digest=authority.authority_digest,
+            recorded_at=authority.recorded_at,
+        )
+        with pytest.raises(PortContractError) as missing_basis:
+            await gateway.publish_preexecution_rejection(batch=unrejected, rejection=rejection)
+        assert missing_basis.value.reason == "preexecution_rejection_basis_not_transitioned"
+
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.get_batch_for_update(batch_id="batch-001")
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count
+            """
+        )
+    assert dict(persisted) == {"batch_state": "collecting", "rejection_count": 0, "basis_count": 0}
+
+
+async def test_zero_child_rejection_rejects_a_mismatched_rejection_argument(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    authority = _rejection_authority()
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_rejection_authority(
+            batch_id="batch-001", phase_owner_id="coordinator-001", rejection_epoch=1
+        )
+        batch = await gateway.get_batch_for_update(batch_id="batch-001")
+        rejection = BatchRejection(
+            rejection_id="rejection-001",
+            batch_id="batch-001",
+            source_batch_version=authority.source_batch_version,
+            stage=authority.stage,
+            reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+            reason_code="source_collection_failed",
+            input_digest=_named_digest("rejection-input"),
+            authority_digest=authority.authority_digest,
+            recorded_at=authority.recorded_at,
+        )
+        proof = await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id=authority.project_id,
+                suite_revision_id=authority.suite_revision_id,
+                source_batch_version=authority.source_batch_version,
+                scope=authority.scope,
+                terminal_kind=BatchPreexecutionTerminalKind.REJECTION,
+                command_digest=rejection.digest,
+            )
+        )
+        closed = batch.reject_preexecution(
+            rejection=rejection, snapshot=proof, expected_version=authority.source_batch_version
+        )
+        different_rejection = replace(rejection, reason_code="a_different_reason")
+        with pytest.raises(PortContractError) as mismatch:
+            await gateway.publish_preexecution_rejection(
+                batch=closed, rejection=different_rejection
+            )
+        assert mismatch.value.reason == "preexecution_rejection_basis_not_transitioned"
+
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.get_batch_for_update(batch_id="batch-001")
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count
+            """
+        )
+    assert dict(persisted) == {"batch_state": "collecting", "rejection_count": 0}
+
+
+async def test_zero_child_rejection_publication_called_twice_fails_closed_on_stale_snapshot(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    authority = _rejection_authority()
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        rejection_authority=authority,
+        rejection_phase_owner_id="coordinator-001",
+        rejection_checked_at=authority.recorded_at,
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_rejection_authority(
+            batch_id="batch-001", phase_owner_id="coordinator-001", rejection_epoch=1
+        )
+        batch = await gateway.get_batch_for_update(batch_id="batch-001")
+        rejection = BatchRejection(
+            rejection_id="rejection-001",
+            batch_id="batch-001",
+            source_batch_version=authority.source_batch_version,
+            stage=authority.stage,
+            reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+            reason_code="source_collection_failed",
+            input_digest=_named_digest("rejection-input"),
+            authority_digest=authority.authority_digest,
+            recorded_at=authority.recorded_at,
+        )
+        proof = await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id=authority.project_id,
+                suite_revision_id=authority.suite_revision_id,
+                source_batch_version=authority.source_batch_version,
+                scope=authority.scope,
+                terminal_kind=BatchPreexecutionTerminalKind.REJECTION,
+                command_digest=rejection.digest,
+            )
+        )
+        closed = batch.reject_preexecution(
+            rejection=rejection, snapshot=proof, expected_version=authority.source_batch_version
+        )
+        await gateway.publish_preexecution_rejection(batch=closed, rejection=rejection)
+        with pytest.raises(VersionConflict):
+            await gateway.publish_preexecution_rejection(batch=closed, rejection=rejection)
+
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.get_batch_for_update(batch_id="batch-001")
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count
+            """
+        )
+    assert dict(persisted) == {"batch_state": "collecting", "rejection_count": 0, "basis_count": 0}
+
+
+async def test_zero_child_rejection_suppressed_audit_insert_fails_closed_and_rolls_back(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool, batch_id="batch-001", ledger_version=1, high_watermark=0, updated_at=sealed_at
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    authority = _rejection_authority()
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            CREATE FUNCTION suppress_preexecution_rejection_audit() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NULL;
+            END
+            $$
+            """
+        )
+        await connection.execute(
+            """
+            CREATE TRIGGER suppress_preexecution_rejection_audit
+            BEFORE INSERT ON qep_audit_events
+            FOR EACH ROW EXECUTE FUNCTION suppress_preexecution_rejection_audit()
+            """
+        )
+
+    with pytest.raises(AuthorityStateConflict) as missing:
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=authority.recorded_at,
+            trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        ) as gateway:
+            await RecordPreexecutionRejection(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                RecordPreexecutionRejectionCommand(
+                    batch_id="batch-001",
+                    rejection_id="rejection-001",
+                    reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+                    reason_code="source_collection_failed",
+                    input_digest=_named_digest("rejection-input"),
+                    phase_owner_id="coordinator-001",
+                    rejection_epoch=1,
+                )
+            )
+    assert missing.value.reason == "batch_preexecution_terminal_audit_write_missing"
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {
+        "batch_state": "collecting",
+        "rejection_count": 0,
+        "basis_count": 0,
+        "audit_count": 0,
+        "outbox_count": 0,
+    }
+
+
 async def _seed_task_ledger(
     pool: asyncpg.Pool,
     *,
@@ -3341,7 +4178,9 @@ def _rejection_payload(rejection: BatchRejection) -> dict[str, object]:
         "reason_class": rejection.reason_class.value,
         "reason_code": rejection.reason_code,
         "input_digest": rejection.input_digest.value,
-        "authority_digest": None,
+        "authority_digest": (
+            None if rejection.authority_digest is None else rejection.authority_digest.value
+        ),
         "recorded_at": rejection.recorded_at.isoformat().replace("+00:00", "Z"),
         "rejection_digest": rejection.digest.value,
     }

@@ -879,6 +879,257 @@ class PostgresBatchCancellationUnitOfWork:
         await self._insert_handoff_outbox(connection, handoff)
         return ReplayResult(value=handoff, replayed=False)
 
+    async def publish_preexecution_closure(self, *, batch: Batch) -> None:
+        try:
+            await self._publish_preexecution_closure(batch=batch)
+        except BaseException:
+            self._aborted = True
+            raise
+
+    async def _publish_preexecution_closure(self, *, batch: Batch) -> None:
+        connection = self._require_connection()
+        self._require_locked_batch(batch.id)
+        if self._closure_authority is None:
+            self._state_error("closure_authority_not_locked")
+        snapshot = self._snapshot
+        if snapshot is None:
+            self._state_error("snapshot_not_loaded")
+        basis = batch.preexecution_closure_basis
+        if (
+            basis is None
+            or basis.terminal_kind is not BatchPreexecutionTerminalKind.PRESTART_CANCEL
+        ):
+            self._state_error("preexecution_closure_basis_not_transitioned")
+
+        status = await connection.execute(
+            """
+            UPDATE qep_batches
+            SET state = 'cancelled',
+                version = version + 1,
+                updated_at = transaction_timestamp()
+            WHERE id = $1
+              AND state = $2
+              AND version = $3
+            """,
+            batch.id,
+            snapshot.state.value,
+            snapshot.version,
+        )
+        if status != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="batch",
+                entity_id=batch.id,
+                current_version=snapshot.version,
+                expected_version=snapshot.version,
+            )
+        await self._insert_preexecution_basis(connection, basis)
+        await self._insert_preexecution_terminal_audit(
+            connection,
+            basis,
+            actor_id=cast(str, self._closure_reconciler_id),
+            action="reconcile_preexecution_cancellation",
+            reason_code="batch_preexecution_closure_committed",
+        )
+        await self._insert_preexecution_terminal_outbox(
+            connection,
+            basis,
+            event_type="batch.cancelled.v1",
+            event_prefix="batch-cancelled",
+        )
+
+    async def publish_preexecution_rejection(
+        self, *, batch: Batch, rejection: BatchRejection
+    ) -> None:
+        try:
+            await self._publish_preexecution_rejection(batch=batch, rejection=rejection)
+        except BaseException:
+            self._aborted = True
+            raise
+
+    async def _publish_preexecution_rejection(
+        self, *, batch: Batch, rejection: BatchRejection
+    ) -> None:
+        connection = self._require_connection()
+        self._require_locked_batch(batch.id)
+        if self._rejection_authority is None:
+            self._state_error("rejection_authority_not_locked")
+        snapshot = self._snapshot
+        if snapshot is None:
+            self._state_error("snapshot_not_loaded")
+        basis = batch.preexecution_closure_basis
+        if (
+            basis is None
+            or basis.terminal_kind is not BatchPreexecutionTerminalKind.REJECTION
+            or batch.rejection_fact != rejection
+        ):
+            self._state_error("preexecution_rejection_basis_not_transitioned")
+
+        status = await connection.execute(
+            """
+            UPDATE qep_batches
+            SET state = 'rejected',
+                version = version + 1,
+                updated_at = transaction_timestamp()
+            WHERE id = $1
+              AND state = $2
+              AND version = $3
+            """,
+            batch.id,
+            snapshot.state.value,
+            snapshot.version,
+        )
+        if status != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="batch",
+                entity_id=batch.id,
+                current_version=snapshot.version,
+                expected_version=snapshot.version,
+            )
+        await self._insert_rejection(connection, rejection)
+        await self._insert_preexecution_basis(connection, basis)
+        await self._insert_preexecution_terminal_audit(
+            connection,
+            basis,
+            actor_id=cast(str, self._rejection_phase_owner_id),
+            action="record_preexecution_rejection",
+            reason_code="batch_preexecution_rejection_committed",
+        )
+        await self._insert_preexecution_terminal_outbox(
+            connection,
+            basis,
+            event_type="batch.rejected.v1",
+            event_prefix="batch-rejected",
+        )
+
+    @staticmethod
+    async def _insert_rejection(
+        connection: asyncpg.Connection,
+        rejection: BatchRejection,
+    ) -> None:
+        status = await connection.execute(
+            """
+            INSERT INTO qep_batch_rejections (
+                id, batch_id, source_batch_version, stage, reason_class, reason_code,
+                input_digest, authority_digest, rejection_digest, payload, recorded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """,
+            rejection.rejection_id,
+            rejection.batch_id,
+            rejection.source_batch_version,
+            rejection.stage.value,
+            rejection.reason_class.value,
+            rejection.reason_code,
+            _digest_hex(rejection.input_digest),
+            _optional_digest_hex(rejection.authority_digest),
+            _digest_hex(rejection.digest),
+            _json(_rejection_payload(rejection)),
+            rejection.recorded_at,
+        )
+        _require_inserted(status, reason="batch_rejection_write_missing")
+
+    @staticmethod
+    async def _insert_preexecution_basis(
+        connection: asyncpg.Connection,
+        basis: BatchPreexecutionClosureBasis,
+    ) -> None:
+        command_digest = (
+            basis.rejection_fact_digest
+            if basis.rejection_fact_digest is not None
+            else basis.batch_cancellation_intent_digest
+        )
+        status = await connection.execute(
+            """
+            INSERT INTO qep_batch_preexecution_closure_bases (
+                id, batch_id, source_batch_version, source_phase, terminal_kind,
+                command_digest, scope_kind, materialized_run_absence_digest,
+                execution_absence_snapshot_digest, basis_digest, payload, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, transaction_timestamp())
+            """,
+            f"batch-preexecution-closure-basis-{_digest_hex(basis.digest)}",
+            basis.batch_id,
+            basis.source_batch_version,
+            basis.source_phase.value,
+            basis.terminal_kind.value,
+            _digest_hex(command_digest),
+            basis.scope_kind.value,
+            _digest_hex(basis.materialized_run_absence_digest),
+            _digest_hex(basis.execution_absence_snapshot_digest),
+            _digest_hex(basis.digest),
+            _json(_basis_payload(basis)),
+        )
+        _require_inserted(status, reason="batch_preexecution_closure_basis_write_missing")
+
+    @staticmethod
+    async def _insert_preexecution_terminal_audit(
+        connection: asyncpg.Connection,
+        basis: BatchPreexecutionClosureBasis,
+        *,
+        actor_id: str,
+        action: str,
+        reason_code: str,
+    ) -> None:
+        status = await connection.execute(
+            """
+            INSERT INTO qep_audit_events (
+                id, actor_id, action, object_type, object_id, decision, reason_code,
+                before_digest, after_digest, payload, occurred_at
+            ) VALUES (
+                $1, $2, $3, 'batch', $4, 'allowed', $5, NULL, $6, $7,
+                transaction_timestamp()
+            )
+            """,
+            f"batch-preexecution-terminal-audit-{_digest_hex(basis.digest)}",
+            actor_id,
+            action,
+            basis.batch_id,
+            reason_code,
+            _digest_hex(basis.digest),
+            _json(
+                {
+                    "schema_version": "qep.batch-preexecution-terminal-audit.v1",
+                    "batch_id": basis.batch_id,
+                    "basis_digest": basis.digest.value,
+                    "terminal_kind": basis.terminal_kind.value,
+                    "batch_outcome": basis.batch_outcome.value,
+                }
+            ),
+        )
+        _require_inserted(status, reason="batch_preexecution_terminal_audit_write_missing")
+
+    @staticmethod
+    async def _insert_preexecution_terminal_outbox(
+        connection: asyncpg.Connection,
+        basis: BatchPreexecutionClosureBasis,
+        *,
+        event_type: str,
+        event_prefix: str,
+    ) -> None:
+        payload = {
+            "schema_version": event_type,
+            "batch_id": basis.batch_id,
+            "basis_digest": basis.digest.value,
+            "terminal_kind": basis.terminal_kind.value,
+        }
+        payload_digest = canonical_digest(schema_version=event_type, payload=payload)
+        event_id = f"{event_prefix}-{_digest_hex(basis.digest)}"
+        status = await connection.execute(
+            """
+            INSERT INTO qep_outbox_events (
+                id, event_id, aggregate_type, aggregate_id, event_type,
+                payload_digest, payload, status, available_at, attempts, created_at
+            ) VALUES (
+                $1, $1, 'batch', $2, $3, $4, $5,
+                'pending', transaction_timestamp(), 0, transaction_timestamp()
+            )
+            """,
+            event_id,
+            basis.batch_id,
+            event_type,
+            _digest_hex(payload_digest),
+            _json(payload),
+        )
+        _require_inserted(status, reason="batch_preexecution_terminal_outbox_write_missing")
+
     async def _publish_cancellation(
         self,
         *,
