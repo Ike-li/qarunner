@@ -39,7 +39,16 @@ from qarunner.application.ports.batch_preexecution import (
     InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import PortContractError
-from qarunner.application.preexecution_proof import ProvePreexecutionClosure
+from qarunner.application.ports.preexecution_proof import (
+    PreexecutionTaskKey,
+    canonical_task_set_digest,
+)
+from qarunner.application.preexecution_proof import (
+    ClosureNotReady,
+    IntegrityFailure,
+    ProvePreexecutionClosure,
+    ProvePreexecutionClosureCommand,
+)
 from qarunner.domain import (
     Batch,
     BatchCancellationIntent,
@@ -47,16 +56,22 @@ from qarunner.domain import (
     BatchCancellationScopeKind,
     BatchPreexecutionScopeKind,
     BatchPreexecutionSnapshot,
+    BatchPreexecutionTerminalKind,
     BatchRejection,
     BatchRejectionReasonClass,
     BatchRejectionStage,
     BatchState,
     CancellationSource,
+    Digest,
     IdempotencyConflict,
     VersionConflict,
     canonical_digest,
     canonical_materialized_run_set_digest,
 )
+
+
+def _digest(value: str) -> Digest:
+    return Digest(f"sha256:{value}")
 
 
 @pytest.fixture
@@ -2085,6 +2100,735 @@ async def test_corrupt_rejection_terminal_fails_closed_before_late_cancel(
     async with pool.acquire() as connection:
         assert (
             await connection.fetchval("SELECT count(*) FROM qep_batch_cancellation_intents") == 0
+        )
+
+
+async def test_preexecution_proof_assembles_preplan_snapshot_from_sealed_empty_inventory(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        snapshot = await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=3,
+            )
+        )
+
+    assert isinstance(snapshot, BatchPreexecutionSnapshot)
+    assert snapshot.batch_id == "batch-001"
+    assert snapshot.source_batch_version == 3
+    assert snapshot.scope_kind is BatchPreexecutionScopeKind.PRE_PLAN
+    assert snapshot.preplan_scope_digest is not None
+    assert snapshot.manifest_digest is None
+    assert snapshot.shard_plan_version is None
+    assert snapshot.shard_plan_digest is None
+    assert snapshot.canonical_run_set_digest is None
+    assert snapshot.scope_items == ()
+    assert snapshot.item_coverage_proof_digest is None
+    assert snapshot.task_stop_fact_digests == ()
+
+
+async def test_preexecution_proof_is_not_ready_without_a_matching_current_seal(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(ClosureNotReady):
+            await ProvePreexecutionClosure(gateway=gateway).execute(
+                ProvePreexecutionClosureCommand(
+                    batch_id="batch-001",
+                    project_id="project-001",
+                    suite_revision_id="suite-revision-001",
+                    source_batch_version=3,
+                )
+            )
+
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=2,
+        high_watermark=0,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(ClosureNotReady):
+            await ProvePreexecutionClosure(gateway=gateway).execute(
+                ProvePreexecutionClosureCommand(
+                    batch_id="batch-001",
+                    project_id="project-001",
+                    suite_revision_id="suite-revision-001",
+                    source_batch_version=3,
+                )
+            )
+
+
+async def test_preexecution_proof_quarantines_and_stays_aborted_on_untrusted_issuer(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="rogue-001",
+        sealed_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(IntegrityFailure):
+            await ProvePreexecutionClosure(gateway=gateway).execute(
+                ProvePreexecutionClosureCommand(
+                    batch_id="batch-001",
+                    project_id="project-001",
+                    suite_revision_id="suite-revision-001",
+                    source_batch_version=3,
+                )
+            )
+        with pytest.raises(PortContractError) as aborted:
+            await gateway.scan_execution_children(batch_id="batch-001")
+
+    assert aborted.value.reason == "aborted"
+    async with pool.acquire() as connection:
+        assert (
+            await connection.fetchval("SELECT count(*) FROM qep_batch_preexecution_closure_bases")
+            == 0
+        )
+
+
+async def test_preexecution_proof_quarantines_on_task_set_digest_drift(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=1,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=1,
+        task_count=1,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    await _seed_preexecution_task(
+        pool,
+        batch_id="batch-001",
+        phase_ordinal=0,
+        task_kind="collect",
+        task_key="task-a",
+        generation=1,
+        task_issuer_id="coordinator-001",
+        started_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(IntegrityFailure):
+            await ProvePreexecutionClosure(gateway=gateway).execute(
+                ProvePreexecutionClosureCommand(
+                    batch_id="batch-001",
+                    project_id="project-001",
+                    suite_revision_id="suite-revision-001",
+                    source_batch_version=3,
+                )
+            )
+
+
+async def test_preexecution_proof_requires_matching_trusted_stops_before_ready(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    task_key = PreexecutionTaskKey(
+        phase_ordinal=0,
+        task_kind="collect",
+        task_key="task-a",
+        generation=1,
+    )
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=1,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=1,
+        task_count=1,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest((task_key,))),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    await _seed_preexecution_task(
+        pool,
+        batch_id="batch-001",
+        phase_ordinal=task_key.phase_ordinal,
+        task_kind=task_key.task_kind,
+        task_key=task_key.task_key,
+        generation=task_key.generation,
+        task_issuer_id="coordinator-001",
+        started_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        trusted_stop_issuers=frozenset({"runtime-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(ClosureNotReady):
+            await ProvePreexecutionClosure(gateway=gateway).execute(
+                ProvePreexecutionClosureCommand(
+                    batch_id="batch-001",
+                    project_id="project-001",
+                    suite_revision_id="suite-revision-001",
+                    source_batch_version=3,
+                )
+            )
+
+    await _stop_preexecution_task(
+        pool,
+        batch_id="batch-001",
+        phase_ordinal=task_key.phase_ordinal,
+        task_kind=task_key.task_kind,
+        task_key=task_key.task_key,
+        generation=task_key.generation,
+        stop_issuer_id="runtime-001",
+        stopped_at=sealed_at + timedelta(minutes=1),
+        stop_fact_digest_hex=_digest_hex(_named_digest("task-a-stop")),
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        trusted_stop_issuers=frozenset({"runtime-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        snapshot = await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=3,
+            )
+        )
+
+    assert snapshot.task_stop_fact_digests == (_named_digest("task-a-stop"),)
+
+
+async def test_preexecution_proof_planned_scope_is_not_ready_without_a_shard_plan_or_matching_seal(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    command = ProvePreexecutionClosureCommand(
+        batch_id="batch-001",
+        project_id="project-001",
+        suite_revision_id="suite-revision-001",
+        source_batch_version=3,
+        scope=BatchCancellationScope(
+            kind=BatchCancellationScopeKind.FROZEN_PLAN,
+            preplan_scope_digest=None,
+            manifest_digest=_named_digest("manifest-not-yet-planned"),
+            shard_plan_version=0,
+            shard_plan_digest=_named_digest("plan-not-yet-planned"),
+            canonical_run_set_digest=canonical_materialized_run_set_digest(
+                batch_id="batch-001",
+                run_ids=(),
+            ),
+        ),
+        terminal_kind=BatchPreexecutionTerminalKind.PRESTART_CANCEL,
+        command_digest=_named_digest("cancel-command"),
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(ClosureNotReady):
+            await ProvePreexecutionClosure(gateway=gateway).execute(command)
+
+    await _seed_planned_manifest_and_shard_plan(
+        pool,
+        batch_id="batch-001",
+        manifest_id="manifest-001",
+        manifest_digest_hex=_digest_hex(_named_digest("manifest-001")),
+        shard_plan_id="plan-001",
+        shard_plan_digest_hex=_digest_hex(_named_digest("plan-001")),
+        item_keys=("case-a",),
+        recorded_at=sealed_at,
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        with pytest.raises(ClosureNotReady):
+            await ProvePreexecutionClosure(gateway=gateway).execute(command)
+
+
+async def test_preexecution_proof_binds_planned_scope_seal_to_current_shard_plan(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    await _seed_batch(pool)
+    sealed_at = datetime(2026, 7, 21, 6, tzinfo=UTC)
+    manifest_digest_hex = _digest_hex(_named_digest("manifest-001"))
+    shard_plan_digest_hex = _digest_hex(_named_digest("plan-001"))
+    await _seed_planned_manifest_and_shard_plan(
+        pool,
+        batch_id="batch-001",
+        manifest_id="manifest-001",
+        manifest_digest_hex=manifest_digest_hex,
+        shard_plan_id="plan-001",
+        shard_plan_digest_hex=shard_plan_digest_hex,
+        item_keys=("case-a", "case-b"),
+        recorded_at=sealed_at,
+    )
+    await _seed_planned_scope_seal(
+        pool,
+        batch_id="batch-001",
+        shard_plan_version=0,
+        manifest_id="manifest-001",
+        manifest_digest_hex=manifest_digest_hex,
+        shard_plan_id="plan-001",
+        shard_plan_digest_hex=shard_plan_digest_hex,
+        item_count=2,
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    await _seed_task_ledger(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        updated_at=sealed_at,
+    )
+    await _seed_task_inventory_seal(
+        pool,
+        batch_id="batch-001",
+        ledger_version=1,
+        high_watermark=0,
+        task_count=0,
+        task_set_digest_hex=_digest_hex(canonical_task_set_digest(())),
+        issuer_id="coordinator-001",
+        sealed_at=sealed_at,
+    )
+    command_digest = _named_digest("cancel-command")
+    scope = BatchCancellationScope(
+        kind=BatchCancellationScopeKind.FROZEN_PLAN,
+        preplan_scope_digest=None,
+        manifest_digest=_digest(manifest_digest_hex),
+        shard_plan_version=0,
+        shard_plan_digest=_digest(shard_plan_digest_hex),
+        canonical_run_set_digest=canonical_materialized_run_set_digest(
+            batch_id="batch-001",
+            run_ids=(),
+        ),
+    )
+
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=_authority(),
+        trusted_inventory_issuers=frozenset({"coordinator-001"}),
+        trusted_planned_scope_issuers=frozenset({"coordinator-001"}),
+    ) as gateway:
+        await gateway.require_cancel_authority(batch_id="batch-001")
+        snapshot = await ProvePreexecutionClosure(gateway=gateway).execute(
+            ProvePreexecutionClosureCommand(
+                batch_id="batch-001",
+                project_id="project-001",
+                suite_revision_id="suite-revision-001",
+                source_batch_version=3,
+                scope=scope,
+                terminal_kind=BatchPreexecutionTerminalKind.PRESTART_CANCEL,
+                command_digest=command_digest,
+            )
+        )
+
+    assert snapshot.scope_kind is BatchPreexecutionScopeKind.PLANNED_UNMATERIALIZED
+    assert snapshot.manifest_digest == _digest(manifest_digest_hex)
+    assert snapshot.shard_plan_version == 0
+    assert snapshot.shard_plan_digest == _digest(shard_plan_digest_hex)
+    assert snapshot.canonical_run_set_digest == scope.canonical_run_set_digest
+    assert snapshot.item_coverage_proof_digest is not None
+    assert [item.manifest_item_key for item in snapshot.scope_items] == ["case-a", "case-b"]
+    for item in snapshot.scope_items:
+        assert item.batch_cancellation_intent_digest == command_digest
+        assert item.rejection_fact_digest is None
+        assert item.resolution == "not_started"
+
+
+async def _seed_task_ledger(
+    pool: asyncpg.Pool,
+    *,
+    batch_id: str,
+    ledger_version: int,
+    high_watermark: int,
+    updated_at: datetime,
+    project_id: str = "project-001",
+    suite_revision_id: str = "suite-revision-001",
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_preexecution_task_ledgers (
+                batch_id, project_id, suite_revision_id, ledger_version, high_watermark, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (batch_id) DO UPDATE SET
+                ledger_version = excluded.ledger_version,
+                high_watermark = excluded.high_watermark,
+                updated_at = excluded.updated_at
+            """,
+            batch_id,
+            project_id,
+            suite_revision_id,
+            ledger_version,
+            high_watermark,
+            updated_at,
+        )
+
+
+async def _seed_task_inventory_seal(
+    pool: asyncpg.Pool,
+    *,
+    batch_id: str,
+    ledger_version: int,
+    high_watermark: int,
+    task_count: int,
+    task_set_digest_hex: str,
+    issuer_id: str,
+    sealed_at: datetime,
+    project_id: str = "project-001",
+    suite_revision_id: str = "suite-revision-001",
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_preexecution_task_inventory_seals (
+                batch_id, ledger_version, high_watermark, project_id, suite_revision_id,
+                task_count, task_set_digest, issuer_id, sealed_at, schema_version,
+                seal_digest, payload
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            """,
+            batch_id,
+            ledger_version,
+            high_watermark,
+            project_id,
+            suite_revision_id,
+            task_count,
+            task_set_digest_hex,
+            issuer_id,
+            sealed_at,
+            "qep.preexecution-task-inventory-seal.v1",
+            _digest_hex(
+                canonical_digest(
+                    schema_version="qep.test-preexecution-task-inventory-seal.v1",
+                    payload={
+                        "batch_id": batch_id,
+                        "ledger_version": ledger_version,
+                        "high_watermark": high_watermark,
+                    },
+                )
+            ),
+            json.dumps({}),
+        )
+
+
+async def _seed_preexecution_task(
+    pool: asyncpg.Pool,
+    *,
+    batch_id: str,
+    phase_ordinal: int,
+    task_kind: str,
+    task_key: str,
+    generation: int,
+    task_issuer_id: str,
+    started_at: datetime,
+    project_id: str = "project-001",
+    suite_revision_id: str = "suite-revision-001",
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_preexecution_tasks (
+                batch_id, phase_ordinal, task_kind, task_key, generation,
+                project_id, suite_revision_id, phase_authority_digest, input_digest,
+                seal_version, seal_set_digest, task_digest, payload, started_at, task_issuer_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13, $14)
+            """,
+            batch_id,
+            phase_ordinal,
+            task_kind,
+            task_key,
+            generation,
+            project_id,
+            suite_revision_id,
+            _digest_hex(_named_digest(f"{batch_id}-{task_kind}-{task_key}-phase-authority")),
+            _digest_hex(_named_digest(f"{batch_id}-{task_kind}-{task_key}-input")),
+            _digest_hex(_named_digest(f"{batch_id}-{task_kind}-{task_key}-seal-set")),
+            _digest_hex(_named_digest(f"{batch_id}-{task_kind}-{task_key}-task")),
+            json.dumps({}),
+            started_at,
+            task_issuer_id,
+        )
+
+
+async def _stop_preexecution_task(
+    pool: asyncpg.Pool,
+    *,
+    batch_id: str,
+    phase_ordinal: int,
+    task_kind: str,
+    task_key: str,
+    generation: int,
+    stop_issuer_id: str,
+    stopped_at: datetime,
+    stop_fact_digest_hex: str,
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            UPDATE qep_preexecution_tasks
+            SET stop_fact_digest = $6, stop_issuer_id = $7, stopped_at = $8
+            WHERE batch_id = $1 AND phase_ordinal = $2 AND task_kind = $3
+              AND task_key = $4 AND generation = $5
+            """,
+            batch_id,
+            phase_ordinal,
+            task_kind,
+            task_key,
+            generation,
+            stop_fact_digest_hex,
+            stop_issuer_id,
+            stopped_at,
+        )
+
+
+async def _seed_planned_manifest_and_shard_plan(
+    pool: asyncpg.Pool,
+    *,
+    batch_id: str,
+    manifest_id: str,
+    manifest_digest_hex: str,
+    shard_plan_id: str,
+    shard_plan_digest_hex: str,
+    item_keys: tuple[str, ...],
+    recorded_at: datetime,
+) -> None:
+    empty = json.dumps({})
+    async with pool.acquire() as connection, connection.transaction():
+        await connection.execute(
+            """
+            INSERT INTO qep_resource_profiles (
+                id, name, profile_version, framework, requests, limits,
+                internal_workers, security_profile_id, approved_at, created_at
+            ) VALUES ($1, $2, 1, 'pytest', $3, $3, 1, $4, $5, $5)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            "profile-001",
+            "Default",
+            empty,
+            "security-profile-001",
+            recorded_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_case_manifests (
+                id, batch_id, schema_version, digest, item_count, status, payload, created_at
+            ) VALUES ($1, $2, 'qep.case-manifest.v1', $3, $4, 'approved', $5, $6)
+            """,
+            manifest_id,
+            batch_id,
+            manifest_digest_hex,
+            len(item_keys),
+            empty,
+            recorded_at,
+        )
+        for index, item_key in enumerate(item_keys):
+            await connection.execute(
+                """
+                INSERT INTO qep_manifest_items (
+                    manifest_id, item_index, stable_case_id, framework_locator,
+                    atomic_group_id, estimated_duration_ms, resource_profile_id,
+                    constraints, tags
+                ) VALUES ($1, $2, $3, $4, $5, 1, $6, $4, $4)
+                """,
+                manifest_id,
+                index,
+                item_key,
+                empty,
+                item_key,
+                "profile-001",
+            )
+        await connection.execute(
+            """
+            INSERT INTO qep_shard_plans (
+                id, batch_id, algorithm_version, digest, run_count,
+                total_estimated_duration_ms, status, payload, created_at
+            ) VALUES ($1, $2, 'single-shard.v1', $3, $4, 1, 'approved', $5, $6)
+            """,
+            shard_plan_id,
+            batch_id,
+            shard_plan_digest_hex,
+            len(item_keys),
+            empty,
+            recorded_at,
+        )
+
+
+async def _seed_planned_scope_seal(
+    pool: asyncpg.Pool,
+    *,
+    batch_id: str,
+    shard_plan_version: int,
+    manifest_id: str,
+    manifest_digest_hex: str,
+    shard_plan_id: str,
+    shard_plan_digest_hex: str,
+    item_count: int,
+    issuer_id: str,
+    sealed_at: datetime,
+    project_id: str = "project-001",
+    suite_revision_id: str = "suite-revision-001",
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_preexecution_planned_scope_seals (
+                batch_id, shard_plan_version, project_id, suite_revision_id,
+                manifest_id, manifest_digest, shard_plan_id, shard_plan_digest,
+                item_count, issuer_id, sealed_at, schema_version, seal_digest, payload
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            """,
+            batch_id,
+            shard_plan_version,
+            project_id,
+            suite_revision_id,
+            manifest_id,
+            manifest_digest_hex,
+            shard_plan_id,
+            shard_plan_digest_hex,
+            item_count,
+            issuer_id,
+            sealed_at,
+            "qep.preexecution-planned-scope-seal.v1",
+            _digest_hex(
+                canonical_digest(
+                    schema_version="qep.test-preexecution-planned-scope-seal.v1",
+                    payload={"batch_id": batch_id, "shard_plan_version": shard_plan_version},
+                )
+            ),
+            json.dumps({}),
         )
 
 

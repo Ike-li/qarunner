@@ -122,7 +122,7 @@ def test_database_role_matrix_is_explicit_and_deny_by_default() -> None:
         "test_qep_contract_worker_protocol",
         "test_qep_contract_recovery_read",
     )
-    assert len(CURRENT_TABLES) == 52
+    assert len(CURRENT_TABLES) == 55
     assert matrix[roles.worker_protocol] == {}
     assert matrix[roles.recovery_read]["qep_audit_events"] == ("SELECT",)
     assert "users" not in matrix[roles.recovery_read]

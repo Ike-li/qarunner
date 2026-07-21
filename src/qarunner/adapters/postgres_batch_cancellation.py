@@ -24,11 +24,22 @@ from qarunner.application.ports.batch_preexecution import (
     InternalAuthorityRetired,
 )
 from qarunner.application.ports.common import PortContractError, ReplayResult
-from qarunner.application.ports.preexecution_proof import ExecutionChildInventory
+from qarunner.application.ports.preexecution_proof import (
+    ExecutionChildInventory,
+    PreexecutionTaskGeneration,
+    PreexecutionTaskKey,
+    SealedPlannedScopeInventory,
+    SealedTaskInventory,
+    TaskLedgerPosition,
+    TrustedTaskStop,
+    ZeroChildSnapshotInputs,
+)
 from qarunner.domain.batch import (
     Batch,
     BatchPreexecutionClosureBasis,
+    BatchPreexecutionScopeItem,
     BatchPreexecutionScopeKind,
+    BatchPreexecutionSnapshot,
     BatchPreexecutionTerminalKind,
     BatchRejection,
     BatchRejectionReasonClass,
@@ -59,6 +70,9 @@ class PostgresBatchCancellationUnitOfWork:
         rejection_authority: BatchRejectionAuthority | None = None,
         rejection_phase_owner_id: str | None = None,
         rejection_checked_at: datetime | None = None,
+        trusted_inventory_issuers: frozenset[str] = frozenset(),
+        trusted_stop_issuers: frozenset[str] = frozenset(),
+        trusted_planned_scope_issuers: frozenset[str] = frozenset(),
     ) -> None:
         cancel_mode = authority is not None
         closure_mode = closure_authority is not None
@@ -79,6 +93,9 @@ class PostgresBatchCancellationUnitOfWork:
         self._candidate_rejection_authority = rejection_authority
         self._rejection_phase_owner_id = rejection_phase_owner_id
         self._rejection_checked_at = rejection_checked_at
+        self._trusted_inventory_issuers = trusted_inventory_issuers
+        self._trusted_stop_issuers = trusted_stop_issuers
+        self._trusted_planned_scope_issuers = trusted_planned_scope_issuers
         self._connection: asyncpg.Connection | None = None
         self._transaction: asyncpg.Transaction | None = None
         self._authority: BatchCancellationAuthority | None = None
@@ -491,6 +508,278 @@ class PostgresBatchCancellationUnitOfWork:
     async def quarantine_integrity_failure(self, *, batch_id: str) -> None:
         self._require_locked_batch(batch_id)
         self._aborted = True
+
+    async def read_current_task_ledger_position(self, *, batch_id: str) -> TaskLedgerPosition:
+        connection = self._require_connection()
+        self._require_locked_batch(batch_id)
+        row = await connection.fetchrow(
+            """
+            SELECT ledger_version, high_watermark
+            FROM qep_preexecution_task_ledgers
+            WHERE batch_id = $1
+            """,
+            batch_id,
+        )
+        if row is None:
+            return TaskLedgerPosition(ledger_version=0, high_watermark=0)
+        return TaskLedgerPosition(
+            ledger_version=row["ledger_version"],
+            high_watermark=row["high_watermark"],
+        )
+
+    async def read_sealed_task_inventory(self, *, batch_id: str) -> SealedTaskInventory | None:
+        connection = self._require_connection()
+        self._require_locked_batch(batch_id)
+        position = await self.read_current_task_ledger_position(batch_id=batch_id)
+        seal_row = await connection.fetchrow(
+            """
+            SELECT project_id, suite_revision_id, task_count, task_set_digest, issuer_id, sealed_at
+            FROM qep_preexecution_task_inventory_seals
+            WHERE batch_id = $1 AND ledger_version = $2 AND high_watermark = $3
+            """,
+            batch_id,
+            position.ledger_version,
+            position.high_watermark,
+        )
+        if seal_row is None:
+            return None
+        task_rows = await connection.fetch(
+            """
+            SELECT
+                phase_ordinal, task_kind, task_key, generation,
+                project_id, suite_revision_id, task_issuer_id, started_at
+            FROM qep_preexecution_tasks
+            WHERE batch_id = $1
+            ORDER BY phase_ordinal, task_kind, task_key, generation
+            """,
+            batch_id,
+        )
+        tasks = tuple(
+            PreexecutionTaskGeneration(
+                key=PreexecutionTaskKey(
+                    phase_ordinal=task_row["phase_ordinal"],
+                    task_kind=task_row["task_kind"],
+                    task_key=task_row["task_key"],
+                    generation=task_row["generation"],
+                ),
+                batch_id=batch_id,
+                project_id=task_row["project_id"],
+                suite_revision_id=task_row["suite_revision_id"],
+                issuer_id=task_row["task_issuer_id"],
+                started_at=task_row["started_at"],
+            )
+            for task_row in task_rows
+        )
+        return SealedTaskInventory(
+            batch_id=batch_id,
+            project_id=seal_row["project_id"],
+            suite_revision_id=seal_row["suite_revision_id"],
+            ledger_version=position.ledger_version,
+            high_watermark=position.high_watermark,
+            task_count=seal_row["task_count"],
+            task_set_digest=_digest(seal_row["task_set_digest"]),
+            issuer_id=seal_row["issuer_id"],
+            sealed_at=seal_row["sealed_at"],
+            tasks=tasks,
+        )
+
+    async def read_trusted_task_stops(self, *, batch_id: str) -> tuple[TrustedTaskStop, ...]:
+        connection = self._require_connection()
+        self._require_locked_batch(batch_id)
+        rows = await connection.fetch(
+            """
+            SELECT
+                phase_ordinal, task_kind, task_key, generation,
+                project_id, stop_issuer_id, stopped_at, stop_fact_digest
+            FROM qep_preexecution_tasks
+            WHERE batch_id = $1 AND stopped_at IS NOT NULL
+            ORDER BY phase_ordinal, task_kind, task_key, generation
+            """,
+            batch_id,
+        )
+        return tuple(
+            TrustedTaskStop(
+                key=PreexecutionTaskKey(
+                    phase_ordinal=row["phase_ordinal"],
+                    task_kind=row["task_kind"],
+                    task_key=row["task_key"],
+                    generation=row["generation"],
+                ),
+                batch_id=batch_id,
+                project_id=row["project_id"],
+                issuer_id=row["stop_issuer_id"],
+                stopped_at=row["stopped_at"],
+                digest=_digest(row["stop_fact_digest"]),
+            )
+            for row in rows
+        )
+
+    async def is_trusted_inventory_issuer(self, *, issuer_id: str) -> bool:
+        return issuer_id in self._trusted_inventory_issuers
+
+    async def is_trusted_stop_issuer(self, *, issuer_id: str) -> bool:
+        return issuer_id in self._trusted_stop_issuers
+
+    async def read_sealed_planned_scope_inventory(
+        self, *, batch_id: str
+    ) -> SealedPlannedScopeInventory | None:
+        connection = self._require_connection()
+        self._require_locked_batch(batch_id)
+        plan_row = await connection.fetchrow(
+            "SELECT version FROM qep_shard_plans WHERE batch_id = $1",
+            batch_id,
+        )
+        if plan_row is None:
+            return None
+        seal_row = await connection.fetchrow(
+            """
+            SELECT
+                project_id, suite_revision_id, manifest_id, manifest_digest,
+                shard_plan_id, shard_plan_digest, item_count, issuer_id, sealed_at
+            FROM qep_preexecution_planned_scope_seals
+            WHERE batch_id = $1 AND shard_plan_version = $2
+            """,
+            batch_id,
+            plan_row["version"],
+        )
+        if seal_row is None:
+            return None
+        item_rows = await connection.fetch(
+            """
+            SELECT stable_case_id
+            FROM qep_manifest_items
+            WHERE manifest_id = $1
+            ORDER BY item_index
+            """,
+            seal_row["manifest_id"],
+        )
+        return SealedPlannedScopeInventory(
+            batch_id=batch_id,
+            project_id=seal_row["project_id"],
+            suite_revision_id=seal_row["suite_revision_id"],
+            manifest_id=seal_row["manifest_id"],
+            manifest_digest=_digest(seal_row["manifest_digest"]),
+            shard_plan_id=seal_row["shard_plan_id"],
+            shard_plan_version=plan_row["version"],
+            shard_plan_digest=_digest(seal_row["shard_plan_digest"]),
+            item_count=seal_row["item_count"],
+            manifest_item_keys=tuple(row["stable_case_id"] for row in item_rows),
+            issuer_id=seal_row["issuer_id"],
+            sealed_at=seal_row["sealed_at"],
+        )
+
+    async def is_trusted_planned_scope_issuer(self, *, issuer_id: str) -> bool:
+        return issuer_id in self._trusted_planned_scope_issuers
+
+    async def assemble_zero_child_snapshot(
+        self, *, inputs: ZeroChildSnapshotInputs
+    ) -> BatchPreexecutionSnapshot:
+        run_absence_digest = canonical_digest(
+            schema_version="qep.preexecution-materialized-run-absence.v1",
+            payload={
+                "batch_id": inputs.batch_id,
+                "source_batch_version": inputs.source_batch_version,
+            },
+        )
+        execution_absence_digest = canonical_digest(
+            schema_version="qep.preexecution-execution-absence.v1",
+            payload={
+                "batch_id": inputs.batch_id,
+                "source_batch_version": inputs.source_batch_version,
+                "ledger_version": inputs.ledger_version,
+                "high_watermark": inputs.high_watermark,
+                "task_set_digest": inputs.task_set_digest.value,
+                "stop_fact_digests": [digest.value for digest in inputs.stop_fact_digests],
+            },
+        )
+        submission_digest = canonical_digest(
+            schema_version="qep.preexecution-submission.v1",
+            payload={
+                "batch_id": inputs.batch_id,
+                "source_batch_version": inputs.source_batch_version,
+                "terminal_kind": (
+                    inputs.terminal_kind.value if inputs.terminal_kind is not None else None
+                ),
+                "command_digest": (
+                    inputs.command_digest.value if inputs.command_digest is not None else None
+                ),
+            },
+        )
+        common = {
+            "batch_id": inputs.batch_id,
+            "source_batch_version": inputs.source_batch_version,
+            "submission_digest": submission_digest,
+            "materialized_run_absence_digest": run_absence_digest,
+            "execution_absence_snapshot_digest": execution_absence_digest,
+            "task_stop_fact_digests": inputs.stop_fact_digests,
+        }
+        if inputs.planned_inventory is not None:
+            assert inputs.scope is not None
+            assert inputs.terminal_kind is not None
+            assert inputs.command_digest is not None
+            inventory = inputs.planned_inventory
+            items = tuple(
+                BatchPreexecutionScopeItem(
+                    batch_id=inputs.batch_id,
+                    source_batch_version=inputs.source_batch_version,
+                    terminal_kind=inputs.terminal_kind,
+                    rejection_fact_digest=(
+                        inputs.command_digest
+                        if inputs.terminal_kind is BatchPreexecutionTerminalKind.REJECTION
+                        else None
+                    ),
+                    batch_cancellation_intent_digest=(
+                        inputs.command_digest
+                        if inputs.terminal_kind is BatchPreexecutionTerminalKind.PRESTART_CANCEL
+                        else None
+                    ),
+                    manifest_id=inventory.manifest_id,
+                    manifest_digest=inventory.manifest_digest,
+                    manifest_item_key=item_key,
+                    shard_plan_id=inventory.shard_plan_id,
+                    shard_plan_version=inventory.shard_plan_version,
+                    shard_plan_digest=inventory.shard_plan_digest,
+                    materialized_run_absence_digest=run_absence_digest,
+                    resolution="not_started",
+                )
+                for item_key in sorted(inventory.manifest_item_keys)
+            )
+            return BatchPreexecutionSnapshot(
+                **common,
+                scope_kind=BatchPreexecutionScopeKind.PLANNED_UNMATERIALIZED,
+                preplan_scope_digest=None,
+                manifest_digest=inventory.manifest_digest,
+                shard_plan_version=inventory.shard_plan_version,
+                shard_plan_digest=inventory.shard_plan_digest,
+                canonical_run_set_digest=inputs.scope.canonical_run_set_digest,
+                scope_items=items,
+                item_coverage_proof_digest=canonical_digest(
+                    schema_version="qep.preexecution-item-coverage.v1",
+                    payload={"item_digests": [item.digest.value for item in items]},
+                ),
+            )
+        preplan_scope_digest = (
+            inputs.scope.preplan_scope_digest
+            if inputs.scope is not None and inputs.scope.preplan_scope_digest is not None
+            else canonical_digest(
+                schema_version="qep.preexecution-preplan-scope.v1",
+                payload={
+                    "batch_id": inputs.batch_id,
+                    "source_batch_version": inputs.source_batch_version,
+                },
+            )
+        )
+        return BatchPreexecutionSnapshot(
+            **common,
+            scope_kind=BatchPreexecutionScopeKind.PRE_PLAN,
+            preplan_scope_digest=preplan_scope_digest,
+            manifest_digest=None,
+            shard_plan_version=None,
+            shard_plan_digest=None,
+            canonical_run_set_digest=None,
+            scope_items=(),
+            item_coverage_proof_digest=None,
+        )
 
     async def publish_materialized_handoff(
         self,

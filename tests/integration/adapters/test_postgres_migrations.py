@@ -39,6 +39,7 @@ from qarunner.migrations.versions import (
     m1_batch_readiness,
     m1_greenfield_core,
     m1_greenfield_facts,
+    m1_preexecution_proof,
 )
 
 _EXPECTED_LEGACY_TABLES = {
@@ -74,6 +75,9 @@ _EXPECTED_GREENFIELD_TABLES = {
     "qep_materialized_scope_handoffs",
     "qep_outbox_events",
     "qep_platform_retry_policies",
+    "qep_preexecution_planned_scope_seals",
+    "qep_preexecution_task_inventory_seals",
+    "qep_preexecution_task_ledgers",
     "qep_preexecution_tasks",
     "qep_principals",
     "qep_projects",
@@ -209,6 +213,12 @@ def test_in_process_revision_scripts_execute_upgrade_and_downgrade() -> None:
                 )
                 await sql_connection.run_sync(
                     lambda sync: invoke(sync, m1_application_uow, "upgrade")
+                )
+                await sql_connection.run_sync(
+                    lambda sync: invoke(sync, m1_preexecution_proof, "upgrade")
+                )
+                await sql_connection.run_sync(
+                    lambda sync: invoke(sync, m1_preexecution_proof, "downgrade")
                 )
                 await sql_connection.run_sync(
                     lambda sync: invoke(sync, m1_application_uow, "downgrade")
@@ -358,7 +368,7 @@ def test_migration_config_rejects_unsafe_inputs_and_supports_postgres_urls(
         schema="safe_schema",
     )
     assert config.attributes["qarunner_schema"] == "safe_schema"
-    assert expected_heads() == ("m1_application_uow",)
+    assert expected_heads() == ("m1_preexecution_proof",)
 
 
 @pytest.mark.asyncio
@@ -446,7 +456,7 @@ async def test_empty_schema_upgrade_matches_authorized_catalog(
         await connection.close()
 
     assert tables == {"alembic_version"} | _EXPECTED_LEGACY_TABLES | _EXPECTED_GREENFIELD_TABLES
-    assert revision == "m1_application_uow"
+    assert revision == "m1_preexecution_proof"
     assert [row["version"] for row in legacy_ledger] == list(range(1, 11))
     assert all(len(row["checksum"]) == 64 for row in legacy_ledger)
 
@@ -584,7 +594,7 @@ async def test_application_uow_migration_adds_generic_fact_and_replay_relations(
         ("qep_versioned_fact_commands", "recorded_at"),
     }
     assert len(foreign_keys) == 1
-    assert revision == "m1_application_uow"
+    assert revision == "m1_preexecution_proof"
 
 
 @pytest.mark.asyncio
@@ -738,7 +748,7 @@ async def test_exact_legacy_v10_schema_can_be_adopted_then_upgraded(
         "password_hash": "legacy-hash",
         "role": "user",
     }
-    assert revision == "m1_application_uow"
+    assert revision == "m1_preexecution_proof"
 
 
 @pytest.mark.asyncio
