@@ -625,6 +625,141 @@ async def test_attempt_cas_failure_rolls_back_all_staged_facts_when_caught(
         }
 
 
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_attempt_events_insert_exactly_once(
+    run_finalization_store: PostgresStore,
+) -> None:
+    """B3-UNIQ-BEHAVIOR: no application adapter writes `qep_attempt_events` yet (confirmed by
+    grep -- that write path is M3+/Worker-protocol scope). This proves the schema's own PRIMARY
+    KEY (attempt_id, event_id) mechanically serializes real concurrent identical writes to
+    exactly one winner, rather than only proving the constraint exists in the catalog
+    (`test_greenfield_catalog_enforces_m1_uniqueness_and_fence_constraints` does that part)."""
+    expected = command()
+    pool = run_finalization_store._require_pool()
+    await _seed_finalizable_run(pool, expected)
+    now = datetime(2026, 7, 21, 12, tzinfo=UTC)
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def insert_event():
+        await start.wait()
+        async with pool.acquire() as connection:
+            try:
+                status = await connection.execute(
+                    """
+                    INSERT INTO qep_attempt_events (
+                        attempt_id, fence, event_id, event_seq, event_type,
+                        payload_digest, payload, occurred_at, received_at
+                    ) VALUES ($1, 1, $2, 1, 'log_chunk', $3, $4, $5, $5)
+                    """,
+                    expected.candidate_basis.final_attempt_id,
+                    "event-1",
+                    "a" * 64,
+                    json.dumps({}),
+                    now,
+                )
+                return status
+            except asyncpg.UniqueViolationError as error:
+                return error
+
+    results = await asyncio.gather(*(insert_event() for _ in range(contenders)))
+
+    winners = [result for result in results if result == "INSERT 0 1"]
+    conflicts = [result for result in results if isinstance(result, asyncpg.UniqueViolationError)]
+    assert len(winners) == 1
+    assert len(conflicts) == contenders - 1
+    async with pool.acquire() as connection:
+        count = await connection.fetchval(
+            "SELECT count(*) FROM qep_attempt_events WHERE attempt_id = $1",
+            expected.candidate_basis.final_attempt_id,
+        )
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_attempt_event_insert_with_same_event_id_but_different_content_is_rejected(
+    run_finalization_store: PostgresStore,
+) -> None:
+    """B3-UNIQ-BEHAVIOR: a second insert reusing the same (attempt_id, event_id) with different
+    event_seq/digest/payload must be rejected outright by the PRIMARY KEY, not silently accepted or
+    overwritten -- the schema alone cannot express "same digest is idempotent" (that decision needs
+    an application-level adapter, which does not exist yet); it only guarantees exclusivity."""
+    expected = command()
+    pool = run_finalization_store._require_pool()
+    await _seed_finalizable_run(pool, expected)
+    now = datetime(2026, 7, 21, 12, tzinfo=UTC)
+    attempt_id = expected.candidate_basis.final_attempt_id
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_attempt_events (
+                attempt_id, fence, event_id, event_seq, event_type,
+                payload_digest, payload, occurred_at, received_at
+            ) VALUES ($1, 1, $2, 1, 'log_chunk', $3, $4, $5, $5)
+            """,
+            attempt_id,
+            "event-1",
+            "a" * 64,
+            json.dumps({}),
+            now,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO qep_attempt_events (
+                    attempt_id, fence, event_id, event_seq, event_type,
+                    payload_digest, payload, occurred_at, received_at
+                ) VALUES ($1, 1, $2, 2, 'log_chunk', $3, $4, $5, $5)
+                """,
+                attempt_id,
+                "event-1",
+                "b" * 64,
+                json.dumps({"different": True}),
+                now,
+            )
+
+
+@pytest.mark.asyncio
+async def test_attempt_event_insert_with_same_event_seq_but_different_event_id_is_rejected(
+    run_finalization_store: PostgresStore,
+) -> None:
+    """B3-UNIQ-BEHAVIOR: the separate UNIQUE (attempt_id, event_seq) constraint is independently
+    enforced -- a different event_id reusing an already-used event_seq must be rejected."""
+    expected = command()
+    pool = run_finalization_store._require_pool()
+    await _seed_finalizable_run(pool, expected)
+    now = datetime(2026, 7, 21, 12, tzinfo=UTC)
+    attempt_id = expected.candidate_basis.final_attempt_id
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO qep_attempt_events (
+                attempt_id, fence, event_id, event_seq, event_type,
+                payload_digest, payload, occurred_at, received_at
+            ) VALUES ($1, 1, $2, 1, 'log_chunk', $3, $4, $5, $5)
+            """,
+            attempt_id,
+            "event-1",
+            "a" * 64,
+            json.dumps({}),
+            now,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO qep_attempt_events (
+                    attempt_id, fence, event_id, event_seq, event_type,
+                    payload_digest, payload, occurred_at, received_at
+                ) VALUES ($1, 1, $2, 1, 'log_chunk', $3, $4, $5, $5)
+                """,
+                attempt_id,
+                "event-2",
+                "c" * 64,
+                json.dumps({}),
+                now,
+            )
+
+
 async def _seed_finalizable_run(pool: asyncpg.Pool, finalize_command) -> None:
     basis = finalize_command.candidate_basis
     resolved = finalize_command.resolution_set
