@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -29,7 +30,15 @@ from qarunner.application.ports.batch_finalization import (
     FinalizeBatchAuthority,
 )
 from qarunner.application.run_finalization import FinalizeRun
-from qarunner.domain import BatchFinalizationBasis, canonical_digest
+from qarunner.domain import (
+    BatchFinalizationBasis,
+    BatchItemResolution,
+    BatchItemResolutionSet,
+    RunItemKey,
+    canonical_digest,
+    canonical_materialized_run_set_digest,
+    evaluate_batch_outcome,
+)
 
 
 @pytest.fixture
@@ -195,6 +204,113 @@ async def test_batch_finalization_commits_all_facts_once_and_exactly_replays(
     assert replay.projection == first.projection
     async with pool.acquire() as connection:
         assert await _publication_snapshot(connection) == persisted
+
+
+@pytest.mark.asyncio
+async def test_high_rate_serial_replay_of_a_finalized_batch_has_bounded_per_call_cost(
+    batch_finalization_store: PostgresStore,
+) -> None:
+    """B6-SCALE-REPLAY: repeating an already-resolved `FinalizeBatch` call many times, serially,
+    must keep resolving through the authority-first exact-replay path with constant-shape cost
+    per call -- no growth in written fact/audit/outbox rows and no growing per-call transaction
+    duration. This is explicitly NOT a true-concurrent-identical-writer race (that remains
+    M1-B3's own named backlog item; see the M1-B5 "M1-B3 backlog note")."""
+    from qarunner.adapters.postgres_batch_finalization import (
+        PostgresBatchFinalizationUnitOfWork,
+    )
+
+    candidate = BatchFinalizationBasis.build(**_basis_inputs())
+    pool = batch_finalization_store._require_pool()
+    await _seed_batch_finalization_sources(pool, candidate)
+    authority = _authority(candidate)
+
+    async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+        first = await FinalizeBatch(gateway=gateway).execute(
+            FinalizeBatchCommand(candidate, candidate.source_batch_version)
+        )
+    assert not first.replayed
+
+    async with pool.acquire() as connection:
+        baseline = await _publication_snapshot(connection)
+
+    # 300 serial repeats: large enough to distinguish constant-shape cost from linear/quadratic
+    # growth (a per-call regression would show up clearly over hundreds of calls), while keeping
+    # this test's own wall-clock small (observed: well under 5s total on this container).
+    repeats = 300
+    durations: list[float] = []
+    for _ in range(repeats):
+        started = time.perf_counter()
+        async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+            replay = await FinalizeBatch(gateway=gateway).execute(
+                FinalizeBatchCommand(candidate, expected_batch_version=99)
+            )
+        durations.append(time.perf_counter() - started)
+        assert replay.replayed
+        assert replay.projection == first.projection
+
+    async with pool.acquire() as connection:
+        assert await _publication_snapshot(connection) == baseline
+
+    # Bounded-cost observation, not a frozen production SLA: the second half of a long serial
+    # replay run must not be growing relative to the first half, which would indicate an
+    # unbounded scan/lock/accumulation defect. A generous multiplier tolerates ordinary
+    # connection/scheduler jitter while still catching genuine linear/quadratic growth.
+    midpoint = repeats // 2
+    first_half_mean = sum(durations[:midpoint]) / midpoint
+    second_half_mean = sum(durations[midpoint:]) / (repeats - midpoint)
+    assert second_half_mean < max(first_half_mean * 10, 0.5), durations
+
+    # Also compare the very first and very last 10 calls directly (a tighter window than the
+    # halves above), as an additional constant-shape signal independent of the assertion's
+    # generous jitter tolerance.
+    first_10_mean = sum(durations[:10]) / 10
+    last_10_mean = sum(durations[-10:]) / 10
+    assert last_10_mean < max(first_10_mean * 10, 0.5), durations
+
+
+@pytest.mark.asyncio
+async def test_finalizing_a_30k_item_all_cancelled_batch_persists_atomically(
+    batch_finalization_store: PostgresStore,
+) -> None:
+    """B6-SCALE-FINALIZE: a batch whose manifest holds 30,000 pre-execution-cancelled items (no
+    Runs at all) must finalize in one atomic transaction -- all 30,000 resolution rows plus the
+    basis/audit/outbox facts committed together -- and complete in bounded wall-clock time. This
+    observes real behavior at a representative scale (the M1 boundary review's own scale
+    language, EV-M1-STATE-001F-CAPACITY) rather than asserting an invented SLA, matching the
+    B6-SCALE-OUTBOX-BACKLOG / B6-SCALE-REPLAY convention."""
+    from qarunner.adapters.postgres_batch_finalization import (
+        PostgresBatchFinalizationUnitOfWork,
+    )
+
+    item_count = 30_000
+    candidate = _large_all_cancelled_basis(item_count=item_count)
+    pool = batch_finalization_store._require_pool()
+    await _seed_large_all_cancelled_batch(pool, candidate)
+    authority = _authority(candidate)
+
+    started = time.perf_counter()
+    async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+        result = await FinalizeBatch(gateway=gateway).execute(
+            FinalizeBatchCommand(candidate, candidate.source_batch_version)
+        )
+    elapsed = time.perf_counter() - started
+
+    assert not result.replayed
+    async with pool.acquire() as connection:
+        persisted = await _publication_snapshot(connection)
+    assert persisted == {
+        "batch_state": candidate.batch_outcome.value,
+        "batch_version": candidate.source_batch_version + 1,
+        "basis_count": 1,
+        "resolution_count": item_count,
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
+    # Observed, not asserted-as-SLA: a generous ceiling that only fails on a pathological
+    # (e.g. unbounded-scan/quadratic) regression, not on ordinary container/scheduler jitter --
+    # observed ~49-65s run in isolation vs. ~185s under the full suite's `-n auto` contention,
+    # so the ceiling must clear full-suite contention with real margin, not just the isolated run.
+    assert elapsed < 300.0, elapsed
 
 
 @pytest.mark.asyncio
@@ -965,7 +1081,6 @@ async def test_scope_fact_without_cancellation_intent_fails_closed(
     from qarunner.domain import (
         BatchCancellationResolutionKind,
         BatchCancellationScopeItem,
-        RunItemKey,
     )
 
     candidate = BatchFinalizationBasis.build(**_unknown_basis_inputs())
@@ -1319,6 +1434,244 @@ async def _seed_readiness_binding(
         ref,
         candidate.batch_id,
     )
+
+
+def _large_all_cancelled_basis(*, item_count: int) -> BatchFinalizationBasis:
+    """A pre-execution-cancelled Batch with `item_count` NOT_EXECUTED items and zero Runs --
+    the simplest domain-valid shape that scales item count without needing any Run fixtures."""
+    from tests.unit.domain.test_batch_cancellation_scope_item import _digest as _scope_digest
+    from tests.unit.domain.test_batch_cancellation_scope_item import _scope_item
+    from tests.unit.domain.test_batch_finalization import _policy
+
+    manifest_digest = _scope_digest("manifest")
+    shard_plan_digest = _scope_digest("plan")
+    intent_digest = _scope_digest("intent")
+    scope_items = tuple(_scope_item(index) for index in range(item_count))
+    resolution = BatchItemResolutionSet.build(
+        batch_id="batch-1",
+        source_batch_version=4,
+        manifest_id="manifest-1",
+        manifest_digest=manifest_digest,
+        shard_plan_id="plan-1",
+        shard_plan_version=2,
+        shard_plan_digest=shard_plan_digest,
+        canonical_run_set_digest=canonical_materialized_run_set_digest(
+            batch_id="batch-1", run_ids=()
+        ),
+        expected_item_keys=tuple(RunItemKey("manifest-1", index) for index in range(item_count)),
+        entries=tuple(BatchItemResolution.from_not_executed(fact=item) for item in scope_items),
+    )
+    policy = _policy()
+    evaluation = evaluate_batch_outcome(
+        counts=resolution.counts,
+        policy=policy,
+        suite_id=policy.suite_id,
+        batch_cancellation_intent_digest=intent_digest,
+    )
+    return BatchFinalizationBasis.build(
+        resolution_set=resolution,
+        run_resolution_sets=(),
+        run_bases=(),
+        cancellation_scope_items=scope_items,
+        policy=policy,
+        evaluation=evaluation,
+    )
+
+
+async def _seed_large_all_cancelled_batch(
+    pool: asyncpg.Pool,
+    candidate: BatchFinalizationBasis,
+) -> None:
+    """Seeds the full source-fact skeleton for `_large_all_cancelled_basis` from scratch (no
+    Run fixtures needed -- there are zero Runs), bulk-inserting the item-scale tables via
+    `executemany` rather than one `execute` per row."""
+    now = datetime(2026, 7, 18, 12, tzinfo=UTC)
+    empty = json.dumps({})
+    policy = candidate.policy
+    scope_items = candidate.cancellation_scope_items
+    project_id = "project-scale-1"
+    suite_revision_id = "suite-revision-scale-1"
+    resource_profile_id = "profile-scale-1"
+
+    async with pool.acquire() as connection, connection.transaction():
+        await connection.execute(
+            "INSERT INTO qep_projects (id, name, created_at) VALUES ($1, $2, $3)",
+            project_id,
+            "Scale Project",
+            now,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_resource_profiles (
+                id, name, profile_version, framework, requests, limits,
+                internal_workers, security_profile_id, approved_at, created_at
+            ) VALUES ($1, $2, 1, 'pytest', $3, $3, 1, $4, $5, $5)
+            """,
+            resource_profile_id,
+            "Scale Default",
+            empty,
+            "security-profile-scale-1",
+            now,
+        )
+        await connection.execute(
+            "INSERT INTO qep_suites (id, project_id, name, created_at) VALUES ($1, $2, $3, $4)",
+            policy.suite_id,
+            project_id,
+            "Scale Suite",
+            now,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_suite_revisions (
+                id, suite_id, revision_no, source_spec_digest, config_digest,
+                framework, resource_profile_id, status, payload, created_at
+            ) VALUES ($1, $2, 1, $3, $4, 'pytest', $5, 'approved', $6, $7)
+            """,
+            suite_revision_id,
+            policy.suite_id,
+            "a" * 64,
+            "b" * 64,
+            resource_profile_id,
+            empty,
+            now,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_batches (
+                id, project_id, suite_revision_id, request_digest, idempotency_scope,
+                idempotency_key, state, version, write_epoch, created_at, updated_at, payload
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'finalizing', $7, 1, $8, $8, $9)
+            """,
+            candidate.batch_id,
+            project_id,
+            suite_revision_id,
+            "c" * 64,
+            "batch:create",
+            "batch-scale-key-1",
+            candidate.source_batch_version,
+            now,
+            empty,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_case_manifests (
+                id, batch_id, schema_version, digest, item_count, status, payload, created_at
+            ) VALUES ($1, $2, $3, $4, $5, 'approved', $6, $7)
+            """,
+            candidate.manifest_id,
+            candidate.batch_id,
+            "qep.case-manifest.v1",
+            _digest_hex(candidate.manifest_digest),
+            candidate.item_count,
+            empty,
+            now,
+        )
+        await connection.executemany(
+            """
+            INSERT INTO qep_manifest_items (
+                manifest_id, item_index, stable_case_id, framework_locator,
+                atomic_group_id, estimated_duration_ms, resource_profile_id,
+                constraints, tags
+            ) VALUES ($1, $2, $3, $4, $3, 1, $5, $4, $4)
+            """,
+            [
+                (
+                    candidate.manifest_id,
+                    key.item_index,
+                    f"case-{key.item_index + 1}",
+                    empty,
+                    resource_profile_id,
+                )
+                for key in candidate.resolution_set.expected_item_keys
+            ],
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_shard_plans (
+                id, batch_id, algorithm_version, digest, run_count,
+                total_estimated_duration_ms, status, version, payload, created_at
+            ) VALUES ($1, $2, 'single-shard.v1', $3, 1, 0, 'approved', $4, $5, $6)
+            """,
+            candidate.shard_plan_id,
+            candidate.batch_id,
+            _digest_hex(candidate.shard_plan_digest),
+            candidate.shard_plan_version,
+            empty,
+            now,
+        )
+        await connection.execute(
+            """
+            INSERT INTO qep_batch_success_policies (
+                id, policy_version, suite_id, max_test_failed_items,
+                allow_authorized_retry_pass, policy_digest, payload, approved_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            policy.policy_id,
+            policy.policy_version,
+            policy.suite_id,
+            policy.max_test_failed_items,
+            policy.allow_authorized_retry_pass,
+            _digest_hex(policy.policy_digest),
+            json.dumps(_policy_payload(candidate), sort_keys=True),
+            now,
+        )
+        assert candidate.batch_cancellation_intent_digest is not None
+        await connection.execute(
+            """
+            INSERT INTO qep_batch_cancellation_intents (
+                id, batch_id, project_id, suite_revision_id, source_batch_version,
+                idempotency_key, source, actor_id, reason, request_digest,
+                authorization_digest, scope_kind, manifest_digest, shard_plan_version,
+                shard_plan_digest, canonical_run_set_digest, intent_digest,
+                payload, recorded_at
+            ) VALUES (
+                'cancel-intent-scale-1', $1, $2, $3, $4,
+                'cancel-key-scale-1', 'user_request', 'user-1', 'stop remaining work', $5,
+                $6, 'frozen_plan', $7, $8, $9, $10, $11, $12, $13
+            )
+            """,
+            candidate.batch_id,
+            project_id,
+            suite_revision_id,
+            candidate.source_batch_version - 1,
+            "d" * 64,
+            "e" * 64,
+            _digest_hex(candidate.manifest_digest),
+            candidate.shard_plan_version,
+            _digest_hex(candidate.shard_plan_digest),
+            _digest_hex(candidate.canonical_run_set_digest),
+            _digest_hex(candidate.batch_cancellation_intent_digest),
+            json.dumps(
+                {"intent_digest": candidate.batch_cancellation_intent_digest.value},
+                sort_keys=True,
+            ),
+            now,
+        )
+        await connection.executemany(
+            """
+            INSERT INTO qep_batch_cancellation_scope_items (
+                batch_id, cancellation_intent_digest, manifest_id, item_index,
+                resolution_kind, run_id, source_run_version, scope_item_digest,
+                payload, recorded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """,
+            [
+                (
+                    item.batch_id,
+                    _digest_hex(item.batch_cancellation_intent_digest),
+                    item.manifest_id,
+                    item.manifest_item_key.item_index,
+                    item.resolution_kind.value,
+                    item.run_id,
+                    item.source_run_version,
+                    _digest_hex(item.scope_item_digest),
+                    json.dumps(item.canonical_payload(), sort_keys=True),
+                    item.recorded_at,
+                )
+                for item in scope_items
+            ],
+        )
+        await _seed_readiness_binding(connection, candidate, now)
 
 
 def _policy_payload(candidate: BatchFinalizationBasis) -> dict[str, object]:
