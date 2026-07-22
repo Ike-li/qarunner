@@ -611,20 +611,11 @@ class PostgresBatchFinalizationUnitOfWork:
         publication: BatchFinalizationPublication,
     ) -> None:
         connection = self._require_connection()
-        for entry in publication.basis.resolution_set.entries:
-            status = await connection.execute(
-                """
-                INSERT INTO qep_batch_item_resolutions (
-                    batch_id, manifest_id, item_index, source_kind,
-                    source_run_id, source_run_basis_digest, source_item_resolution_digest,
-                    not_executed_fact_digest, classification, resolution_digest,
-                    payload, created_at
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                    transaction_timestamp()
-                )
-                """,
-                publication.basis.batch_id,
+        batch_id = publication.basis.batch_id
+        entries = publication.basis.resolution_set.entries
+        values = [
+            (
+                batch_id,
                 entry.item_key.manifest_id,
                 entry.item_key.item_index,
                 entry.source_kind.value,
@@ -636,7 +627,30 @@ class PostgresBatchFinalizationUnitOfWork:
                 _digest_hex(entry.batch_item_resolution_digest),
                 _json(entry.canonical_payload()),
             )
-            _require_inserted(status, reason="batch_item_resolution_write_missing")
+            for entry in entries
+        ]
+        await connection.executemany(
+            """
+            INSERT INTO qep_batch_item_resolutions (
+                batch_id, manifest_id, item_index, source_kind,
+                source_run_id, source_run_basis_digest, source_item_resolution_digest,
+                not_executed_fact_digest, classification, resolution_digest,
+                payload, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                transaction_timestamp()
+            )
+            """,
+            values,
+        )
+        # executemany reports no per-row status, unlike the single-row execute() this replaced,
+        # so the "silently swallowed insert" check (a BEFORE INSERT trigger returning NULL) has
+        # to be a post-insert count comparison instead of a per-row "INSERT 0 1" check.
+        inserted = await connection.fetchval(
+            "SELECT count(*) FROM qep_batch_item_resolutions WHERE batch_id = $1", batch_id
+        )
+        if inserted != len(entries):
+            raise AuthorityStateConflict(reason="batch_item_resolution_write_missing")
 
     async def _insert_basis(self, publication: BatchFinalizationPublication) -> None:
         basis = publication.basis

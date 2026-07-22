@@ -308,8 +308,11 @@ async def test_finalizing_a_30k_item_all_cancelled_batch_persists_atomically(
     }
     # Observed, not asserted-as-SLA: a generous ceiling that only fails on a pathological
     # (e.g. unbounded-scan/quadratic) regression, not on ordinary container/scheduler jitter --
-    # observed ~49-65s run in isolation vs. ~185s under the full suite's `-n auto` contention,
-    # so the ceiling must clear full-suite contention with real margin, not just the isolated run.
+    # observed ~46-65s run in isolation vs. ~185s under the full suite's `-n auto` contention
+    # (before `_insert_item_resolutions`'s executemany fix; the dominant cost turned out to be
+    # `_rebuild_source_snapshot` running three times per finalize call, not the insert loop --
+    # see the execplan's corrected M1-B6 finding), so the ceiling must clear full-suite
+    # contention with real margin, not just the isolated run.
     assert elapsed < 300.0, elapsed
 
 
