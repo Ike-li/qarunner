@@ -269,6 +269,48 @@ async def test_high_rate_serial_replay_of_a_finalized_batch_has_bounded_per_call
 
 
 @pytest.mark.asyncio
+async def test_concurrent_identical_batch_finalizations_commit_once_and_exactly_replay(
+    batch_finalization_store: PostgresStore,
+) -> None:
+    """B3-BARRIER-BACKFILL: 8 true-concurrent (asyncio.Barrier) identical FinalizeBatch calls
+    against the same not-yet-finalized Batch must commit exactly once and have every other
+    contender resolve through the authority-first exact-replay path -- not raise a conflict --
+    mirroring test_concurrent_identical_run_finalizations_commit_once_and_exactly_replay's own
+    contract for the sibling Run-level UoW."""
+    from qarunner.adapters.postgres_batch_finalization import (
+        PostgresBatchFinalizationUnitOfWork,
+    )
+
+    candidate = BatchFinalizationBasis.build(**_basis_inputs())
+    pool = batch_finalization_store._require_pool()
+    await _seed_batch_finalization_sources(pool, candidate)
+    authority = _authority(candidate)
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def finalize():
+        await start.wait()
+        async with PostgresBatchFinalizationUnitOfWork(pool, authority=authority) as gateway:
+            return await FinalizeBatch(gateway=gateway).execute(
+                FinalizeBatchCommand(candidate, candidate.source_batch_version)
+            )
+
+    results = await asyncio.gather(*(finalize() for _ in range(contenders)))
+
+    assert sum(result.replayed for result in results) == contenders - 1
+    assert {result.projection for result in results} == {results[0].projection}
+    async with pool.acquire() as connection:
+        assert await _publication_snapshot(connection) == {
+            "batch_state": candidate.batch_outcome.value,
+            "batch_version": candidate.source_batch_version + 1,
+            "basis_count": 1,
+            "resolution_count": candidate.item_count,
+            "audit_count": 1,
+            "outbox_count": 1,
+        }
+
+
+@pytest.mark.asyncio
 async def test_finalizing_a_30k_item_all_cancelled_batch_persists_atomically(
     batch_finalization_store: PostgresStore,
 ) -> None:

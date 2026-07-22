@@ -21,6 +21,7 @@ from qarunner.adapters.postgres_store import PostgresStore
 from qarunner.application.begin_batch_finalization import (
     BeginBatchFinalization,
     BeginBatchFinalizationCommand,
+    BeginBatchFinalizationResult,
 )
 from qarunner.application.ports.batch_finalization_readiness import (
     AttemptCreationOpportunityKind,
@@ -709,6 +710,71 @@ async def test_cancellation_source_binding_drift_is_not_treated_as_ready(
         ) as gateway:
             await gateway.require_readiness_authority(batch_id=snapshot.batch_id)
     assert mismatch.value.reason == "batch_readiness_cancellation_source_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_finalization_readiness_requests_commit_exactly_once(
+    batch_readiness_store: PostgresStore,
+) -> None:
+    from qarunner.adapters.postgres_batch_finalization_readiness import (
+        PostgresBatchFinalizationReadinessUnitOfWork,
+    )
+    from qarunner.domain import IdempotencyConflict, VersionConflict
+
+    snapshot, authority, _ = _values()
+    pool = batch_readiness_store._require_pool()
+    snapshot, authority = await _seed_ready_sources(pool, snapshot, authority)
+
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def begin():
+        await start.wait()
+        async with PostgresBatchFinalizationReadinessUnitOfWork(
+            pool, authority=authority
+        ) as gateway:
+            return await BeginBatchFinalization(gateway=gateway).execute(
+                BeginBatchFinalizationCommand(snapshot.batch_id, snapshot.source_batch_version)
+            )
+
+    results = await asyncio.gather(*(begin() for _ in range(contenders)), return_exceptions=True)
+
+    winners = [result for result in results if isinstance(result, BeginBatchFinalizationResult)]
+    conflicts = [
+        result
+        for result in results
+        if isinstance(result, (VersionConflict, IdempotencyConflict, AuthorityStateConflict))
+    ]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    assert all(winner.projection is not None for winner in winners)
+    assert all(winner.reason is BatchFinalizationReadinessReason.READY for winner in winners)
+    assert len({winner.projection for winner in winners}) == 1
+    non_replayed = [winner for winner in winners if not winner.replayed]
+    assert len(non_replayed) == 1
+
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = $1) AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = $1) AS batch_version,
+                (SELECT count(*) FROM qep_batch_finalization_readiness_facts
+                 WHERE batch_id = $1) AS fact_count,
+                (SELECT count(*) FROM qep_audit_events
+                 WHERE action = 'begin_batch_finalization') AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events
+                 WHERE event_type = 'batch.finalization.started.v1') AS outbox_count
+            """,
+            snapshot.batch_id,
+        )
+    assert dict(persisted) == {
+        "batch_state": "finalizing",
+        "batch_version": snapshot.source_batch_version + 1,
+        "fact_count": 1,
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
 
 
 async def _seed_ready_sources(pool, snapshot, authority):

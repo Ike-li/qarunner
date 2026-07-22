@@ -340,6 +340,80 @@ async def test_materialized_cancel_reconciliation_atomically_publishes_one_hando
     }
 
 
+async def test_concurrent_identical_materialized_cancel_handoffs_commit_exactly_once(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    cancel_authority = _authority()
+    await _seed_batch(pool)
+    async with PostgresBatchCancellationUnitOfWork(
+        pool,
+        authority=cancel_authority,
+    ) as gateway:
+        intent = await RequestBatchCancellation(gateway=gateway).execute(
+            RequestBatchCancellationCommand(
+                batch_id="batch-001",
+                expected_batch_version=3,
+                idempotency_key="cancel-001",
+                reason="stop before execution starts",
+            )
+        )
+    await _seed_materialized_run(pool)
+    closure_authority = _closure_authority(intent)
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def reconcile():
+        await start.wait()
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            closure_authority=closure_authority,
+            closure_reconciler_id="reconciler-001",
+            closure_checked_at=intent.recorded_at + timedelta(minutes=1),
+        ) as gateway:
+            return await ReconcilePreexecutionCancellation(
+                gateway=gateway,
+                proof=ProvePreexecutionClosure(gateway=gateway),
+            ).execute(
+                ReconcilePreexecutionCancellationCommand(
+                    batch_id="batch-001",
+                    reconciler_id="reconciler-001",
+                    closure_epoch=1,
+                )
+            )
+
+    results = await asyncio.gather(
+        *(reconcile() for _ in range(contenders)), return_exceptions=True
+    )
+
+    winners = [result for result in results if isinstance(result, BatchMaterializedScopeHandoff)]
+    conflicts = [result for result in results if isinstance(result, PreexecutionStateConflict)]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    assert len({winner.handoff_digest for winner in winners}) == 1
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    # one pair from RequestBatchCancellation, one pair from the materialized handoff
+    assert dict(persisted) == {
+        "batch_state": "collecting",
+        "batch_version": 4,
+        "handoff_count": 1,
+        "basis_count": 0,
+        "audit_count": 2,
+        "outbox_count": 2,
+    }
+
+
 @pytest.mark.asyncio
 async def test_materialized_rejection_atomically_publishes_one_handoff_without_terminal(
     batch_cancellation_store: PostgresStore,
@@ -407,6 +481,74 @@ async def test_materialized_rejection_atomically_publishes_one_handoff_without_t
     assert dict(audit) == {
         "actor_id": "coordinator-001",
         "action": "publish_batch_materialized_handoff",
+    }
+
+
+async def test_concurrent_identical_rejection_materialized_handoffs_commit_exactly_once(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _rejection_authority()
+    await _seed_batch(pool)
+    await _seed_materialized_run(pool)
+    command = RecordPreexecutionRejectionCommand(
+        batch_id="batch-001",
+        rejection_id="rejection-001",
+        reason_class=BatchRejectionReasonClass.INVALID_INPUT,
+        reason_code="source_collection_failed",
+        input_digest=_named_digest("rejection-input"),
+        phase_owner_id="coordinator-001",
+        rejection_epoch=1,
+    )
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def reject():
+        await start.wait()
+        async with PostgresBatchCancellationUnitOfWork(
+            pool,
+            rejection_authority=authority,
+            rejection_phase_owner_id="coordinator-001",
+            rejection_checked_at=authority.recorded_at,
+        ) as gateway:
+            try:
+                await RecordPreexecutionRejection(
+                    gateway=gateway,
+                    proof=ProvePreexecutionClosure(gateway=gateway),
+                ).execute(command)
+            except RejectionMaterializedConflict as conflict:
+                return conflict.handoff
+            raise AssertionError("expected RejectionMaterializedConflict")
+
+    results = await asyncio.gather(*(reject() for _ in range(contenders)), return_exceptions=True)
+
+    # A materialized-scope conflict is not a race outcome to be won -- every identical
+    # rejection attempt against a batch with execution children must be handed off, never
+    # committed as a rejection terminal. So every contender resolves to the same handoff.
+    handoffs = [result for result in results if isinstance(result, BatchMaterializedScopeHandoff)]
+    assert len(handoffs) == contenders
+    assert len({handoff.handoff_digest for handoff in handoffs}) == 1
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT state FROM qep_batches WHERE id = 'batch-001') AS batch_state,
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_batch_rejections) AS rejection_count,
+                (SELECT count(*) FROM qep_materialized_scope_handoffs) AS handoff_count,
+                (SELECT count(*) FROM qep_batch_preexecution_closure_bases) AS basis_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {
+        "batch_state": "collecting",
+        "batch_version": 3,
+        "rejection_count": 0,
+        "handoff_count": 1,
+        "basis_count": 0,
+        "audit_count": 1,
+        "outbox_count": 1,
     }
 
 
@@ -1473,6 +1615,59 @@ async def test_caught_missing_handoff_audit_aborts_and_rolls_back_the_handoff(
             """
         )
     assert dict(counts) == {"handoff_count": 0, "audit_count": 1, "outbox_count": 1}
+
+
+async def test_concurrent_identical_cancellation_intents_commit_exactly_once(
+    batch_cancellation_store: PostgresStore,
+) -> None:
+    pool = batch_cancellation_store._require_pool()
+    authority = _authority()
+    await _seed_batch(pool)
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def request():
+        await start.wait()
+        async with PostgresBatchCancellationUnitOfWork(pool, authority=authority) as gateway:
+            return await RequestBatchCancellation(gateway=gateway).execute(
+                RequestBatchCancellationCommand(
+                    batch_id="batch-001",
+                    expected_batch_version=3,
+                    idempotency_key="cancel-001",
+                    reason="stop before execution starts",
+                )
+            )
+
+    results = await asyncio.gather(*(request() for _ in range(contenders)), return_exceptions=True)
+
+    winners = [result for result in results if isinstance(result, BatchCancellationIntent)]
+    conflicts = [
+        result
+        for result in results
+        if isinstance(result, (IdempotencyConflict, VersionConflict, PreexecutionStateConflict))
+    ]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    # Every contender submits the identical request, so a true race must resolve to either
+    # the same intent (idempotent replay of the winner) or a well-typed conflict -- never a
+    # duplicate row or a divergent digest.
+    assert len({winner.digest for winner in winners}) == 1
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT version FROM qep_batches WHERE id = 'batch-001') AS batch_version,
+                (SELECT count(*) FROM qep_batch_cancellation_intents) AS intent_count,
+                (SELECT count(*) FROM qep_audit_events) AS audit_count,
+                (SELECT count(*) FROM qep_outbox_events) AS outbox_count
+            """
+        )
+    assert dict(persisted) == {
+        "batch_version": 4,
+        "intent_count": 1,
+        "audit_count": 1,
+        "outbox_count": 1,
+    }
 
 
 @pytest.mark.asyncio

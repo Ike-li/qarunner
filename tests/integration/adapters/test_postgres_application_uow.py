@@ -1559,6 +1559,146 @@ async def test_suppressed_audit_insert_aborts_the_application_transaction(
         assert await connection.fetchval("SELECT count(*) FROM qep_audit_events") == 0
 
 
+@pytest.mark.asyncio
+async def test_concurrent_identical_fact_writes_commit_exactly_once(
+    application_uow_store: PostgresStore,
+) -> None:
+    from qarunner.adapters.postgres_application_uow import PostgresApplicationUnitOfWork
+    from qarunner.application.ports.common import PortContractError
+    from qarunner.application.ports.facts import FactCommitResult
+
+    pool = application_uow_store._require_pool()
+    run = Run.create(run_id="run-1")
+    key = FactKey(kind="run", value=run.id)
+    command = VersionedFactCommand(
+        key=key,
+        expected_version=None,
+        fact=run,
+        idempotency=IdempotencyRecord.create(
+            scope="run:create",
+            key="create-run-1",
+            request_digest=Digest("sha256:" + "1" * 64),
+            response_status=201,
+            response_ref=run.id,
+        ),
+    )
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def create_fact():
+        await start.wait()
+        async with PostgresApplicationUnitOfWork(
+            pool, fact_codecs={"run": _RunCodec()}
+        ) as unit_of_work:
+            result = await unit_of_work.facts.commit(command)
+            await unit_of_work.commit()
+            return result
+
+    results = await asyncio.gather(
+        *(create_fact() for _ in range(contenders)), return_exceptions=True
+    )
+
+    # A truly concurrent "create" race can settle two different ways for a loser,
+    # depending on whether it observes the winner's row before or after the
+    # winner's INSERT commits: it either loses the composite-key INSERT race
+    # outright (raw asyncpg.UniqueViolationError), or its own CAS pre-check
+    # observes the now-committed row and fails closed with the domain-level
+    # "already_exists" contract error. Both are losers; only one commit wins.
+    winners = [result for result in results if isinstance(result, FactCommitResult)]
+    losers = [
+        result
+        for result in results
+        if isinstance(result, asyncpg.UniqueViolationError)
+        or (isinstance(result, PortContractError) and result.reason == "already_exists")
+    ]
+    assert len(winners) + len(losers) == contenders
+    assert len(winners) >= 1
+    assert all(winner.fact == run for winner in winners)
+    async with pool.acquire() as connection:
+        persisted = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT count(*) FROM qep_versioned_fact_snapshots) AS snapshot_count,
+                (SELECT count(*) FROM qep_versioned_fact_commands) AS command_count
+            """
+        )
+    assert dict(persisted) == {"snapshot_count": 1, "command_count": 1}
+
+    def factory() -> PostgresApplicationUnitOfWork:
+        return PostgresApplicationUnitOfWork(pool, fact_codecs={"run": _RunCodec()})
+
+    async with factory() as reader:
+        assert await reader.facts.get(key) == run
+        await reader.rollback()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_evidence_index_writes_commit_exactly_once(
+    application_uow_store: PostgresStore,
+) -> None:
+    from qarunner.adapters.postgres_application_uow import PostgresApplicationUnitOfWork
+
+    pool = application_uow_store._require_pool()
+    await _seed_attempt(pool)
+    manifest = _manifest()
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def finalize_evidence():
+        await start.wait()
+        async with PostgresApplicationUnitOfWork(
+            pool, fact_codecs={"run": _RunCodec()}
+        ) as unit_of_work:
+            result = await unit_of_work.evidence.finalize(_manifest())
+            await unit_of_work.commit()
+            return result
+
+    results = await asyncio.gather(
+        *(finalize_evidence() for _ in range(contenders)), return_exceptions=True
+    )
+
+    winners = [result for result in results if isinstance(result, ReplayResult)]
+    conflicts = [result for result in results if isinstance(result, asyncpg.UniqueViolationError)]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    assert all(winner.value == manifest for winner in winners)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_evidence_index") == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_audit_writes_commit_exactly_once(
+    application_uow_store: PostgresStore,
+) -> None:
+    from qarunner.adapters.postgres_application_uow import PostgresApplicationUnitOfWork
+
+    pool = application_uow_store._require_pool()
+    audit = _audit_record()
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def append_audit():
+        await start.wait()
+        async with PostgresApplicationUnitOfWork(
+            pool, fact_codecs={"run": _RunCodec()}
+        ) as unit_of_work:
+            result = await unit_of_work.audit.append(_audit_record())
+            await unit_of_work.commit()
+            return result
+
+    results = await asyncio.gather(
+        *(append_audit() for _ in range(contenders)), return_exceptions=True
+    )
+
+    winners = [result for result in results if isinstance(result, ReplayResult)]
+    conflicts = [result for result in results if isinstance(result, asyncpg.UniqueViolationError)]
+    assert len(winners) + len(conflicts) == contenders
+    assert len(winners) >= 1
+    assert all(winner.value == audit for winner in winners)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_audit_events") == 1
+
+
 async def _seed_attempt(pool: asyncpg.Pool) -> None:
     now = datetime(2026, 7, 19, 12, tzinfo=UTC)
     later = now + timedelta(minutes=5)

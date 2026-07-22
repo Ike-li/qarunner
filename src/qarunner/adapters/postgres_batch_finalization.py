@@ -126,10 +126,7 @@ class PostgresBatchFinalizationUnitOfWork:
                 readiness.readiness_digest,
                 readiness.compatibility_epoch,
                 readiness.state_model_version,
-                readiness.payload AS readiness_payload,
-                basis.source_batch_version AS stored_source_batch_version,
-                basis.batch_outcome AS stored_batch_outcome,
-                basis.readiness_ref AS stored_basis_readiness_ref
+                readiness.payload AS readiness_payload
             FROM qep_batches AS batch
             JOIN qep_suite_revisions AS revision ON revision.id = batch.suite_revision_id
             JOIN qep_suites AS suite
@@ -138,7 +135,6 @@ class PostgresBatchFinalizationUnitOfWork:
             LEFT JOIN qep_batch_finalization_readiness_facts AS readiness
               ON readiness.ref = batch.finalization_readiness_ref
              AND readiness.batch_id = batch.id
-            LEFT JOIN qep_batch_finalization_bases AS basis ON basis.batch_id = batch.id
             WHERE batch.id = $1
             FOR UPDATE OF batch
             """,
@@ -148,7 +144,19 @@ class PostgresBatchFinalizationUnitOfWork:
             raise AuthorityPermissionDenied
         if row["write_epoch"] != candidate.write_epoch:
             raise AuthorityStateConflict(reason="batch_finalization_authority_superseded")
-        stored_source_version = row["stored_source_batch_version"]
+        # A waiter needs a fresh READ COMMITTED snapshot after acquiring the Batch lock so it can
+        # see a concurrent winner's basis, instead of retaining the pre-wait LEFT JOIN result that
+        # `FOR UPDATE OF batch` alone does not refresh (mirrors
+        # PostgresRunFinalizationUnitOfWork.require_finalization_authority's own fix for this).
+        basis_row = await connection.fetchrow(
+            """
+            SELECT source_batch_version, batch_outcome, readiness_ref
+            FROM qep_batch_finalization_bases
+            WHERE batch_id = $1
+            """,
+            batch_id,
+        )
+        stored_source_version = None if basis_row is None else basis_row["source_batch_version"]
         if stored_source_version is None:
             if (
                 row["state"] != BatchState.FINALIZING.value
@@ -158,9 +166,9 @@ class PostgresBatchFinalizationUnitOfWork:
         elif (
             stored_source_version != candidate.source_batch_version
             or row["version"] != candidate.source_batch_version + 1
-            or row["state"] != row["stored_batch_outcome"]
+            or row["state"] != basis_row["batch_outcome"]
             or row["state"] not in _TERMINAL_BATCH_STATES
-            or row["stored_basis_readiness_ref"] != row["finalization_readiness_ref"]
+            or basis_row["readiness_ref"] != row["finalization_readiness_ref"]
         ):
             raise AuthorityStateConflict(reason="stored_batch_finalization_binding_invalid")
 
