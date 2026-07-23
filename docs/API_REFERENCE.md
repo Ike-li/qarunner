@@ -8,6 +8,9 @@
 >
 > Base URL：默认 `http://localhost:8000`，下文路径均相对此。
 
+> [!CAUTION]
+> 本文是当前 API 事实。`executor_mode` 和控制面本地 Docker/subprocess 语义属于 legacy/current implementation，不代表 V7.4 目标契约；目标架构只允许控制面通过受认证 Worker 协议调度，Worker 不可用时不得本地回退执行。
+
 ---
 
 ## 一、通用约定

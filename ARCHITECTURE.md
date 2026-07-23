@@ -3,6 +3,9 @@
 > **qarunner** — for the product direction, see [docs/DIRECTION.md](docs/DIRECTION.md) (the single
 > source of truth). This document covers the **architecture** only.
 
+> [!CAUTION]
+> This file describes the current single-host implementation. V7.4 targets one control-plane host plus one dedicated Worker host, with no Docker socket on the control plane and a fresh container per Run. That architecture is not implemented until GAP-021/SOR-GAP-023 close.
+
 ## Table of Contents
 
 - [Layered Overview](#layered-overview)
@@ -332,7 +335,7 @@ tests/
 
 ## Deployment Architecture
 
-### Production (single-container)
+### Current legacy single-host validation (not V7.4 production)
 
 ```
 docker-compose.yml
@@ -375,7 +378,7 @@ docker-compose.dev.yml
 └──────────────────┘     └──────────────────┘
 ```
 
-- Dev compose runs **two** containers with live reload (vs production's single
+- Dev compose runs **two** containers with live reload (vs the legacy validation image's single
   baked image)
 - Frontend HMR uses file polling (`VITE_USE_POLLING=true`) for macOS Docker
   bind-mount compatibility

@@ -1,13 +1,16 @@
 # 本地部署与更新指南
 
+> [!CAUTION]
+> 本文记录当前已实现的单宿主开发/验证部署，不是 V7.4 目标生产拓扑。目标要求控制面与专用 Worker 分离，控制面无 Docker socket，每个 Run 在 Worker 上使用全新一次性容器。GAP-021/SOR-GAP-023 关闭前，本文的 `docker-compose.yml` 不得用于运行不可信外部测试代码。
+
 ## 两种部署模式
 
-qarunner 提供两套 Docker Compose 配置，**日常开发用 dev，验证部署用 prod**。
+qarunner 提供两套 Docker Compose 配置，**日常开发用 dev，legacy 单宿主验证用 prod 文件**；该文件不是 V7.4 生产部署。
 
 | 模式 | 文件 | 前端 | 后端 | 热更新 |
 |------|------|------|------|--------|
 | 开发 | `docker-compose.dev.yml` | Vite dev server (:5173) | Uvicorn --reload (:8000) | ✅ 前后端都支持 |
-| 生产 | `docker-compose.yml` | 静态文件由 FastAPI serve | Uvicorn (:8000) | ❌ 需手动操作 |
+| legacy 验证 | `docker-compose.yml` | 静态文件由 FastAPI serve | Uvicorn (:8000) | ❌ 需手动操作 |
 
 ---
 
@@ -89,7 +92,7 @@ docker-compose.dev.yml
 
 ---
 
-## 生产模式（验证最终部署效果）
+## Legacy 单宿主验证模式（非 V7.4 生产）
 
 ### 首次部署
 
@@ -124,7 +127,7 @@ curl -f http://localhost:8000/health
 | `docker-compose.yml` | `docker compose up -d --build` | 容器配置变更 |
 | `.env` | `docker compose up -d`（不需要 --build） | 环境变量在容器启动时注入 |
 
-### 生产容器结构
+### Legacy 验证容器结构
 
 ```
 docker-compose.yml
@@ -145,16 +148,16 @@ docker-compose.yml
 ```bash
 # ── 查看状态 ──
 docker compose ps                      # 查看所有服务
-docker compose logs -f app             # 生产日志
+docker compose logs -f app             # legacy 验证日志
 docker compose -f docker-compose.dev.yml logs -f backend frontend  # 开发日志
 
 # ── 进入容器 ──
-docker compose exec app bash                   # 生产
+docker compose exec app bash                   # legacy 验证
 docker compose -f docker-compose.dev.yml exec backend bash  # 开发后端
 docker compose -f docker-compose.dev.yml exec frontend bash # 开发前端
 
 # ── 重启 ──
-docker compose restart app                     # 重启生产
+docker compose restart app                     # 重启 legacy 验证
 docker compose -f docker-compose.dev.yml restart backend  # 重启开发后端
 
 # ── 彻底清理 ──
@@ -162,7 +165,7 @@ docker compose down -v                         # 停止并删除 volumes
 docker compose -f docker-compose.dev.yml down -v
 
 # ── 重建并启动 ──
-docker compose up -d --build                  # 生产
+docker compose up -d --build                  # legacy 验证
 docker compose -f docker-compose.dev.yml up -d --build  # 开发
 
 # ── 在容器内运行测试 ──
@@ -239,7 +242,7 @@ docker compose -f docker-compose.dev.yml exec backend uv run pytest -m e2e --no-
 | 改前端 UI 看效果 | 自动热更新，刷新浏览器 |
 | 改后端逻辑 | 自动 reload，等 3 秒 |
 | 新增 npm 或 pip 包 | `docker compose -f docker-compose.dev.yml up -d --build` |
-| 验证生产部署 | `docker compose up -d --build` |
-| 生产前端代码改了 | `docker compose up -d --build` |
-| 生产后端代码改了 | `docker compose restart app` |
+| 验证 legacy 单宿主部署 | `docker compose up -d --build` |
+| legacy 验证前端代码改了 | `docker compose up -d --build` |
+| legacy 验证后端代码改了 | `docker compose restart app` |
 | 查看运行的测试 | `docker compose -f docker-compose.dev.yml exec backend uv run pytest` |

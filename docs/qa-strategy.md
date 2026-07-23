@@ -1,7 +1,11 @@
 # qarunner QA Strategy
 
-> **Version:** 1.0
-> **Date:** 2026-07-01
+> [!IMPORTANT]
+> V7.4 新增控制面到专用 Worker 的内部服务契约。后续 QA 基线必须增加 Worker 身份、claim/fencing、断线恢复、一次性容器和证据上传的契约/故障测试；本文现有单宿主描述属于当前实现。
+> 发布验收 family、case ID、适用性和样本套件候选见 [`RELEASE_GATE_CATALOG.md`](RELEASE_GATE_CATALOG.md)。
+
+> **Version:** 1.1
+> **Date:** 2026-07-12
 > **Owner:** Ike-li
 > **Review Cadence:** Quarterly (next review: 2026-10-01)
 > **Trigger:** New product area, team change, major incident, defect escape
@@ -10,7 +14,7 @@
 
 ## 1. Executive Summary
 
-qarunner is a self-hosted test execution, scheduling, and regression comparison service. As an internal tool for development teams, it prioritizes reliability and security over feature velocity. This strategy leverages the existing strong foundation (100% backend coverage, established CI pipeline) while addressing gaps in frontend enforcement and expanding test types to match the product's risk profile.
+qarunner is a self-hosted intranet test execution, scheduling, and regression comparison service for one team. V7.4 targets one control plane and one dedicated hardened Worker; the current repository remains a legacy single-host implementation until GAP-021/SOR-GAP-023 close. This strategy therefore tests both the current code and the target Worker contracts, with fail-closed behavior as the security baseline.
 
 **Key Decisions:**
 - Maintain 100% backend coverage (already achieved)
@@ -24,15 +28,15 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 ## 2. Scope & Objectives
 
 ### In Scope
-- **Backend:** FastAPI application, Docker/subprocess runners, SQLite database, authentication, scheduling
+- **Backend:** FastAPI control plane, SQLite database, authentication, scheduling, and the authenticated Worker task contract (current Docker/subprocess runners are legacy implementation paths)
 - **Frontend:** React dashboard, i18n, SSE streaming, Allure report integration
-- **Infrastructure:** GitHub Actions CI/CD, Docker containers
-- **Test Types:** Unit, integration, E2E, security (SAST), accessibility (a11y)
+- **Infrastructure:** GitHub Actions CI/CD, dedicated Worker host baseline, Docker containers, and evidence upload path
+- **Test Types:** Unit, integration, E2E, Worker contract/fault, isolation/capacity, security (SAST), accessibility (a11y)
 
 ### Out of Scope
 - **Visual Regression:** Low risk for internal tool; UI changes are intentional, not regressions
-- **Performance/Load Testing:** Single-node, self-hosted; performance issues are deployment-specific
-- **Third-Party Services:** No external APIs to integrate; self-contained system
+- **Performance/Load Testing:** Internet-scale load testing is out of scope; fixed single-control-plane/single-Worker capacity and resource-boundary tests are in scope
+- **Third-Party Services:** Provider-specific certification beyond approved Git/Registry/SUT/AI/notification contracts
 - **Mobile Testing:** Web-only application
 
 ### Objectives
@@ -54,11 +58,13 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 | **E2E (Frontend)** | Critical user journeys through full stack | Developer | Playwright | 7 spec files (target) | Pre-deploy + nightly |
 | **Security** | OWASP Top 10, dependency vulnerabilities, auth flows | Developer | Ruff (SAST) + manual review | Per release | Every PR + pre-release |
 | **Accessibility** | WCAG 2.2 AA, keyboard navigation, screen reader | Developer | axe-core (manual) | Key flows | Every PR |
+| **Worker Contract** | Identity, claim/fencing, heartbeat, drain, upload and replay rejection | Developer/QA | Contract + fault tests | Frozen catalog | Every release |
+| **Isolation/Capacity** | Fresh containers, residue cleanup, Worker loss, queue and disk limits | QA/Ops | Docker integration + recovery drill | Frozen catalog | Pre-release |
 
 **Rationale:**
 - **No visual regression:** Internal tool; UI changes are intentional features, not regressions
-- **No performance testing:** Single-node deployment; performance is deployment-specific, not code-level
-- **No contract testing:** No inter-service communication; monolithic architecture
+- **Capacity is bounded, not absent:** the supported single-control-plane/single-Worker envelope must be measured and published
+- **Worker contract testing is mandatory:** control plane and Worker communicate across an authenticated service boundary
 - **Manual a11y:** Solo developer; automated a11y tools catch only 30% of issues; manual testing more valuable
 
 ---
@@ -67,37 +73,40 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 
 ### Current State
 
-> Counts refreshed from an actual repo scan on 2026-07-10 (backend: 39 test files / 741 tests; frontend unit: 28 test files / 118 tests; E2E: 38 spec files — up from 11 as AI failure diagnosis and other features shipped with full test coverage). Percentages below are file-count shares of the four rows shown and will not sum against unmeasured categories.
+> Inventory refreshed on 2026-07-12. Backend counts come from containerized `pytest --collect-only`; frontend counts are static declarations. They do not prove that the tests passed.
 
-| Level | Count | Percentage | Notes |
-|-------|-------|------------|-------|
-| **Unit (Backend)** | 39 test files | 32% | 100% line + branch coverage |
-| **Unit (Frontend)** | 28 test files | 23% | Not enforced |
-| **Integration (Backend)** | ~15 test files | 12% | API + database tests |
-| **E2E (Frontend)** | 38 spec files | 32% | All critical paths covered |
+| Level | Current inventory | Gate status | Notes |
+|-------|-------------------|-------------|-------|
+| **Backend default** | 36 unit files / 842 collected cases | CI gate | 100% line + branch coverage; excludes `e2e`/`docker` |
+| **Backend Docker integration** | 2 files / 7 collected cases | Opt-in only | Legacy local Docker evidence; not in current CI |
+| **Backend E2E** | 2 files / 2 collected cases | Opt-in only | Uses legacy SubprocessRunner/JUnit/Allure path |
+| **Frontend unit** | 32 files / 168 declared cases | No coverage gate | No stable release case manifest or machine-readable result output |
+| **Frontend Playwright** | 38 specs / 289 declared cases | Manual layers | Contains legacy duplicates, fixed skip and conditional skip |
 
-**Shape:** Unit/integration/E2E mix has shifted since this document was first written, mainly from E2E growth (11→38 files) as new features shipped with matching test coverage — see note above.
+**Shape:** Raw file count is not the release denominator. The authoritative denominator is the enabled and applicable case set in `RELEASE_GATE_CATALOG.md`.
 
-**CI Duration:** ~5 minutes (target: <10 minutes) ✅
+**CI Duration:** Target <10 minutes; current value was not re-measured in this inventory.
 **Flakiness Rate:** Unknown (flaky detection just implemented)
-**Pass Rate:** 100% (enforced by CI gate)
+**Pass Rate:** Not asserted by this inventory; only the backend default command has a configured coverage/pass gate.
 
 ### Target State (End of 2026 Q3)
 
-| Level | Count | Percentage | Notes |
-|-------|-------|------------|-------|
-| **Unit (Backend)** | 39+ test files | 60% | Maintain 100% coverage |
-| **Unit (Frontend)** | 20+ test files | 25% | Enforce 80% coverage |
-| **Integration (Backend)** | 15+ test files | 12% | Maintain current coverage |
-| **E2E (Frontend)** | 7 spec files | 3% | All critical journeys |
+| Layer | Target outcome | Release rule |
+|-------|----------------|--------------|
+| **Backend default** | Maintain 100% line + branch coverage | Every candidate commit |
+| **Worker contract/fault** | Implement all applicable `RCF-003/004/008/018/022/023` cases | No skipped/not-run cases |
+| **Worker isolation/security** | Implement all applicable `RCF-002/005～007/019～021/024` cases | Dedicated Worker environment |
+| **Frontend unit** | Establish machine-readable results and an approved coverage threshold | Threshold breach blocks release |
+| **Frontend E2E** | Stable case IDs for core/auth/runner/a11y; remove weak returns and unapproved skips | Frozen catalog denominator |
 
-**Target Shape:** Healthy pyramid (60% unit, 25% integration, 3% E2E)
+**Target Shape:** Risk-based layers with explicit contracts and evidence; test-file percentages are not a quality objective.
 
 **Action Plan:**
-1. **Enforce frontend unit coverage** — Add Vitest coverage gate to CI (80% target)
-2. **Expand E2E coverage** — Add 2 more spec files for regression analysis and scheduling
-3. **Monitor flakiness** — Use new flaky detection to identify and fix flaky tests
-4. **Maintain backend coverage** — 100% gate already enforced
+1. **Approve the release catalog** — Freeze RCF family/case IDs, applicability and sample contracts
+2. **Implement Worker gates** — Add protocol, isolation, approved-target and recovery harnesses
+3. **Remove false-green paths** — Fix weak returns/assertions and replace unapproved skip with preflight failure or approved applicability
+4. **Produce machine-readable frontend evidence** — Add stable result output and an approved coverage threshold
+5. **Maintain backend coverage** — Keep the existing 100% default gate while adding opt-in suites to release automation
 
 ---
 
@@ -128,12 +137,12 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 |------------|---------|------------|------|---------------|
 | **Local** | Developer feedback | Unit, integration | Mocked/seeded | On save |
 | **CI** | Automated validation | Unit, integration, lint, SAST | Ephemeral | On push/PR |
-| **Production** | Monitoring & smoke | Smoke tests (manual) | Live | On deploy |
+| **V7.4 target production** | Monitoring, smoke, recovery and security boundary | Smoke, Worker contract, recovery | Approved non-production SUT | On deploy |
 
 **Environment Parity:**
-- **High parity:** Same SQLite, same Docker execution model
-- **Differences:** CI uses fresh DB, production has persistent data
-- **Mocking:** No external APIs to mock (self-contained system)
+- **High parity:** Same state/provenance contracts and Worker task protocol
+- **Differences:** CI uses fresh DB and test doubles; target production has persistent control-plane data and a dedicated Worker host
+- **Mocking:** Git, Registry, SUT, AI and notification boundaries use contract fakes or approved test endpoints; Worker protocol also requires negative/replay cases
 
 **Test Data Management:**
 - **Backend:** In-memory SQLite for unit tests, file-based for integration
@@ -356,7 +365,7 @@ qarunner is a self-hosted test execution, scheduling, and regression comparison 
 4. **Scheduling:** Create cron schedule, preview next runs, manually trigger, manage schedules
 5. **User Management:** Create users, assign roles, manage passwords, enforce owner-scope
 6. **Dashboard Monitoring:** View stat cards, filter runs, search
-7. **Security & Isolation:** Execute in hardened Docker containers, prevent malicious code execution
+7. **Security & Isolation:** Execute untrusted stages in fresh Worker containers, enforce network/identity/resource/artifact boundaries, and verify the accepted shared-kernel residual risk
 
 ### B. Risk Matrix (5x5)
 

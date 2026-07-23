@@ -2,6 +2,9 @@
 
 > **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。运行详情支持只读的 AI 失败诊断（无 API key 时 Tab 内展示未配置说明，不隐藏入口），详见 [docs/FEATURES.md](docs/FEATURES.md)。
 
+> [!CAUTION]
+> V7.4 目标生产拓扑是“单控制面主机 + 单专用加固 Worker 主机 + 每 Run 一次性容器”。当前仓库的 Compose/代码仍是控制面直挂 Docker socket 的单宿主实现，只用于开发和现状验证；在 GAP-021/SOR-GAP-023 关闭前，不得据此承载不可信外部测试代码或宣称满足 V7.4 生产要求。
+
 ## 本地部署
 
 **日常开发和部署指南详见 [docs/deployment.md](docs/deployment.md)**。
@@ -24,15 +27,20 @@ docker compose -f docker-compose.dev.yml up -d
 | 后端 `src/*.py` | 自动重启，等 2-3 秒 |
 | 新增依赖包 | `docker compose -f docker-compose.dev.yml up -d --build` |
 
-详细说明（生产部署、运行测试、容器运维）见 **[docs/deployment.md](docs/deployment.md)**。
+详细说明（开发与 legacy 验证部署、运行测试、容器运维）见 **[docs/deployment.md](docs/deployment.md)**。
 
 ## 文档索引
 
 | 文档 | 说明 |
 |------|------|
-| [docs/deployment.md](docs/deployment.md) | **本地部署与更新指南**（开发/生产模式、代码更新、运维命令） |
+| [docs/deployment.md](docs/deployment.md) | **本地部署与更新指南**（开发/legacy 验证模式、代码更新、运维命令） |
 | [docs/DIRECTION.md](docs/DIRECTION.md) | 产品方向（唯一权威来源） |
-| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | 需求文档（目标、功能、规则、验收） |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | 产品需求（用户结果、核心范围、KPI、路线图） |
+| [docs/SYSTEM_REQUIREMENTS.md](docs/SYSTEM_REQUIREMENTS.md) | 系统需求（Worker 协议、provenance、授权、环境租约、证据、状态与接口） |
+| [docs/SECURITY_OPERATIONS_REQUIREMENTS.md](docs/SECURITY_OPERATIONS_REQUIREMENTS.md) | 安全与运维需求（控制面/Worker 边界、供应链、宿主隔离、部署与门禁） |
+| [docs/WORKER_PROTOCOL.md](docs/WORKER_PROTOCOL.md) | Worker 协议参考（mTLS 长轮询、claim/commit-start、fencing、上传、恢复与错误码） |
+| [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md) | 需求追踪矩阵（PRD → 系统/安全/运维 → 验收目录 → 发布证据） |
+| [docs/RELEASE_GATE_CATALOG.md](docs/RELEASE_GATE_CATALOG.md) | 发布验收目录（24 个 family、稳定 case ID、适用性、样本与阻断状态） |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | API 端点参考（所有路由、请求/响应字段） |
 | [docs/FEATURES.md](docs/FEATURES.md) | 功能列表 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 代码架构（层次、端口、适配器） |
@@ -57,7 +65,7 @@ docker compose -f docker-compose.dev.yml up -d
 | `QARUNNER_AI_POST_MAX_CALLS` | `10` | 每用户滑动窗口内允许的 AI POST 次数；`0` 关闭限流 |
 | `QARUNNER_AI_POST_WINDOW_SECONDS` | `60` | AI POST 限流窗口秒数 |
 
-## Production deployment (Docker Compose)
+## Legacy single-host validation deployment (not V7.4 production)
 
 The bundled `Dockerfile.server` builds a single image that serves **both the
 API and the built React SPA from the same origin** (port 8000) — a non-root
@@ -105,7 +113,8 @@ automatically (no token is ever placed in a URL). Therefore:
 - **Persistence**: the SQLite DB and run artifacts both live under the
   `./artifacts` bind-mounted host directory. Back it up to retain run history.
 - **Test suites**: the single-instance server clones / pulls / prepares git
-  suites into the writable `external_tests` root. It is bind-mounted
+  suites into the writable `external_tests` root. This is a legacy single-host
+  validation path, not the V7.4 production topology. It is bind-mounted
   source==target so the DooD executor's jail-fallback path stays host-resolvable;
   on a server point `${PWD}/external_tests` at a persistent directory and back it
   up too. No named volume is used — the executor mounts the per-run jail under
@@ -113,14 +122,15 @@ automatically (no token is ever placed in a URL). Therefore:
 - **Executor**: runs default to the hardened **Docker executor** (SEC-3:
   non-root, no network, `cap_drop=ALL`, read-only rootfs, pid/mem/cpu limits),
   which runs tests in a throwaway `qarunner-executor:latest` container. The
-  bundled prod compose mounts the Docker daemon socket and joins the host docker
-  group (`QARUNNER_DOCKER_GID`) so this path works — note that socket access is
+  bundled legacy validation compose mounts the Docker daemon socket and joins the
+  host docker group (`QARUNNER_DOCKER_GID`) so this path works — note that socket access is
   effectively host-root, so the real isolation is that untrusted tests run in the
   executor container, **not** the server process. The in-process `subprocess`
-  executor runs test code **in the server process**, so it is opt-in: admins
-  always, non-admins only when `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true`
-  (default false; the dev compose enables it as a single-host convenience). In dev
-  the executor images are built on demand; in production set
+  executor is current legacy behavior: admins can select it, and non-admins can
+  select it only when `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true`. V7.4 forbids
+  this path and never permits it as Worker/Docker failover. The dev compose enables
+  it only as a single-host development convenience. In dev the executor images are
+  built on demand; for release-like legacy validation set
   `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build them so a missing image
   fails fast instead of being silently (re)built:
   `docker build -f Dockerfile -t qarunner-executor:latest .` and
@@ -160,8 +170,8 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_DEFAULT_TIMEOUT_SECONDS` | `1800` | Default test execution timeout |
 | `QARUNNER_MAX_CONCURRENCY` | `4` | Maximum concurrent test runs |
 | `QARUNNER_MAX_INFLIGHT_RUNS_PER_USER` | `20` | Per-user cap on simultaneously queued/running runs; over it `POST /runs` returns 429 (admins exempt). `0` disables the limit |
-| `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | Let non-admins use the in-process `subprocess` executor (which runs test code in the server process). Keep `false` in production; the dev compose sets it `true` |
-| `QARUNNER_EXECUTOR_AUTOBUILD` | `true` | Build the `qarunner-executor:latest` image at runtime if missing. **Set `false` in production** and pre-build the image, so a missing image fails fast instead of being silently (re)built and drifting from the Dockerfile |
+| `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | Legacy validation-only switch; the in-process executor runs test code in the server process and is forbidden by the V7.4 target. Keep `false` everywhere except isolated local development |
+| `QARUNNER_EXECUTOR_AUTOBUILD` | `true` | Legacy validation-only runtime image build. Keep `false` for any release-like validation and pre-build immutable images; V7.4 requires Worker-side image digests |
 | `QARUNNER_PLAYWRIGHT_EXECUTOR_IMAGE` | `qarunner-playwright-executor:latest` | Docker image used for `runner=playwright` docker executions |
 | `QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS` | empty | `os.pathsep`-separated allowlist of roots whose explicit env directory values may be mounted read-only into executor containers |
 | `QARUNNER_SECRET_KEY` | **(required)** | JWT signing secret. No default; known placeholders rejected. Generate via `python -c "import secrets; print(secrets.token_urlsafe(64))"` |

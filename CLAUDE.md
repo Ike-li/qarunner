@@ -31,7 +31,7 @@
 
 ## 2. 🛠️ 项目技术栈与架构 (Tech Stack & Architecture)
 
-本项目 **qarunner** 是一个单节点的自动化测试执行、调度与回归比对平台。
+本项目 **qarunner** 的 V7.4 目标拓扑是单控制面实例 + 一台专用加固 Worker 主机；当前代码仍是控制面直连 Docker 的单宿主 legacy 实现（GAP-021/SOR-GAP-023）。
 
 ### 后端 (Backend)
 - **语言/环境**：Python 3.12+ (使用 `uv` 依赖/环境管理器)
@@ -39,7 +39,7 @@
 - **数据校验**：Pydantic v2
 - **数据库**：SQLite (通过 `aiosqlite` 异步操作 Raw SQL + 自定义 migration 系统)
 - **任务调度**：APScheduler + croniter (带时区的 Cron 调度)
-- **核心逻辑**：通过 Python Docker SDK 在隔离的 Docker 容器沙箱中安全执行 pytest/playwright 并收集结果
+- **核心逻辑（目标）**：控制面经受认证 Worker 协议调度，Worker agent 使用本机 Docker API 创建 Source/Dependency/Report 及每 Run 一次性容器；当前 DockerRunner 尚未迁移
 
 ### 前端 (Frontend)
 - **框架/打包**：React 18.3 + TypeScript 5.2 + Vite 5.3

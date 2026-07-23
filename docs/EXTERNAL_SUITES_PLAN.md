@@ -1,6 +1,9 @@
 # 外部测试套件接入：跨环境（dev / 服务器）设计
 
-> 状态：**round 3（2026-06-24）设计定稿 → ✅ 已实现**。本文档记录的 git 接入方案（元数据层 + clone/pull/delete + 依赖准备）已全部落地为生产代码，详见各阶段旁的实现位置标注（§5、§6、§10、§11）。
+> [!IMPORTANT]
+> 本文记录当前单宿主 Git/依赖接入实现。其“平台实例直接 clone/pull/prepare”设计已被 V7.4 的专用 Worker 决策取代；目标架构要求 Source Acquisition 和 Dependency Preparation 在 Worker 的独立一次性容器中完成。
+
+> 状态：**round 3（2026-06-24）设计定稿 → ✅ 已实现为当前 legacy 代码**。本文档不构成 V7.4 生产方案；当前 git 接入、依赖准备和报告链仍由控制面实现，目标架构必须迁移到 Worker 的一次性阶段容器。
 > round 1 方案有洞 → round 2 补洞补过头（引入与单实例架构/SQLite/playwright 冲突的复杂度）
 > → round 3 砍掉多副本过度设计、修正 G2 错误、贴回项目现状。修订轨迹见 §12。
 > 背景触发：容器化后用 `AddSuiteModal` 绑定本地项目 `~/code/my-e2e-suite`，
@@ -106,7 +109,7 @@ volumes:
 5. **`list_tests`**：文件系统实体 + `suites` 左 join（R5），返回带 `source`。✅ 已实现。
 6. **安全**（§7）：URL 白名单、子进程参数化、`name` 路径逃逸校验、克隆超时/体积上限、**owner-scope**。✅ 已实现。
 7. **依赖准备 / jail 复制（R1，重做 G2；含 P1 闭环）**——**不能 ignore `node_modules`**：playwright runner 跑 `npx playwright test`（playwright_runner.py:23），依赖 `node_modules/@playwright/test`（package.json:23），ignore 会让它跑不起来。✅ 已实现（`npm ci` 准备逻辑见 `routes.py`，clone 端点附近）。
-   - **依赖准备只在 platform 的 clone/link 阶段做**（P1）：`npm ci` 要联网拉包，而 executor 是 `network_mode="none"`（docker_runner.py:138，SEC-3 零网络）→ 装依赖只能发生在有出网的 **platform 容器**，**executor 内永不联网、不装包**。git suite（仓库通常 `.gitignore` 掉 node_modules，clone 后没有）在 clone 后由 platform 执行一次 `npm ci`；local suite 复用宿主已装依赖。
+   - **当前 legacy 实现的依赖准备只在 platform 的 clone/link 阶段做**（P1）：`npm ci` 要联网拉包，而 executor 是 `network_mode="none"`（docker_runner.py:138，SEC-3 零网络）。V7.4 目标要求将该阶段迁移到 Worker 的独立依赖准备容器，生成不可变 Dependency Snapshot；控制面不得执行 `npm ci`。
    - **装完依赖后两种来源同样面临 copytree 开销**（P1 纠正 round 2 的"git 就没事"）：node_modules 一旦在 suite 目录里（git = `npm ci` 之后，local = 本来就有），orchestrator `copytree` 进 jail 都会全量复制（可能 GB 级）。缓解策略（只读 mount node_modules 而非复制 / jail 内按需装 / 接受复制）对**两种来源统一**留待实现时定——具体择定了哪种缓解策略未在本次核实范围内，需查 orchestrator 复制逻辑现状确认。
    - **唯一红线**：`_JAIL_IGNORE_NAMES`（orchestrator.py:88，现为 `{".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"}`）**不含 node_modules**——红线已守住，playwright 可正常跑。
 8. **实现注意项（写代码时定，非设计阻塞）**：`clone -b <tag>` 时 `rev-parse --abbrev-ref HEAD` 返回 detached `HEAD`，记录 ref 需特判（N1）；suites 表孤儿记录（目录被手动删、记录残留）的清理时机（N2）；手动放进 `external_tests`、无记录无 owner 的目录其 `DELETE` 权限判定（N3）。✅ 三项均已实现：N1（`routes.py:928` 附近，显式 ref 信任原值以规避 detached HEAD 下 `rev-parse` 不可靠）、N2/N3（`delete_test_suite` 文档字符串，`routes.py:1110-1111`：无目录的孤儿记录直接清、无记录的目录仅 admin 可删）。
@@ -124,16 +127,16 @@ volumes:
 - **鉴权 / owner-scope**（M3，对齐 BUG-1）：suite 记录含 `created_by`；任意登录用户可 `clone`，但 `pull`/`delete` 限 **owner 或 admin**。**回填的 `system` 属主 suite 为 admin-only**（R7）。
 - **命令注入**：参数化子进程（`["git","clone",url,name]` 列表形式），禁 shell 拼接。
 - **URL 白名单 / SSRF**：仅 `https://`、`git@`；**禁 `file://`、`ext::`** 等可读本地/执行命令的协议；可选 host 白名单。
-- **platform 出网面**（M4）：clone 要求**平台容器出站网络** —— 与 executor 的 `network_mode="none"`（docker_runner.py:138，SEC-3 零网络）是两套基线，是新增攻击面。生产给平台配出站白名单/egress 代理。
+- **当前 legacy platform 出网面**（M4）：clone 要求平台容器出站网络，是新增攻击面。V7.4 目标应由 Worker Source Acquisition 容器通过 approved-source/egress 策略承载，不得给控制面开放该执行路径。
 - **路径逃逸**：`name` 拒 `..`/绝对路径/分隔符，确保落在 `tests_root` 内。
-- **凭证**：每仓库（决策 2），值经环境/挂载注入、记录只存引用，不入库明文、不写日志（SEC-2）。由平台单实例持有并使用。
+- **凭证**：每仓库（决策 2），值经环境/挂载注入、记录只存引用，不入库明文、不写日志（SEC-2）。当前由 legacy platform 单实例持有；V7.4 目标只允许 Worker 阶段容器短期使用。
 - **资源**：`--depth 1`、clone 超时、磁盘配额。
 - **执行隔离**：克隆只拉代码，跑测试仍由 executor 隔离，不变。
 
 ## 8. Docker executor 配合
 
-- **服务器**：platform 与 executor 共享同一 named volume（suites-data），executor 用 volume 名挂载，绕开宿主路径一致难题。
-- **dev**：默认 subprocess executor 不涉及；要测 Docker executor 再按 `source==target` 单独处理。
+- **当前 legacy 服务器**：platform 与 executor 共享同一 named volume（suites-data）。这不是 V7.4 目标部署方式。
+- **dev**：默认 subprocess executor 仅为 legacy 开发路径；V7.4 不允许把它作为 Worker/Docker 故障回退。
 - **node_modules**：见 §5.7——不 ignore；依赖准备 + 复制/只读 mount 策略实现时定。
 
 ## 9. 兼容与迁移

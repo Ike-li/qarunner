@@ -1,5 +1,13 @@
 # Quality Metrics
 
+> Pass rate, flaky count, test duration and coverage describe the tested suites or
+> engineering process; they are not qarunner product-success KPIs. Product success
+> criteria live in docs/REQUIREMENTS.md and focus on provenance completeness,
+> regression correctness, security boundaries, core journeys and signal consumption.
+> Release denominators, evidence freshness and sign-off rules live in
+> docs/REQUIREMENTS_TRACEABILITY.md; frozen family/case identities and applicability live in
+> docs/RELEASE_GATE_CATALOG.md.
+
 > Defines what we measure, why, and what action each metric triggers.
 > See also: `docs/FEATURES.md` §5 (Regression View), `.agents/qa-project-context.md`.
 

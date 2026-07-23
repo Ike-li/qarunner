@@ -8,6 +8,9 @@
 > - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — 系统**怎么搭**(六边形分层、端口/适配器)
 > - [`../README.md`](../README.md) — 项目**怎么跑**(快速开始、部署、配置)
 
+> [!CAUTION]
+> 本文只描述当前已实现能力。当前 Docker executor、Git、npm 和报告链仍在单宿主控制面边界内，不满足 V7.4 的独立 Worker 目标；对应差距见 GAP-021/SOR-GAP-023。
+
 ## 一句话定位
 
 > 产品方向(一句话 + 四支柱 + 边界)以 [`DIRECTION.md`](DIRECTION.md) 为**唯一权威源**;本文不再重复,只从**能力视角**展开它能做什么、边界在哪。
@@ -34,14 +37,14 @@
 
 ## 2. 测试执行引擎（执行核心）
 
-**两种 Runner × 唯一执行形态（docker）**:
+**两种 Runner × 当前执行形态**:
 
-|  | docker（唯一执行形态） |
-|---|---|
-| **pytest** | python executor 镜像 |
-| **playwright** | 专用 playwright 镜像(含 Node + 浏览器) |
+|  | docker（默认） | subprocess（当前兼容/管理路径） |
+|---|---|---|
+| **pytest** | python executor 镜像 | 由控制面宿主进程执行 |
+| **playwright** | 专用 playwright 镜像(含 Node + 浏览器) | 依赖宿主 Node/浏览器环境 |
 
-历史上的 subprocess 宿主进程退路已从实现移除(`orchestrator.py` 硬编码 docker;REQUIREMENTS RN-4 已废弃,追认 Docker-only);API / Profile 的 executor 字段为兼容保留,不改变实际形态。
+当前 API/Profile 仍保留 `executor_mode=subprocess`，并由权限/配置限制使用。该路径以及控制面本地 Docker 都不满足 V7.4；目标架构只允许控制面通过专用 Worker 调度一次性容器，Worker 不可用时不得回退 subprocess。
 
 **docker 隔离矩阵**(跑不受信任代码的主防线):非 root · `network_mode=none` 无网络 · `cap_drop=ALL` · 只读根文件系统 · 内存 2g / CPU 2 核 / PID 512 上限 · `no-new-privileges` · `/tmp` 为 tmpfs · playwright 另配 `shm_size=1g`。
 **通用**:每次运行在独立 **workspace jail**(套件副本,忽略 `.git` / `.venv` / `__pycache__` 等)中执行,互不污染;arg 注入防护(拒危险 pytest / playwright flag);stdout/stderr 有界截断(终局保留末尾 5 万行)防 OOM。
