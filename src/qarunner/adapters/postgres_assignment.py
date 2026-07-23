@@ -20,8 +20,8 @@ import asyncpg
 
 from qarunner.application.ports.assignment import AssignmentMutationSnapshot
 from qarunner.application.ports.common import PortContractError, ReplayResult
-from qarunner.domain import Run
-from qarunner.domain.digest import Digest
+from qarunner.domain import Assignment, Digest, Run, WorkerRef
+from qarunner.domain.assignment import AssignmentState
 from qarunner.domain.errors import VersionConflict
 from qarunner.domain.run import CommitStartResult, RunState
 
@@ -112,29 +112,63 @@ class PostgresAssignmentGateway:
                 resource="assignment_gateway", field="run_id", reason="not_found"
             )
         phase = row["orchestration_phase"]
-        # Contenders that lost the race see the winner's committed phase after
-        # FOR UPDATE serializes them. Map that to VersionConflict so the
-        # ASGN-OFFER concurrent matrix stays on the CAS path (not a free-form
-        # domain conflict).
-        if phase != RunState.QUEUED.value:
+        if phase == RunState.QUEUED.value:
+            # QUEUED rehydration is a direct row→object build (no assignments/attempts).
+            run = Run(
+                id=row["id"],
+                state=RunState.QUEUED,
+                version=row["version"],
+                current_fence=row["current_fence"],
+                assignments=(),
+                current_assignment_id=None,
+                attempts=(),
+                retry_intents=(),
+                pending_retry_intent_id=None,
+            )
+        elif phase == RunState.ASSIGNED.value:
+            assignment_row = await connection.fetchrow(
+                """
+                SELECT
+                    id, worker_id, worker_generation, spec_digest, state,
+                    offered_at, expires_at, claimed_at, version
+                FROM qep_assignments AS assignment
+                WHERE run_id = $1
+                  AND state = ANY($2::text[])
+                FOR UPDATE OF assignment
+                """,
+                run_id,
+                [
+                    AssignmentState.OFFERED.value,
+                    AssignmentState.CLAIMED.value,
+                    AssignmentState.COMMITTED.value,
+                ],
+            )
+            if assignment_row is None:
+                raise PortContractError(
+                    resource="assignment_gateway",
+                    field="assignment",
+                    reason="active_assignment_missing",
+                )
+            assignment = _assignment_from_row(assignment_row)
+            run = Run(
+                id=row["id"],
+                state=RunState.ASSIGNED,
+                version=row["version"],
+                current_fence=row["current_fence"],
+                assignments=(assignment,),
+                current_assignment_id=assignment.id,
+                attempts=(),
+                retry_intents=(),
+                pending_retry_intent_id=None,
+            )
+        else:
+            # Contenders that lost an offer race (or later phases) surface as CAS.
             raise VersionConflict(
                 entity_type="run",
                 entity_id=run_id,
                 current_version=row["version"],
                 expected_version=max(row["version"] - 1, 0),
             )
-        # QUEUED rehydration is a direct row→object build (no assignments/attempts).
-        run = Run(
-            id=row["id"],
-            state=RunState.QUEUED,
-            version=row["version"],
-            current_fence=row["current_fence"],
-            assignments=(),
-            current_assignment_id=None,
-            attempts=(),
-            retry_intents=(),
-            pending_retry_intent_id=None,
-        )
         self._snapshot = AssignmentMutationSnapshot(run=run)
         return self._snapshot
 
@@ -150,10 +184,11 @@ class PostgresAssignmentGateway:
     async def publish_claim(
         self, *, claimed: Run, expected: AssignmentMutationSnapshot
     ) -> ReplayResult[Run]:
-        self._aborted = True
-        raise PortContractError(
-            resource="assignment_gateway", field="publish_claim", reason="not_implemented"
-        )
+        try:
+            return await self._publish_claim(claimed=claimed, expected=expected)
+        except BaseException:
+            self._aborted = True
+            raise
 
     async def publish_commit_start(
         self, *, commit: CommitStartResult, expected: AssignmentMutationSnapshot
@@ -254,6 +289,91 @@ class PostgresAssignmentGateway:
         self._snapshot = AssignmentMutationSnapshot(run=offered)
         return ReplayResult(value=offered, replayed=False)
 
+    async def _publish_claim(
+        self, *, claimed: Run, expected: AssignmentMutationSnapshot
+    ) -> ReplayResult[Run]:
+        connection = self._require_connection()
+        if self._snapshot is None or self._snapshot != expected:
+            current = self._snapshot
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=expected.run_id,
+                current_version=0 if current is None else current.version,
+                expected_version=expected.version,
+            )
+        if claimed.id != expected.run_id:
+            raise PortContractError(
+                resource="assignment_gateway", field="claimed", reason="run_id_mismatch"
+            )
+        if claimed.state is not RunState.ASSIGNED:
+            raise PortContractError(
+                resource="assignment_gateway", field="claimed", reason="not_assigned"
+            )
+        assignment = claimed.assignment
+        if assignment is None:
+            raise PortContractError(
+                resource="assignment_gateway", field="claimed", reason="missing_assignment"
+            )
+        if assignment.state is not AssignmentState.CLAIMED:
+            raise PortContractError(
+                resource="assignment_gateway", field="claimed", reason="not_claimed"
+            )
+        if assignment.claimed_at is None:
+            raise PortContractError(
+                resource="assignment_gateway", field="claimed", reason="missing_claimed_at"
+            )
+
+        update_assignment = await connection.execute(
+            """
+            UPDATE qep_assignments
+            SET state = $1,
+                claimed_at = $2,
+                version = version + 1,
+                payload = $3::jsonb
+            WHERE id = $4
+              AND run_id = $5
+              AND state = $6
+              AND version = 0
+            """,
+            AssignmentState.CLAIMED.value,
+            assignment.claimed_at,
+            _assignment_payload(assignment),
+            assignment.id,
+            claimed.id,
+            AssignmentState.OFFERED.value,
+        )
+        if update_assignment != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="assignment",
+                entity_id=assignment.id,
+                current_version=0,
+                expected_version=0,
+            )
+
+        update_run = await connection.execute(
+            """
+            UPDATE qep_runs
+            SET version = version + 1,
+                updated_at = transaction_timestamp()
+            WHERE id = $1
+              AND version = $2
+              AND orchestration_phase = $3
+            """,
+            claimed.id,
+            expected.version,
+            RunState.ASSIGNED.value,
+        )
+        if update_run != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=claimed.id,
+                current_version=expected.version,
+                expected_version=expected.version,
+            )
+
+        self._snapshot = AssignmentMutationSnapshot(run=claimed)
+        return ReplayResult(value=claimed, replayed=False)
+
     def _require_connection(self) -> asyncpg.Connection:
         if self._connection is None:
             self._state_error("not_active")
@@ -267,7 +387,27 @@ def _digest_hex(value: Digest) -> str:
     return value.value.removeprefix("sha256:")
 
 
-def _assignment_payload(assignment) -> str:
+def _digest_from_hex(value: str) -> Digest:
+    return Digest(f"sha256:{value}")
+
+
+def _assignment_from_row(row: asyncpg.Record) -> Assignment:
+    state = AssignmentState(row["state"])
+    return Assignment(
+        id=row["id"],
+        worker=WorkerRef(
+            worker_id=row["worker_id"],
+            generation=row["worker_generation"],
+        ),
+        spec_digest=_digest_from_hex(row["spec_digest"]),
+        state=state,
+        offered_at=row["offered_at"],
+        expires_at=row["expires_at"],
+        claimed_at=row["claimed_at"],
+    )
+
+
+def _assignment_payload(assignment: Assignment) -> str:
     return json.dumps(
         {
             "schema_version": "qep.assignment.v1",

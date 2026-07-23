@@ -422,13 +422,38 @@ async def test_get_run_for_update_rejects_unknown_run(
 
 
 @pytest.mark.asyncio
-async def test_get_run_for_update_rejects_already_assigned_run(
+async def test_get_run_for_update_rehydrates_offered_assignment(
     assignment_store: PostgresStore,
 ) -> None:
     pool = assignment_store._require_pool()
     await _seed_queued_run(pool)
     await _offer_once(pool, assignment_id="assignment-001")
 
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+
+    assert snapshot.run.state is RunState.ASSIGNED
+    assert snapshot.run.version == 1
+    assert snapshot.run.current_assignment_id == "assignment-001"
+    assert snapshot.run.assignment is not None
+    assert snapshot.run.assignment.id == "assignment-001"
+    assert snapshot.run.assignment.state.value == "offered"
+    assert snapshot.run.assignment.worker.worker_id == WORKER_ID
+    assert snapshot.run.assignment.worker.generation == WORKER_GENERATION
+
+
+@pytest.mark.asyncio
+async def test_get_run_for_update_rejects_non_claimable_phase(
+    assignment_store: PostgresStore,
+) -> None:
+    """Running/closed phases are outside offer/claim and surface as VersionConflict."""
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE qep_runs SET orchestration_phase = 'running', version = 5 WHERE id = $1",
+            RUN_ID,
+        )
     with pytest.raises(VersionConflict):
         async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
             await gateway.get_run_for_update(run_id=RUN_ID)
@@ -604,8 +629,363 @@ async def test_suppressed_assignment_insert_sticky_aborts(
         )
 
 
+async def _claim_once(
+    pool: asyncpg.Pool,
+    *,
+    assignment_id: str,
+    observed_at: datetime | None = None,
+    worker_ref: WorkerRef | None = None,
+) -> Run:
+    observed = observed_at if observed_at is not None else OFFERED_AT + timedelta(minutes=1)
+    worker = (
+        worker_ref
+        if worker_ref is not None
+        else WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    )
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        claimed = snapshot.run.claim_assignment(
+            assignment_id=assignment_id,
+            worker=worker,
+            observed_at=observed,
+            expected_version=snapshot.version,
+        )
+        result = await gateway.publish_claim(claimed=claimed, expected=snapshot)
+    assert result.replayed is False
+    return result.value
+
+
 @pytest.mark.asyncio
-async def test_claim_commit_close_are_not_yet_implemented(
+async def test_single_claim_transitions_assignment_to_claimed(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+
+    claimed = await _claim_once(pool, assignment_id="assignment-001")
+
+    assert claimed.state is RunState.ASSIGNED
+    assert claimed.version == 2
+    assert claimed.assignment is not None
+    assert claimed.assignment.state.value == "claimed"
+    assert claimed.assignment.claimed_at == OFFERED_AT + timedelta(minutes=1)
+    async with pool.acquire() as connection:
+        assignment = await connection.fetchrow(
+            "SELECT state, claimed_at, version, attempt_id, fence FROM qep_assignments"
+        )
+        run = await connection.fetchrow(
+            "SELECT orchestration_phase, version FROM qep_runs WHERE id = $1",
+            RUN_ID,
+        )
+    assert dict(assignment) == {
+        "state": "claimed",
+        "claimed_at": OFFERED_AT + timedelta(minutes=1),
+        "version": 1,
+        "attempt_id": None,
+        "fence": None,
+    }
+    assert dict(run) == {"orchestration_phase": "assigned", "version": 2}
+
+
+@pytest.mark.asyncio
+async def test_eight_concurrent_claims_elect_exactly_one_winner(
+    assignment_store: PostgresStore,
+) -> None:
+    """ASGN-CLAIM core: 8-contender Barrier on one offered assignment → 1 claimed."""
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    observed = OFFERED_AT + timedelta(minutes=1)
+
+    async def contend():
+        await start.wait()
+        try:
+            async with PostgresAssignmentGateway(
+                pool, offer_token_hash=OFFER_TOKEN_HASH
+            ) as gateway:
+                snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+                claimed = snapshot.run.claim_assignment(
+                    assignment_id="assignment-001",
+                    worker=worker,
+                    observed_at=observed,
+                    expected_version=snapshot.version,
+                )
+                return await gateway.publish_claim(claimed=claimed, expected=snapshot)
+        except BaseException as error:
+            return error
+
+    results = await asyncio.gather(*(contend() for _ in range(contenders)))
+    winners = [result for result in results if not isinstance(result, BaseException)]
+    conflicts = [
+        result for result in results if isinstance(result, (VersionConflict, AssignmentConflict))
+    ]
+    assert len(winners) == 1, results
+    assert len(conflicts) == contenders - 1
+    assert winners[0].value.assignment is not None
+    assert winners[0].value.assignment.state.value == "claimed"
+    assert winners[0].value.version == 2
+
+    async with pool.acquire() as connection:
+        assignment = await connection.fetchrow(
+            "SELECT state, version, count(*) OVER () AS total FROM qep_assignments"
+        )
+        run_version = await connection.fetchval(
+            "SELECT version FROM qep_runs WHERE id = $1", RUN_ID
+        )
+    assert assignment["state"] == "claimed"
+    assert assignment["version"] == 1
+    assert assignment["total"] == 1
+    assert run_version == 2
+
+
+@pytest.mark.asyncio
+async def test_claim_rejects_wrong_worker(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(AssignmentConflict) as exc:
+        await _claim_once(
+            pool,
+            assignment_id="assignment-001",
+            worker_ref=WorkerRef(worker_id=WORKER_ID, generation=99),
+        )
+    assert exc.value.reason == "offer_mismatch"
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "offered"
+
+
+@pytest.mark.asyncio
+async def test_claim_rejects_expired_offer(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(AssignmentConflict) as exc:
+        await _claim_once(
+            pool,
+            assignment_id="assignment-001",
+            observed_at=EXPIRES_AT,
+        )
+    assert exc.value.reason == "assignment_expired"
+
+
+@pytest.mark.asyncio
+async def test_claim_rejects_stale_run_version(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            claimed = snapshot.run.claim_assignment(
+                assignment_id="assignment-001",
+                worker=worker,
+                observed_at=OFFERED_AT + timedelta(minutes=1),
+                expected_version=snapshot.version,
+            )
+            assert gateway._connection is not None
+            await gateway._connection.execute(
+                "UPDATE qep_runs SET version = version + 10 WHERE id = $1",
+                RUN_ID,
+            )
+            await gateway.publish_claim(claimed=claimed, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "offered"
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 1
+
+
+@pytest.mark.asyncio
+async def test_claim_rejects_already_claimed_assignment_via_cas(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    with pytest.raises((VersionConflict, AssignmentConflict)):
+        await _claim_once(pool, assignment_id="assignment-001")
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_run_id_mismatch(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            claimed = snapshot.run.claim_assignment(
+                assignment_id="assignment-001",
+                worker=worker,
+                observed_at=OFFERED_AT + timedelta(minutes=1),
+                expected_version=snapshot.version,
+            )
+            # Forge a different run id after domain transition.
+            from dataclasses import replace
+
+            forged = replace(claimed, id="other-run")
+            await gateway.publish_claim(claimed=forged, expected=snapshot)
+    assert exc.value.reason == "run_id_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_non_claimed_domain_result(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            # Still OFFERED — publish_claim requires CLAIMED domain result.
+            await gateway.publish_claim(claimed=snapshot.run, expected=snapshot)
+    assert exc.value.reason == "not_claimed"
+
+
+@pytest.mark.asyncio
+async def test_get_run_for_update_rejects_assigned_without_active_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE qep_runs SET orchestration_phase = 'assigned', version = 1 WHERE id = $1",
+            RUN_ID,
+        )
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            await gateway.get_run_for_update(run_id=RUN_ID)
+    assert exc.value.reason == "active_assignment_missing"
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_stale_snapshot(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    from qarunner.application.ports.assignment import AssignmentMutationSnapshot
+
+    draft = Run.create(run_id=RUN_ID)
+    stale = AssignmentMutationSnapshot(run=draft)
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            claimed = snapshot.run.claim_assignment(
+                assignment_id="assignment-001",
+                worker=worker,
+                observed_at=OFFERED_AT + timedelta(minutes=1),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_claim(claimed=claimed, expected=stale)
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_non_assigned_domain_result(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    bogus = SimpleNamespace(id=RUN_ID, state=RunState.QUEUED, assignment=None)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            await gateway.publish_claim(claimed=bogus, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "not_assigned"
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_assigned_missing_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    bogus = SimpleNamespace(id=RUN_ID, state=RunState.ASSIGNED, assignment=None)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            await gateway.publish_claim(claimed=bogus, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "missing_assignment"
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_claimed_without_claimed_at(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    from qarunner.domain.assignment import AssignmentState
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    fake_assignment = SimpleNamespace(
+        id="assignment-001",
+        state=AssignmentState.CLAIMED,
+        claimed_at=None,
+        worker=WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION),
+        spec_digest=SPEC_DIGEST,
+        retry_intent_id=None,
+    )
+    bogus = SimpleNamespace(id=RUN_ID, state=RunState.ASSIGNED, assignment=fake_assignment)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            await gateway.publish_claim(claimed=bogus, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "missing_claimed_at"
+
+
+@pytest.mark.asyncio
+async def test_publish_claim_rejects_when_assignment_row_already_claimed(
+    assignment_store: PostgresStore,
+) -> None:
+    """Force assignment-row CAS miss after FOR UPDATE (in-tx version bump)."""
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            claimed = snapshot.run.claim_assignment(
+                assignment_id="assignment-001",
+                worker=worker,
+                observed_at=OFFERED_AT + timedelta(minutes=1),
+                expected_version=snapshot.version,
+            )
+            assert gateway._connection is not None
+            await gateway._connection.execute(
+                "UPDATE qep_assignments SET version = version + 10 WHERE id = $1",
+                "assignment-001",
+            )
+            await gateway.publish_claim(claimed=claimed, expected=snapshot)
+
+
+@pytest.mark.asyncio
+async def test_commit_close_are_not_yet_implemented(
     assignment_store: PostgresStore,
 ) -> None:
     pool = assignment_store._require_pool()
@@ -615,8 +995,6 @@ async def test_claim_commit_close_are_not_yet_implemented(
 
     snapshot = AssignmentMutationSnapshot(run=offered)
     async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
-        with pytest.raises(PortContractError) as claim:
-            await gateway.publish_claim(claimed=offered, expected=snapshot)
         with pytest.raises(PortContractError) as close:
             await gateway.publish_close(closed=offered, expected=snapshot)
         with pytest.raises(PortContractError) as commit:
@@ -624,7 +1002,6 @@ async def test_claim_commit_close_are_not_yet_implemented(
                 commit=object(),  # type: ignore[arg-type]
                 expected=snapshot,
             )
-    assert claim.value.reason == "not_implemented"
     assert close.value.reason == "not_implemented"
     assert commit.value.reason == "not_implemented"
 
