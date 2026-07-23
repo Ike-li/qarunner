@@ -993,19 +993,556 @@ async def test_publish_claim_rejects_when_assignment_row_already_claimed(
 
 
 @pytest.mark.asyncio
-async def test_publish_close_is_not_yet_implemented(
+async def test_expire_precommit_closes_assignment_and_returns_run_to_queued(
     assignment_store: PostgresStore,
 ) -> None:
     pool = assignment_store._require_pool()
     await _seed_queued_run(pool)
-    offered = await _offer_once(pool, assignment_id="assignment-001")
+    await _offer_once(pool, assignment_id="assignment-001")
+
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.expire_precommit_assignment(
+            assignment_id="assignment-001",
+            expiry_key="expiry-001",
+            observed_at=EXPIRES_AT,
+            expected_version=snapshot.version,
+        )
+        result = await gateway.publish_close(closed=closed, expected=snapshot)
+
+    assert result.replayed is False
+    assert result.value.state is RunState.QUEUED
+    assert result.value.version == 2
+    assert result.value.current_assignment_id is None
+    assert result.value.current_fence == 0
+    historical = result.value.assignments[-1]
+    assert historical.state.value == "expired_prestart"
+    assert historical.closure is not None
+    assert historical.closure.idempotency_key == "expiry-001"
+
+    async with pool.acquire() as connection:
+        assignment = await connection.fetchrow(
+            "SELECT state, version FROM qep_assignments WHERE id = $1",
+            "assignment-001",
+        )
+        run = await connection.fetchrow(
+            "SELECT orchestration_phase, version, current_fence FROM qep_runs WHERE id = $1",
+            RUN_ID,
+        )
+    assert dict(assignment) == {"state": "expired_prestart", "version": 1}
+    assert dict(run) == {
+        "orchestration_phase": "queued",
+        "version": 2,
+        "current_fence": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_release_precommit_closes_claimed_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.release_precommit_assignment(
+            assignment_id="assignment-001",
+            worker=worker,
+            release_key="release-001",
+            observed_at=OFFERED_AT + timedelta(minutes=2),
+            expected_version=snapshot.version,
+        )
+        result = await gateway.publish_close(closed=closed, expected=snapshot)
+
+    assert result.replayed is False
+    assert result.value.state is RunState.QUEUED
+    assert result.value.version == 3
+    assert result.value.assignments[-1].state.value == "released_prestart"
+    async with pool.acquire() as connection:
+        assert (
+            await connection.fetchval(
+                "SELECT state FROM qep_assignments WHERE id = $1", "assignment-001"
+            )
+            == "released_prestart"
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "queued"
+        )
+
+
+@pytest.mark.asyncio
+async def test_exact_close_key_replays_without_duplicate_write(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.expire_precommit_assignment(
+            assignment_id="assignment-001",
+            expiry_key="expiry-001",
+            observed_at=EXPIRES_AT,
+            expected_version=snapshot.version,
+        )
+        first = await gateway.publish_close(closed=closed, expected=snapshot)
+    assert first.replayed is False
+
+    # Domain exact-replay (same key) after durable close — no second write.
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        replay_domain = snapshot.run.expire_precommit_assignment(
+            assignment_id="assignment-001",
+            expiry_key="expiry-001",
+            observed_at=EXPIRES_AT + timedelta(seconds=1),
+            expected_version=0,
+        )
+        second = await gateway.publish_close(closed=replay_domain, expected=snapshot)
+
+    assert second.replayed is True
+    assert second.value.version == snapshot.version
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_assignments") == 1
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 2
+
+
+@pytest.mark.asyncio
+async def test_closed_assignment_id_cannot_be_reused_on_fresh_offer(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.expire_precommit_assignment(
+            assignment_id="assignment-001",
+            expiry_key="expiry-001",
+            observed_at=EXPIRES_AT,
+            expected_version=snapshot.version,
+        )
+        await gateway.publish_close(closed=closed, expected=snapshot)
+
+    with pytest.raises(AssignmentConflict) as exc:
+        await _offer_once(pool, assignment_id="assignment-001")
+    assert exc.value.reason == "assignment_id_reused"
+
+
+@pytest.mark.asyncio
+async def test_after_close_fresh_offer_first_commit_is_still_fence_1(
+    assignment_store: PostgresStore,
+) -> None:
+    """ASGN-CLOSE core: reassignment after prestart close keeps fence monotonic from 0→1."""
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.expire_precommit_assignment(
+            assignment_id="assignment-001",
+            expiry_key="expiry-001",
+            observed_at=EXPIRES_AT,
+            expected_version=snapshot.version,
+        )
+        await gateway.publish_close(closed=closed, expected=snapshot)
+
+    # Fresh offer must be at/after the prior closure recorded_at (domain timeline).
+    worker, authority = _ready_worker()
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        offered = snapshot.run.offer_assignment(
+            assignment_id="assignment-002",
+            worker=worker,
+            worker_authority=authority,
+            spec_digest=SPEC_DIGEST,
+            offered_at=EXPIRES_AT,
+            expires_at=EXPIRES_AT + timedelta(hours=1),
+            expected_version=snapshot.version,
+        )
+        await gateway.publish_offer(offered=offered, expected=snapshot)
+
+    worker_ref = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        claimed = snapshot.run.claim_assignment(
+            assignment_id="assignment-002",
+            worker=worker_ref,
+            observed_at=EXPIRES_AT + timedelta(minutes=1),
+            expected_version=snapshot.version,
+        )
+        await gateway.publish_claim(claimed=claimed, expected=snapshot)
+
+    commit = await _commit_start_once(
+        pool,
+        assignment_id="assignment-002",
+        start_commit_key="start-commit-002",
+        new_attempt_id="attempt-002",
+        observed_at=EXPIRES_AT + timedelta(minutes=2),
+    )
+    assert commit.fence == 1
+    assert commit.run.current_fence == 1
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_assignments") == 2
+        assert await connection.fetchval("SELECT count(*) FROM qep_attempts") == 1
+        assert (
+            await connection.fetchval("SELECT current_fence FROM qep_runs WHERE id = $1", RUN_ID)
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_eight_concurrent_expires_elect_exactly_one_close(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+
+    async def contend(index: int):
+        await start.wait()
+        try:
+            async with PostgresAssignmentGateway(
+                pool, offer_token_hash=OFFER_TOKEN_HASH
+            ) as gateway:
+                snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+                closed = snapshot.run.expire_precommit_assignment(
+                    assignment_id="assignment-001",
+                    expiry_key=f"expiry-{index:03d}",
+                    observed_at=EXPIRES_AT,
+                    expected_version=snapshot.version,
+                )
+                return await gateway.publish_close(closed=closed, expected=snapshot)
+        except BaseException as error:
+            return error
+
+    results = await asyncio.gather(*(contend(i) for i in range(contenders)))
+    winners = [result for result in results if not isinstance(result, BaseException)]
+    conflicts = [
+        result for result in results if isinstance(result, (VersionConflict, AssignmentConflict))
+    ]
+    assert len(winners) == 1, results
+    assert len(conflicts) == contenders - 1
+    assert winners[0].value.state is RunState.QUEUED
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "expired_prestart"
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "queued"
+        )
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_stale_snapshot(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
     from qarunner.application.ports.assignment import AssignmentMutationSnapshot
 
-    snapshot = AssignmentMutationSnapshot(run=offered)
+    stale = AssignmentMutationSnapshot(run=Run.create(run_id=RUN_ID))
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-001",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_close(closed=closed, expected=stale)
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_run_id_mismatch(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-001",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            forged = SimpleNamespace(
+                id="other-run",
+                version=closed.version,
+                state=closed.state,
+                current_assignment_id=None,
+                assignment=None,
+                assignments=closed.assignments,
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "run_id_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_when_assignment_row_already_closed(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-001",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            assert gateway._connection is not None
+            await gateway._connection.execute(
+                "UPDATE qep_assignments SET state = 'expired_prestart' WHERE id = $1",
+                "assignment-001",
+            )
+            await gateway.publish_close(closed=closed, expected=snapshot)
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_non_queued_domain_result(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-001",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            forged = SimpleNamespace(
+                id=RUN_ID,
+                version=closed.version,
+                state=RunState.ASSIGNED,
+                current_assignment_id=None,
+                assignment=None,
+                assignments=closed.assignments,
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "not_queued"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_when_current_assignment_not_cleared(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-001",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            forged = SimpleNamespace(
+                id=RUN_ID,
+                version=closed.version,
+                state=RunState.QUEUED,
+                current_assignment_id="assignment-001",
+                assignment=closed.assignments[-1],
+                assignments=closed.assignments,
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "current_assignment_not_cleared"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_missing_closed_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            forged = SimpleNamespace(
+                id=RUN_ID,
+                version=snapshot.version + 1,
+                state=RunState.QUEUED,
+                current_assignment_id=None,
+                assignment=None,
+                assignments=(),
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "missing_closed_assignment"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_missing_closure(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    from qarunner.domain.assignment import AssignmentState
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            fake_assignment = SimpleNamespace(
+                id="assignment-001",
+                state=AssignmentState.EXPIRED_PRESTART,
+                closure=None,
+            )
+            forged = SimpleNamespace(
+                id=RUN_ID,
+                version=snapshot.version + 1,
+                state=RunState.QUEUED,
+                current_assignment_id=None,
+                assignment=None,
+                assignments=(fake_assignment,),
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "missing_closure"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_not_prestart_closed_state(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    from qarunner.domain.assignment import AssignmentState
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            fake_assignment = SimpleNamespace(
+                id="assignment-001",
+                state=AssignmentState.OFFERED,
+                closure=object(),
+            )
+            forged = SimpleNamespace(
+                id=RUN_ID,
+                version=snapshot.version + 1,
+                state=RunState.QUEUED,
+                current_assignment_id=None,
+                assignment=None,
+                assignments=(fake_assignment,),
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "not_prestart_closed"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_closed_assignment_mismatch(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    from qarunner.domain.assignment import AssignmentState
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            fake_assignment = SimpleNamespace(
+                id="assignment-other",
+                state=AssignmentState.EXPIRED_PRESTART,
+                closure=object(),
+            )
+            forged = SimpleNamespace(
+                id=RUN_ID,
+                version=snapshot.version + 1,
+                state=RunState.QUEUED,
+                current_assignment_id=None,
+                assignment=None,
+                assignments=(fake_assignment,),
+            )
+            await gateway.publish_close(closed=forged, expected=snapshot)  # type: ignore[arg-type]
+    assert exc.value.reason == "closed_assignment_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_when_expected_not_precommit(
+    assignment_store: PostgresStore,
+) -> None:
+    """Force expected active assignment state to COMMITTED (illegal for close)."""
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    from qarunner.domain.assignment import AssignmentState
+
     async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
-        with pytest.raises(PortContractError) as close:
-            await gateway.publish_close(closed=offered, expected=snapshot)
-    assert close.value.reason == "not_implemented"
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.release_precommit_assignment(
+            assignment_id="assignment-001",
+            worker=WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION),
+            release_key="release-001",
+            observed_at=OFFERED_AT + timedelta(minutes=2),
+            expected_version=snapshot.version,
+        )
+
+        class _Expected:
+            def __init__(self, run) -> None:
+                self.run = run
+                self.run_id = run.id
+                self.version = run.version
+
+            def __eq__(self, other) -> bool:
+                return other is gateway._snapshot
+
+        fake_active = SimpleNamespace(id="assignment-001", state=AssignmentState.COMMITTED)
+        expected_forged = _Expected(
+            SimpleNamespace(
+                id=RUN_ID,
+                version=snapshot.version,
+                state=RunState.ASSIGNED,
+                assignment=fake_active,
+                assignments=snapshot.run.assignments,
+                current_assignment_id="assignment-001",
+            )
+        )
+        with pytest.raises(PortContractError) as exc:
+            await gateway._publish_close(closed=closed, expected=expected_forged)  # type: ignore[arg-type]
+        assert exc.value.reason == "expected_not_precommit"
+        gateway._aborted = True
 
 
 async def _commit_start_once(
@@ -1649,3 +2186,91 @@ async def test_publish_offer_rejects_assigned_run_missing_assignment(
             snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
             await gateway.publish_offer(offered=bogus, expected=snapshot)  # type: ignore[arg-type]
     assert exc.value.reason == "missing_assignment"
+
+
+@pytest.mark.asyncio
+async def test_get_run_for_update_rejects_assigned_phase_with_only_closed_rows(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.expire_precommit_assignment(
+            assignment_id="assignment-001",
+            expiry_key="expiry-001",
+            observed_at=EXPIRES_AT,
+            expected_version=snapshot.version,
+        )
+        await gateway.publish_close(closed=closed, expected=snapshot)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE qep_runs SET orchestration_phase = 'assigned' WHERE id = $1",
+            RUN_ID,
+        )
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            await gateway.get_run_for_update(run_id=RUN_ID)
+    assert exc.value.reason == "active_assignment_missing"
+
+
+@pytest.mark.asyncio
+async def test_publish_close_rejects_stale_run_version(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-001",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            assert gateway._connection is not None
+            await gateway._connection.execute(
+                "UPDATE qep_runs SET version = version + 10 WHERE id = $1",
+                RUN_ID,
+            )
+            await gateway.publish_close(closed=closed, expected=snapshot)
+
+
+@pytest.mark.asyncio
+async def test_closed_assignment_payload_round_trips_worker(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        closed = snapshot.run.release_precommit_assignment(
+            assignment_id="assignment-001",
+            worker=worker,
+            release_key="release-001",
+            observed_at=OFFERED_AT + timedelta(minutes=2),
+            expected_version=snapshot.version,
+        )
+        await gateway.publish_close(closed=closed, expected=snapshot)
+
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+    historical = snapshot.run.assignments[-1]
+    assert historical.state.value == "released_prestart"
+    assert historical.closure is not None
+    assert historical.closure.worker == worker
+    assert historical.closure.cancellation_intent_digest is None
+
+
+def test_closure_from_payload_rejects_non_dict() -> None:
+    from qarunner.adapters.postgres_assignment import _closure_from_payload
+
+    assert _closure_from_payload(None) is None
+    assert _closure_from_payload("not-a-dict") is None
+    assert _closure_from_payload(123) is None

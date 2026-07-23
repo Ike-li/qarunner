@@ -21,7 +21,7 @@ import asyncpg
 from qarunner.application.ports.assignment import AssignmentMutationSnapshot
 from qarunner.application.ports.common import PortContractError, ReplayResult
 from qarunner.domain import Assignment, Attempt, Digest, Run, WorkerRef
-from qarunner.domain.assignment import AssignmentState
+from qarunner.domain.assignment import AssignmentClosure, AssignmentClosureKind, AssignmentState
 from qarunner.domain.attempt import AttemptState
 from qarunner.domain.errors import VersionConflict
 from qarunner.domain.run import CommitStartResult, RunState
@@ -114,46 +114,72 @@ class PostgresAssignmentGateway:
             )
         phase = row["orchestration_phase"]
         if phase == RunState.QUEUED.value:
-            # QUEUED rehydration is a direct row→object build (no assignments/attempts).
+            # QUEUED may still carry closed historical assignments (id-reuse + exact
+            # precommit-closure replay). Active precommit rows are never present here.
+            history_rows = await connection.fetch(
+                """
+                SELECT
+                    id, worker_id, worker_generation, spec_digest, state,
+                    offered_at, expires_at, claimed_at, committed_at, version, payload
+                FROM qep_assignments
+                WHERE run_id = $1
+                ORDER BY offered_at ASC, id ASC
+                """,
+                run_id,
+            )
+            history = tuple(_assignment_from_row(item) for item in history_rows)
             run = Run(
                 id=row["id"],
                 state=RunState.QUEUED,
                 version=row["version"],
                 current_fence=row["current_fence"],
-                assignments=(),
+                assignments=history,
                 current_assignment_id=None,
                 attempts=(),
                 retry_intents=(),
                 pending_retry_intent_id=None,
             )
         elif phase == RunState.ASSIGNED.value:
-            assignment_row = await connection.fetchrow(
+            assignment_rows = await connection.fetch(
                 """
                 SELECT
                     id, worker_id, worker_generation, spec_digest, state,
-                    offered_at, expires_at, claimed_at, committed_at, version
+                    offered_at, expires_at, claimed_at, committed_at, version, payload
                 FROM qep_assignments AS assignment
                 WHERE run_id = $1
-                  AND state = ANY($2::text[])
+                ORDER BY offered_at ASC, id ASC
                 FOR UPDATE OF assignment
                 """,
                 run_id,
-                [AssignmentState.OFFERED.value, AssignmentState.CLAIMED.value],
             )
-            if assignment_row is None:
+            if not assignment_rows:
                 raise PortContractError(
                     resource="assignment_gateway",
                     field="assignment",
                     reason="active_assignment_missing",
                 )
-            assignment = _assignment_from_row(assignment_row)
+            assignments = tuple(_assignment_from_row(item) for item in assignment_rows)
+            active = next(
+                (
+                    item
+                    for item in reversed(assignments)
+                    if item.state in {AssignmentState.OFFERED, AssignmentState.CLAIMED}
+                ),
+                None,
+            )
+            if active is None:
+                raise PortContractError(
+                    resource="assignment_gateway",
+                    field="assignment",
+                    reason="active_assignment_missing",
+                )
             run = Run(
                 id=row["id"],
                 state=RunState.ASSIGNED,
                 version=row["version"],
                 current_fence=row["current_fence"],
-                assignments=(assignment,),
-                current_assignment_id=assignment.id,
+                assignments=assignments,
+                current_assignment_id=active.id,
                 attempts=(),
                 retry_intents=(),
                 pending_retry_intent_id=None,
@@ -164,7 +190,7 @@ class PostgresAssignmentGateway:
                 """
                 SELECT
                     id, worker_id, worker_generation, spec_digest, state,
-                    offered_at, expires_at, claimed_at, committed_at, version
+                    offered_at, expires_at, claimed_at, committed_at, version, payload
                 FROM qep_assignments AS assignment
                 WHERE run_id = $1
                   AND state = $2
@@ -252,10 +278,11 @@ class PostgresAssignmentGateway:
     async def publish_close(
         self, *, closed: Run, expected: AssignmentMutationSnapshot
     ) -> ReplayResult[Run]:
-        self._aborted = True
-        raise PortContractError(
-            resource="assignment_gateway", field="publish_close", reason="not_implemented"
-        )
+        try:
+            return await self._publish_close(closed=closed, expected=expected)
+        except BaseException:
+            self._aborted = True
+            raise
 
     async def _publish_offer(
         self, *, offered: Run, expected: AssignmentMutationSnapshot
@@ -561,6 +588,117 @@ class PostgresAssignmentGateway:
         self._snapshot = AssignmentMutationSnapshot(run=committed_run)
         return ReplayResult(value=commit, replayed=False)
 
+    async def _publish_close(
+        self, *, closed: Run, expected: AssignmentMutationSnapshot
+    ) -> ReplayResult[Run]:
+        connection = self._require_connection()
+        if self._snapshot is None or self._snapshot != expected:
+            current = self._snapshot
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=expected.run_id,
+                current_version=0 if current is None else current.version,
+                expected_version=expected.version,
+            )
+        if closed.id != expected.run_id:
+            raise PortContractError(
+                resource="assignment_gateway", field="closed", reason="run_id_mismatch"
+            )
+        # Domain exact-replay returns the same aggregate version (no mutation).
+        if closed.version == expected.version:
+            self._snapshot = AssignmentMutationSnapshot(run=closed)
+            return ReplayResult(value=closed, replayed=True)
+        if closed.state is not RunState.QUEUED:
+            raise PortContractError(
+                resource="assignment_gateway", field="closed", reason="not_queued"
+            )
+        if closed.current_assignment_id is not None or closed.assignment is not None:
+            raise PortContractError(
+                resource="assignment_gateway",
+                field="closed",
+                reason="current_assignment_not_cleared",
+            )
+        if not closed.assignments:
+            raise PortContractError(
+                resource="assignment_gateway", field="closed", reason="missing_closed_assignment"
+            )
+        closed_assignment = closed.assignments[-1]
+        if closed_assignment.closure is None:
+            raise PortContractError(
+                resource="assignment_gateway", field="closed", reason="missing_closure"
+            )
+        if closed_assignment.state not in {
+            AssignmentState.EXPIRED_PRESTART,
+            AssignmentState.RELEASED_PRESTART,
+            AssignmentState.CANCELLED_PRESTART,
+        }:
+            raise PortContractError(
+                resource="assignment_gateway", field="closed", reason="not_prestart_closed"
+            )
+        expected_active = expected.run.assignment
+        if expected_active is None or expected_active.id != closed_assignment.id:
+            raise PortContractError(
+                resource="assignment_gateway",
+                field="closed",
+                reason="closed_assignment_mismatch",
+            )
+        if expected_active.state not in {AssignmentState.OFFERED, AssignmentState.CLAIMED}:
+            raise PortContractError(
+                resource="assignment_gateway",
+                field="closed",
+                reason="expected_not_precommit",
+            )
+
+        update_assignment = await connection.execute(
+            """
+            UPDATE qep_assignments
+            SET state = $1,
+                version = version + 1,
+                payload = $2::jsonb
+            WHERE id = $3
+              AND run_id = $4
+              AND state = $5
+            """,
+            closed_assignment.state.value,
+            _assignment_payload(closed_assignment),
+            closed_assignment.id,
+            closed.id,
+            expected_active.state.value,
+        )
+        if update_assignment != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="assignment",
+                entity_id=closed_assignment.id,
+                current_version=0,
+                expected_version=0,
+            )
+
+        update_run = await connection.execute(
+            """
+            UPDATE qep_runs
+            SET orchestration_phase = $1,
+                version = version + 1,
+                updated_at = transaction_timestamp()
+            WHERE id = $2
+              AND version = $3
+              AND orchestration_phase = $4
+            """,
+            RunState.QUEUED.value,
+            closed.id,
+            expected.version,
+            RunState.ASSIGNED.value,
+        )
+        if update_run != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=closed.id,
+                current_version=expected.version,
+                expected_version=expected.version,
+            )
+
+        self._snapshot = AssignmentMutationSnapshot(run=closed)
+        return ReplayResult(value=closed, replayed=False)
+
     def _require_connection(self) -> asyncpg.Connection:
         if self._connection is None:
             self._state_error("not_active")
@@ -580,6 +718,15 @@ def _digest_from_hex(value: str) -> Digest:
 
 def _assignment_from_row(row: asyncpg.Record) -> Assignment:
     state = AssignmentState(row["state"])
+    closure = None
+    raw_payload = row.get("payload")
+    if raw_payload is not None and state in {
+        AssignmentState.EXPIRED_PRESTART,
+        AssignmentState.RELEASED_PRESTART,
+        AssignmentState.CANCELLED_PRESTART,
+    }:
+        payload = raw_payload if isinstance(raw_payload, dict) else json.loads(raw_payload)
+        closure = _closure_from_payload(payload.get("closure"))
     return Assignment(
         id=row["id"],
         worker=WorkerRef(
@@ -592,7 +739,37 @@ def _assignment_from_row(row: asyncpg.Record) -> Assignment:
         expires_at=row["expires_at"],
         claimed_at=row["claimed_at"],
         committed_at=row.get("committed_at"),
+        closure=closure,
     )
+
+
+def _closure_from_payload(raw: object) -> AssignmentClosure | None:
+    if not isinstance(raw, dict):
+        return None
+    worker_raw = raw.get("worker")
+    worker = None
+    if isinstance(worker_raw, dict):
+        worker = WorkerRef(
+            worker_id=str(worker_raw["worker_id"]),
+            generation=int(worker_raw["generation"]),
+        )
+    intent = raw.get("cancellation_intent_digest")
+    return AssignmentClosure(
+        assignment_id=str(raw["assignment_id"]),
+        idempotency_key=str(raw["idempotency_key"]),
+        kind=AssignmentClosureKind(str(raw["kind"])),
+        effective_at=_parse_utc(str(raw["effective_at"])),
+        recorded_at=_parse_utc(str(raw["recorded_at"])),
+        worker=worker,
+        cancellation_intent_digest=(None if intent is None else Digest(str(intent))),
+    )
+
+
+def _parse_utc(value: str):
+    from datetime import datetime
+
+    normalized = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(normalized)
 
 
 def _attempt_from_row(row: asyncpg.Record) -> Attempt:
@@ -618,16 +795,39 @@ def _attempt_from_row(row: asyncpg.Record) -> Attempt:
 
 
 def _assignment_payload(assignment: Assignment) -> str:
+    payload: dict[str, object] = {
+        "schema_version": "qep.assignment.v1",
+        "assignment_id": assignment.id,
+        "worker_id": assignment.worker.worker_id,
+        "worker_generation": assignment.worker.generation,
+        "spec_digest": assignment.spec_digest.value,
+        "state": assignment.state.value,
+        "retry_intent_id": assignment.retry_intent_id,
+    }
+    if assignment.closure is not None:
+        closure = assignment.closure
+        payload["closure"] = {
+            "assignment_id": closure.assignment_id,
+            "idempotency_key": closure.idempotency_key,
+            "kind": closure.kind.value,
+            "effective_at": closure.effective_at.isoformat().replace("+00:00", "Z"),
+            "recorded_at": closure.recorded_at.isoformat().replace("+00:00", "Z"),
+            "worker": (
+                None
+                if closure.worker is None
+                else {
+                    "worker_id": closure.worker.worker_id,
+                    "generation": closure.worker.generation,
+                }
+            ),
+            "cancellation_intent_digest": (
+                None
+                if closure.cancellation_intent_digest is None
+                else closure.cancellation_intent_digest.value
+            ),
+        }
     return json.dumps(
-        {
-            "schema_version": "qep.assignment.v1",
-            "assignment_id": assignment.id,
-            "worker_id": assignment.worker.worker_id,
-            "worker_generation": assignment.worker.generation,
-            "spec_digest": assignment.spec_digest.value,
-            "state": assignment.state.value,
-            "retry_intent_id": assignment.retry_intent_id,
-        },
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
