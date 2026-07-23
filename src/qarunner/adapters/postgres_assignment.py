@@ -20,8 +20,9 @@ import asyncpg
 
 from qarunner.application.ports.assignment import AssignmentMutationSnapshot
 from qarunner.application.ports.common import PortContractError, ReplayResult
-from qarunner.domain import Assignment, Digest, Run, WorkerRef
+from qarunner.domain import Assignment, Attempt, Digest, Run, WorkerRef
 from qarunner.domain.assignment import AssignmentState
+from qarunner.domain.attempt import AttemptState
 from qarunner.domain.errors import VersionConflict
 from qarunner.domain.run import CommitStartResult, RunState
 
@@ -130,18 +131,14 @@ class PostgresAssignmentGateway:
                 """
                 SELECT
                     id, worker_id, worker_generation, spec_digest, state,
-                    offered_at, expires_at, claimed_at, version
+                    offered_at, expires_at, claimed_at, committed_at, version
                 FROM qep_assignments AS assignment
                 WHERE run_id = $1
                   AND state = ANY($2::text[])
                 FOR UPDATE OF assignment
                 """,
                 run_id,
-                [
-                    AssignmentState.OFFERED.value,
-                    AssignmentState.CLAIMED.value,
-                    AssignmentState.COMMITTED.value,
-                ],
+                [AssignmentState.OFFERED.value, AssignmentState.CLAIMED.value],
             )
             if assignment_row is None:
                 raise PortContractError(
@@ -158,6 +155,59 @@ class PostgresAssignmentGateway:
                 assignments=(assignment,),
                 current_assignment_id=assignment.id,
                 attempts=(),
+                retry_intents=(),
+                pending_retry_intent_id=None,
+            )
+        elif phase == RunState.RUNNING.value:
+            # Rehydrate for exact start_commit_key replay (no second attempt).
+            assignment_row = await connection.fetchrow(
+                """
+                SELECT
+                    id, worker_id, worker_generation, spec_digest, state,
+                    offered_at, expires_at, claimed_at, committed_at, version
+                FROM qep_assignments AS assignment
+                WHERE run_id = $1
+                  AND state = $2
+                FOR UPDATE OF assignment
+                """,
+                run_id,
+                AssignmentState.COMMITTED.value,
+            )
+            if assignment_row is None:
+                raise PortContractError(
+                    resource="assignment_gateway",
+                    field="assignment",
+                    reason="active_assignment_missing",
+                )
+            attempt_row = await connection.fetchrow(
+                """
+                SELECT
+                    id, run_id, attempt_no, fence, assignment_id, worker_id,
+                    worker_generation, spec_digest, start_commit_key, state, version
+                FROM qep_attempts AS attempt
+                WHERE run_id = $1
+                  AND fence = $2
+                FOR UPDATE OF attempt
+                """,
+                run_id,
+                row["current_fence"],
+            )
+            if attempt_row is None:
+                raise PortContractError(
+                    resource="assignment_gateway",
+                    field="attempt",
+                    reason="current_attempt_missing",
+                )
+            assignment = _assignment_from_row(assignment_row)
+            attempt = _attempt_from_row(attempt_row)
+            run = Run(
+                id=row["id"],
+                state=RunState.RUNNING,
+                version=row["version"],
+                current_fence=row["current_fence"],
+                assignments=(assignment,),
+                current_assignment_id=assignment.id,
+                attempts=(attempt,),
                 retry_intents=(),
                 pending_retry_intent_id=None,
             )
@@ -193,12 +243,11 @@ class PostgresAssignmentGateway:
     async def publish_commit_start(
         self, *, commit: CommitStartResult, expected: AssignmentMutationSnapshot
     ) -> ReplayResult[CommitStartResult]:
-        self._aborted = True
-        raise PortContractError(
-            resource="assignment_gateway",
-            field="publish_commit_start",
-            reason="not_implemented",
-        )
+        try:
+            return await self._publish_commit_start(commit=commit, expected=expected)
+        except BaseException:
+            self._aborted = True
+            raise
 
     async def publish_close(
         self, *, closed: Run, expected: AssignmentMutationSnapshot
@@ -374,6 +423,144 @@ class PostgresAssignmentGateway:
         self._snapshot = AssignmentMutationSnapshot(run=claimed)
         return ReplayResult(value=claimed, replayed=False)
 
+    async def _publish_commit_start(
+        self, *, commit: CommitStartResult, expected: AssignmentMutationSnapshot
+    ) -> ReplayResult[CommitStartResult]:
+        connection = self._require_connection()
+        if self._snapshot is None or self._snapshot != expected:
+            current = self._snapshot
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=expected.run_id,
+                current_version=0 if current is None else current.version,
+                expected_version=expected.version,
+            )
+        if not isinstance(commit, CommitStartResult):
+            raise PortContractError(
+                resource="assignment_gateway", field="commit", reason="not_commit_result"
+            )
+        committed_run = commit.run
+        attempt = commit.attempt
+        if committed_run.id != expected.run_id:
+            raise PortContractError(
+                resource="assignment_gateway", field="commit", reason="run_id_mismatch"
+            )
+        if commit.replayed:
+            # Domain already decided this is an exact replay; no durable write.
+            self._snapshot = AssignmentMutationSnapshot(run=committed_run)
+            return ReplayResult(value=commit, replayed=True)
+        if committed_run.state is not RunState.RUNNING:
+            raise PortContractError(
+                resource="assignment_gateway", field="commit", reason="not_running"
+            )
+        assignment = committed_run.assignment
+        if assignment is None or assignment.state is not AssignmentState.COMMITTED:
+            raise PortContractError(
+                resource="assignment_gateway", field="commit", reason="not_committed"
+            )
+        if assignment.committed_at is None:
+            raise PortContractError(
+                resource="assignment_gateway", field="commit", reason="missing_committed_at"
+            )
+        if commit.fence != committed_run.current_fence or commit.fence != attempt.fence:
+            raise PortContractError(
+                resource="assignment_gateway", field="commit", reason="fence_mismatch"
+            )
+
+        insert_status = await connection.execute(
+            """
+            INSERT INTO qep_attempts (
+                id, run_id, attempt_no, fence, assignment_id, worker_id,
+                worker_generation, spec_digest, start_commit_key, state,
+                version, started_at, payload
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10,
+                0, $11, $12::jsonb
+            )
+            """,
+            attempt.id,
+            attempt.run_id,
+            attempt.attempt_no,
+            attempt.fence,
+            attempt.assignment_id,
+            attempt.worker.worker_id,
+            attempt.worker.generation,
+            _digest_hex(attempt.spec_digest),
+            attempt.start_commit_key,
+            AttemptState.START_COMMITTED.value,
+            assignment.committed_at,
+            _attempt_payload(attempt),
+        )
+        if insert_status != "INSERT 0 1":
+            raise PortContractError(
+                resource="assignment_gateway",
+                field="qep_attempts",
+                reason="insert_suppressed",
+            )
+
+        # Claimed rows are version=1 after ASGN-CLAIM (offer wrote 0, claim bumped to 1).
+        update_assignment = await connection.execute(
+            """
+            UPDATE qep_assignments
+            SET state = $1,
+                committed_at = $2,
+                attempt_id = $3,
+                fence = $4,
+                version = version + 1,
+                payload = $5::jsonb
+            WHERE id = $6
+              AND run_id = $7
+              AND state = $8
+              AND version = 1
+            """,
+            AssignmentState.COMMITTED.value,
+            assignment.committed_at,
+            attempt.id,
+            attempt.fence,
+            _assignment_payload(assignment),
+            assignment.id,
+            committed_run.id,
+            AssignmentState.CLAIMED.value,
+        )
+        if update_assignment != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="assignment",
+                entity_id=assignment.id,
+                current_version=1,
+                expected_version=1,
+            )
+
+        update_run = await connection.execute(
+            """
+            UPDATE qep_runs
+            SET orchestration_phase = $1,
+                current_fence = $2,
+                attempt_count = $3,
+                version = version + 1,
+                updated_at = transaction_timestamp()
+            WHERE id = $4
+              AND version = $5
+              AND orchestration_phase = $6
+            """,
+            RunState.RUNNING.value,
+            commit.fence,
+            attempt.attempt_no,
+            committed_run.id,
+            expected.version,
+            RunState.ASSIGNED.value,
+        )
+        if update_run != "UPDATE 1":
+            raise VersionConflict(
+                entity_type="run",
+                entity_id=committed_run.id,
+                current_version=expected.version,
+                expected_version=expected.version,
+            )
+
+        self._snapshot = AssignmentMutationSnapshot(run=committed_run)
+        return ReplayResult(value=commit, replayed=False)
+
     def _require_connection(self) -> asyncpg.Connection:
         if self._connection is None:
             self._state_error("not_active")
@@ -404,6 +591,29 @@ def _assignment_from_row(row: asyncpg.Record) -> Assignment:
         offered_at=row["offered_at"],
         expires_at=row["expires_at"],
         claimed_at=row["claimed_at"],
+        committed_at=row.get("committed_at"),
+    )
+
+
+def _attempt_from_row(row: asyncpg.Record) -> Attempt:
+    return Attempt(
+        id=row["id"],
+        run_id=row["run_id"],
+        attempt_no=row["attempt_no"],
+        fence=row["fence"],
+        assignment_id=row["assignment_id"],
+        worker=WorkerRef(
+            worker_id=row["worker_id"],
+            generation=row["worker_generation"],
+        ),
+        spec_digest=_digest_from_hex(row["spec_digest"]),
+        start_commit_key=row["start_commit_key"],
+        events=(),
+        evidence=None,
+        unknown_observation=None,
+        adjudications=(),
+        state=AttemptState(row["state"]),
+        version=row["version"],
     )
 
 
@@ -417,6 +627,24 @@ def _assignment_payload(assignment: Assignment) -> str:
             "spec_digest": assignment.spec_digest.value,
             "state": assignment.state.value,
             "retry_intent_id": assignment.retry_intent_id,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _attempt_payload(attempt: Attempt) -> str:
+    return json.dumps(
+        {
+            "schema_version": "qep.attempt.v1",
+            "attempt_id": attempt.id,
+            "run_id": attempt.run_id,
+            "attempt_no": attempt.attempt_no,
+            "fence": attempt.fence,
+            "assignment_id": attempt.assignment_id,
+            "start_commit_key": attempt.start_commit_key,
+            "state": attempt.state.value,
         },
         ensure_ascii=False,
         separators=(",", ":"),

@@ -24,6 +24,7 @@ from qarunner.application.ports.common import PortContractError
 from qarunner.domain import (
     AssignmentConflict,
     Digest,
+    IdempotencyConflict,
     Run,
     VersionConflict,
     WorkerAuthority,
@@ -32,7 +33,7 @@ from qarunner.domain import (
     WorkerState,
     canonical_digest,
 )
-from qarunner.domain.run import RunState
+from qarunner.domain.run import CommitStartResult, RunState
 
 OFFER_TOKEN_HASH = "d" * 64
 SPEC_DIGEST = canonical_digest(
@@ -443,15 +444,22 @@ async def test_get_run_for_update_rehydrates_offered_assignment(
 
 
 @pytest.mark.asyncio
-async def test_get_run_for_update_rejects_non_claimable_phase(
+async def test_get_run_for_update_rejects_closed_phase(
     assignment_store: PostgresStore,
 ) -> None:
-    """Running/closed phases are outside offer/claim and surface as VersionConflict."""
+    """Closed phase is outside offer/claim/commit-start and surfaces as VersionConflict."""
     pool = assignment_store._require_pool()
     await _seed_queued_run(pool)
     async with pool.acquire() as connection:
         await connection.execute(
-            "UPDATE qep_runs SET orchestration_phase = 'running', version = 5 WHERE id = $1",
+            """
+            UPDATE qep_runs
+            SET orchestration_phase = 'closed',
+                disposition = 'closed_no_retry',
+                outcome = 'passed',
+                version = 5
+            WHERE id = $1
+            """,
             RUN_ID,
         )
     with pytest.raises(VersionConflict):
@@ -985,7 +993,7 @@ async def test_publish_claim_rejects_when_assignment_row_already_claimed(
 
 
 @pytest.mark.asyncio
-async def test_commit_close_are_not_yet_implemented(
+async def test_publish_close_is_not_yet_implemented(
     assignment_store: PostgresStore,
 ) -> None:
     pool = assignment_store._require_pool()
@@ -997,13 +1005,589 @@ async def test_commit_close_are_not_yet_implemented(
     async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
         with pytest.raises(PortContractError) as close:
             await gateway.publish_close(closed=offered, expected=snapshot)
-        with pytest.raises(PortContractError) as commit:
+    assert close.value.reason == "not_implemented"
+
+
+async def _commit_start_once(
+    pool: asyncpg.Pool,
+    *,
+    assignment_id: str = "assignment-001",
+    start_commit_key: str = "start-commit-001",
+    new_attempt_id: str = "attempt-001",
+    observed_at: datetime | None = None,
+    worker_ref: WorkerRef | None = None,
+    spec_digest: Digest | None = None,
+) -> CommitStartResult:
+    observed = observed_at if observed_at is not None else OFFERED_AT + timedelta(minutes=2)
+    worker = (
+        worker_ref
+        if worker_ref is not None
+        else WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    )
+    digest = spec_digest if spec_digest is not None else SPEC_DIGEST
+    async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+        snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+        commit = snapshot.run.commit_start(
+            assignment_id=assignment_id,
+            worker=worker,
+            start_commit_key=start_commit_key,
+            spec_digest=digest,
+            new_attempt_id=new_attempt_id,
+            observed_at=observed,
+            expected_version=snapshot.version,
+        )
+        result = await gateway.publish_commit_start(commit=commit, expected=snapshot)
+    return result.value
+
+
+@pytest.mark.asyncio
+async def test_single_commit_start_creates_attempt_and_runs(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+
+    commit = await _commit_start_once(pool)
+
+    assert commit.replayed is False
+    assert commit.fence == 1
+    assert commit.run.state is RunState.RUNNING
+    assert commit.run.version == 3
+    assert commit.run.current_fence == 1
+    assert commit.attempt.id == "attempt-001"
+    assert commit.attempt.start_commit_key == "start-commit-001"
+    assert commit.attempt.state.value == "start_committed"
+    async with pool.acquire() as connection:
+        assignment = await connection.fetchrow(
+            "SELECT state, attempt_id, fence, version FROM qep_assignments"
+        )
+        attempt = await connection.fetchrow(
+            "SELECT id, fence, state, start_commit_key, attempt_no FROM qep_attempts"
+        )
+        run = await connection.fetchrow(
+            "SELECT orchestration_phase, version, current_fence, attempt_count "
+            "FROM qep_runs WHERE id = $1",
+            RUN_ID,
+        )
+    assert dict(assignment) == {
+        "state": "committed",
+        "attempt_id": "attempt-001",
+        "fence": 1,
+        "version": 2,
+    }
+    assert dict(attempt) == {
+        "id": "attempt-001",
+        "fence": 1,
+        "state": "start_committed",
+        "start_commit_key": "start-commit-001",
+        "attempt_no": 1,
+    }
+    assert dict(run) == {
+        "orchestration_phase": "running",
+        "version": 3,
+        "current_fence": 1,
+        "attempt_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_eight_concurrent_commit_starts_elect_exactly_one_fence(
+    assignment_store: PostgresStore,
+) -> None:
+    """ASGN-COMMIT-START core: 8 contenders → one attempt/fence, rest VersionConflict."""
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    contenders = 8
+    start = asyncio.Barrier(contenders)
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    observed = OFFERED_AT + timedelta(minutes=2)
+
+    async def contend(index: int):
+        await start.wait()
+        try:
+            async with PostgresAssignmentGateway(
+                pool, offer_token_hash=OFFER_TOKEN_HASH
+            ) as gateway:
+                snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+                commit = snapshot.run.commit_start(
+                    assignment_id="assignment-001",
+                    worker=worker,
+                    start_commit_key=f"start-commit-{index:03d}",
+                    spec_digest=SPEC_DIGEST,
+                    new_attempt_id=f"attempt-{index:03d}",
+                    observed_at=observed,
+                    expected_version=snapshot.version,
+                )
+                return await gateway.publish_commit_start(commit=commit, expected=snapshot)
+        except BaseException as error:
+            return error
+
+    results = await asyncio.gather(*(contend(i) for i in range(contenders)))
+    winners = [result for result in results if not isinstance(result, BaseException)]
+    conflicts = [
+        result for result in results if isinstance(result, (VersionConflict, AssignmentConflict))
+    ]
+    assert len(winners) == 1, results
+    assert len(conflicts) == contenders - 1
+    assert winners[0].value.fence == 1
+    assert winners[0].value.run.state is RunState.RUNNING
+
+    async with pool.acquire() as connection:
+        attempt_count = await connection.fetchval("SELECT count(*) FROM qep_attempts")
+        fence = await connection.fetchval(
+            "SELECT current_fence FROM qep_runs WHERE id = $1", RUN_ID
+        )
+        phase = await connection.fetchval(
+            "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+        )
+    assert attempt_count == 1
+    assert fence == 1
+    assert phase == "running"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_exact_replay_returns_same_attempt(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    first = await _commit_start_once(pool)
+    # Domain exact-replay path: rehydrate RUNNING and re-issue same start_commit_key.
+    second = await _commit_start_once(pool)
+    assert first.attempt.id == second.attempt.id
+    assert first.fence == second.fence
+    assert second.replayed is True
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_attempts") == 1
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 3
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_different_digest_same_key(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    await _commit_start_once(pool)
+    other_digest = canonical_digest(
+        schema_version="qep.test-assignment-offer.v1",
+        payload={"label": "different-spec"},
+    )
+    with pytest.raises(IdempotencyConflict):
+        await _commit_start_once(pool, spec_digest=other_digest)
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_stale_run_version(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            assert gateway._connection is not None
+            await gateway._connection.execute(
+                "UPDATE qep_runs SET version = version + 10 WHERE id = $1",
+                RUN_ID,
+            )
+            await gateway.publish_commit_start(commit=commit, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_attempts") == 0
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "assigned"
+        )
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_stale_snapshot(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    from qarunner.application.ports.assignment import AssignmentMutationSnapshot
+
+    stale = AssignmentMutationSnapshot(run=Run.create(run_id=RUN_ID))
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_commit_start(commit=commit, expected=stale)
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_non_commit_result(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
             await gateway.publish_commit_start(
                 commit=object(),  # type: ignore[arg-type]
                 expected=snapshot,
             )
-    assert close.value.reason == "not_implemented"
-    assert commit.value.reason == "not_implemented"
+    assert exc.value.reason == "not_commit_result"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_run_id_mismatch(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            forged_run = SimpleNamespace(
+                id="other-run",
+                state=RunState.RUNNING,
+                assignment=commit.run.assignment,
+                current_fence=commit.fence,
+            )
+            forged = CommitStartResult(
+                run=forged_run,  # type: ignore[arg-type]
+                attempt=commit.attempt,
+                fence=commit.fence,
+                replayed=False,
+            )
+            await gateway.publish_commit_start(commit=forged, expected=snapshot)
+    assert exc.value.reason == "run_id_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_non_running_domain_result(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            forged_run = SimpleNamespace(
+                id=RUN_ID,
+                state=RunState.ASSIGNED,
+                assignment=commit.run.assignment,
+                current_fence=commit.fence,
+            )
+            forged = CommitStartResult(
+                run=forged_run,  # type: ignore[arg-type]
+                attempt=commit.attempt,
+                fence=commit.fence,
+                replayed=False,
+            )
+            await gateway.publish_commit_start(commit=forged, expected=snapshot)
+    assert exc.value.reason == "not_running"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_when_assignment_not_committed_in_domain(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            # Drop the assignment pointer so publish sees not_committed.
+            forged_run = SimpleNamespace(
+                id=RUN_ID,
+                state=RunState.RUNNING,
+                assignment=None,
+                current_fence=1,
+            )
+            forged = CommitStartResult(
+                run=forged_run,  # type: ignore[arg-type]
+                attempt=commit.attempt,
+                fence=1,
+                replayed=False,
+            )
+            await gateway.publish_commit_start(commit=forged, expected=snapshot)
+    assert exc.value.reason == "not_committed"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_missing_committed_at(
+    assignment_store: PostgresStore,
+) -> None:
+    from types import SimpleNamespace
+
+    from qarunner.domain.assignment import AssignmentState
+
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            fake_assignment = SimpleNamespace(
+                id="assignment-001",
+                state=AssignmentState.COMMITTED,
+                committed_at=None,
+            )
+            forged_run = SimpleNamespace(
+                id=RUN_ID,
+                state=RunState.RUNNING,
+                assignment=fake_assignment,
+                current_fence=1,
+            )
+            forged = CommitStartResult(
+                run=forged_run,  # type: ignore[arg-type]
+                attempt=commit.attempt,
+                fence=1,
+                replayed=False,
+            )
+            await gateway.publish_commit_start(commit=forged, expected=snapshot)
+    assert exc.value.reason == "missing_committed_at"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_fence_mismatch(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            forged = CommitStartResult(
+                run=commit.run,
+                attempt=commit.attempt,
+                fence=99,
+                replayed=False,
+            )
+            await gateway.publish_commit_start(commit=forged, expected=snapshot)
+    assert exc.value.reason == "fence_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_commit_start_suppressed_attempt_insert_sticky_aborts(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    async with pool.acquire() as setup:
+        await setup.execute(
+            """
+            CREATE OR REPLACE FUNCTION qep_suppress_attempt_insert()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NULL;
+            END;
+            $$
+            """
+        )
+        await setup.execute(
+            """
+            CREATE TRIGGER qep_suppress_attempt_insert
+            BEFORE INSERT ON qep_attempts
+            FOR EACH ROW EXECUTE FUNCTION qep_suppress_attempt_insert()
+            """
+        )
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_commit_start(commit=commit, expected=snapshot)
+    assert exc.value.reason == "insert_suppressed"
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_attempts") == 0
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "assigned"
+        )
+
+
+@pytest.mark.asyncio
+async def test_commit_start_rejects_when_assignment_row_version_bumped(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-001",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-001",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            assert gateway._connection is not None
+            await gateway._connection.execute(
+                "UPDATE qep_assignments SET version = version + 10 WHERE id = $1",
+                "assignment-001",
+            )
+            await gateway.publish_commit_start(commit=commit, expected=snapshot)
+
+
+@pytest.mark.asyncio
+async def test_get_run_for_update_rejects_running_without_committed_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE qep_runs SET orchestration_phase = 'running', current_fence = 1, "
+            "version = 3 WHERE id = $1",
+            RUN_ID,
+        )
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            await gateway.get_run_for_update(run_id=RUN_ID)
+    assert exc.value.reason == "active_assignment_missing"
+
+
+@pytest.mark.asyncio
+async def test_get_run_for_update_rejects_running_without_current_attempt(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    async with pool.acquire() as connection:
+        # Force committed assignment + running phase without an attempt row.
+        await connection.execute(
+            """
+            UPDATE qep_assignments
+            SET state = 'committed', committed_at = $1, attempt_id = 'ghost', fence = 1,
+                version = 2
+            WHERE id = 'assignment-001'
+            """,
+            OFFERED_AT + timedelta(minutes=2),
+        )
+        await connection.execute(
+            "UPDATE qep_runs SET orchestration_phase = 'running', current_fence = 1, "
+            "attempt_count = 1, version = 3 WHERE id = $1",
+            RUN_ID,
+        )
+    with pytest.raises(PortContractError) as exc:
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            await gateway.get_run_for_update(run_id=RUN_ID)
+    assert exc.value.reason == "current_attempt_missing"
 
 
 @pytest.mark.asyncio
