@@ -2274,3 +2274,272 @@ def test_closure_from_payload_rejects_non_dict() -> None:
     assert _closure_from_payload(None) is None
     assert _closure_from_payload("not-a-dict") is None
     assert _closure_from_payload(123) is None
+
+
+# --- ASGN-FAULT: trigger-suppressed UPDATE sticky-abort full rollback matrix ---
+
+
+async def _install_suppress_update(
+    pool: asyncpg.Pool, *, table: str, function_name: str, trigger_name: str
+) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION {function_name}()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NULL;
+            END;
+            $$
+            """
+        )
+        await connection.execute(
+            f"""
+            CREATE TRIGGER {trigger_name}
+            BEFORE UPDATE ON {table}
+            FOR EACH ROW EXECUTE FUNCTION {function_name}()
+            """
+        )
+
+
+@pytest.mark.asyncio
+async def test_offer_suppressed_run_update_sticky_aborts_and_rolls_back_insert(
+    assignment_store: PostgresStore,
+) -> None:
+    """ASGN-FAULT: assignment INSERT must not stick if the run-version CAS is suppressed."""
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    worker, authority = _ready_worker()
+    await _install_suppress_update(
+        pool,
+        table="qep_runs",
+        function_name="qep_suppress_offer_run_update",
+        trigger_name="qep_suppress_offer_run_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            offered = snapshot.run.offer_assignment(
+                assignment_id="assignment-fault-offer",
+                worker=worker,
+                worker_authority=authority,
+                spec_digest=SPEC_DIGEST,
+                offered_at=OFFERED_AT,
+                expires_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_offer(offered=offered, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_assignments") == 0
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "queued"
+        )
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 0
+
+
+@pytest.mark.asyncio
+async def test_claim_suppressed_assignment_update_sticky_aborts(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    await _install_suppress_update(
+        pool,
+        table="qep_assignments",
+        function_name="qep_suppress_claim_assignment_update",
+        trigger_name="qep_suppress_claim_assignment_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            claimed = snapshot.run.claim_assignment(
+                assignment_id="assignment-001",
+                worker=worker,
+                observed_at=OFFERED_AT + timedelta(minutes=1),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_claim(claimed=claimed, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "offered"
+        assert await connection.fetchval("SELECT version FROM qep_assignments") == 0
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 1
+
+
+@pytest.mark.asyncio
+async def test_claim_suppressed_run_update_sticky_aborts_and_rolls_back_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    await _install_suppress_update(
+        pool,
+        table="qep_runs",
+        function_name="qep_suppress_claim_run_update",
+        trigger_name="qep_suppress_claim_run_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            claimed = snapshot.run.claim_assignment(
+                assignment_id="assignment-001",
+                worker=worker,
+                observed_at=OFFERED_AT + timedelta(minutes=1),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_claim(claimed=claimed, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "offered"
+        assert await connection.fetchval("SELECT version FROM qep_assignments") == 0
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 1
+
+
+@pytest.mark.asyncio
+async def test_commit_start_suppressed_assignment_update_rolls_back_attempt_insert(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    await _install_suppress_update(
+        pool,
+        table="qep_assignments",
+        function_name="qep_suppress_commit_assignment_update",
+        trigger_name="qep_suppress_commit_assignment_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-fault",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-fault",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_commit_start(commit=commit, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_attempts") == 0
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "claimed"
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "assigned"
+        )
+
+
+@pytest.mark.asyncio
+async def test_commit_start_suppressed_run_update_rolls_back_attempt_and_assignment(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _claim_once(pool, assignment_id="assignment-001")
+    worker = WorkerRef(worker_id=WORKER_ID, generation=WORKER_GENERATION)
+    await _install_suppress_update(
+        pool,
+        table="qep_runs",
+        function_name="qep_suppress_commit_run_update",
+        trigger_name="qep_suppress_commit_run_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            commit = snapshot.run.commit_start(
+                assignment_id="assignment-001",
+                worker=worker,
+                start_commit_key="start-commit-fault-run",
+                spec_digest=SPEC_DIGEST,
+                new_attempt_id="attempt-fault-run",
+                observed_at=OFFERED_AT + timedelta(minutes=2),
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_commit_start(commit=commit, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_attempts") == 0
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "claimed"
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "assigned"
+        )
+
+
+@pytest.mark.asyncio
+async def test_close_suppressed_assignment_update_sticky_aborts(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _install_suppress_update(
+        pool,
+        table="qep_assignments",
+        function_name="qep_suppress_close_assignment_update",
+        trigger_name="qep_suppress_close_assignment_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-fault",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_close(closed=closed, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "offered"
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "assigned"
+        )
+
+
+@pytest.mark.asyncio
+async def test_close_suppressed_run_update_rolls_back_assignment_close(
+    assignment_store: PostgresStore,
+) -> None:
+    pool = assignment_store._require_pool()
+    await _seed_queued_run(pool)
+    await _offer_once(pool, assignment_id="assignment-001")
+    await _install_suppress_update(
+        pool,
+        table="qep_runs",
+        function_name="qep_suppress_close_run_update",
+        trigger_name="qep_suppress_close_run_update",
+    )
+    with pytest.raises(VersionConflict):
+        async with PostgresAssignmentGateway(pool, offer_token_hash=OFFER_TOKEN_HASH) as gateway:
+            snapshot = await gateway.get_run_for_update(run_id=RUN_ID)
+            closed = snapshot.run.expire_precommit_assignment(
+                assignment_id="assignment-001",
+                expiry_key="expiry-fault-run",
+                observed_at=EXPIRES_AT,
+                expected_version=snapshot.version,
+            )
+            await gateway.publish_close(closed=closed, expected=snapshot)
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT state FROM qep_assignments") == "offered"
+        assert (
+            await connection.fetchval(
+                "SELECT orchestration_phase FROM qep_runs WHERE id = $1", RUN_ID
+            )
+            == "assigned"
+        )
+        assert await connection.fetchval("SELECT version FROM qep_runs WHERE id = $1", RUN_ID) == 1
