@@ -106,11 +106,13 @@ from qarunner.domain.manifest import (
     ManifestConstraints,
     ManifestInputs,
     ManifestItem,
+    ManifestReconciliationSummary,
     PlannedShard,
     RunBinding,
     ShardPlan,
     ShardRequirements,
     WorkEstimate,
+    plan_single_shard,
 )
 from qarunner.domain.retry import (
     PolicyRetryAuthority,
@@ -294,7 +296,9 @@ __all__ = [
     "ManifestConstraints",
     "ManifestInputs",
     "ManifestItem",
+    "ManifestReconciliationSummary",
     "PlannedShard",
+    "plan_single_shard",
     "OriginalItemResolution",
     "OriginalSourceKind",
     "Run",

@@ -1044,3 +1044,156 @@ def test_bound_plan_factory_rejects_wrong_nested_types_stably(case: str) -> None
 
     assert caught.value.field == case
     assert caught.value.reason == "invalid_type"
+
+
+SINGLE_SHARD_ALGORITHM = "qep.single-shard.v1"
+
+
+def test_plan_single_shard_maps_full_manifest_to_one_run() -> None:
+    """T-M2-SHARD-001: MVP first mode maps complete Manifest to exactly one Run."""
+    from qarunner.domain import plan_single_shard
+
+    manifest = _representative_manifest()
+    plan = plan_single_shard(plan_id="plan-single-001", manifest=manifest)
+
+    assert plan.algorithm_version == SINGLE_SHARD_ALGORITHM
+    assert plan.batch_id == manifest.batch_id
+    assert plan.run_count == 1
+    assert plan.shards[0].shard_index == 0
+    assert plan.shards[0].manifest_item_indices == (0, 1, 2, 3)
+    assert plan.shards[0].resource_profile_id == "profile-default"
+    assert plan.shards[0].estimated_duration_ms == 400
+    assert plan.total_estimated_duration_ms == 400
+    assert plan.manifest_digest == manifest.digest
+
+
+def test_plan_single_shard_is_deterministic_for_same_manifest() -> None:
+    from qarunner.domain import plan_single_shard
+
+    manifest = _representative_manifest()
+    first = plan_single_shard(plan_id="plan-a", manifest=manifest)
+    second = plan_single_shard(plan_id="plan-b", manifest=manifest)
+    # plan id is persistence identity; content digest must match
+    assert first.digest == second.digest
+    assert first.shards == second.shards
+
+
+def test_plan_single_shard_rejects_mixed_resource_profiles() -> None:
+    from qarunner.domain import DomainValidationError, plan_single_shard
+
+    mixed = _manifest(
+        _item(0, "case-a", resource_profile_id="profile-default"),
+        _item(1, "case-b", resource_profile_id="profile-browser"),
+    )
+    with pytest.raises(DomainValidationError) as caught:
+        plan_single_shard(plan_id="plan-mixed", manifest=mixed)
+    assert caught.value.field == "resource_profile_id"
+    assert "mismatch" in caught.value.reason or caught.value.reason.startswith("mixed")
+
+
+def test_manifest_reconciliation_summary_is_bounded_and_complete() -> None:
+    """T-M2-MANIFEST-002: large-set recon exposes counts/digest, not full item dump."""
+    from qarunner.domain import ManifestReconciliationSummary
+
+    item_count = 1_000
+    manifest = _manifest(*(_item(index, f"case-{index:05d}") for index in range(item_count)))
+    summary = ManifestReconciliationSummary.from_manifest(manifest)
+
+    assert summary.item_count == item_count
+    assert summary.manifest_digest == manifest.digest
+    assert summary.batch_id == manifest.batch_id
+    assert summary.first_item_index == 0
+    assert summary.last_item_index == item_count - 1
+    assert summary.missing_count == 0
+    assert summary.duplicate_count == 0
+    # Bounded: summary fields are the public surface (no items payload).
+    assert set(summary.__dataclass_fields__) == {
+        "batch_id",
+        "manifest_id",
+        "item_count",
+        "manifest_digest",
+        "first_item_index",
+        "last_item_index",
+        "missing_count",
+        "duplicate_count",
+    }
+
+
+def test_manifest_reconciliation_detects_same_inputs_same_digest() -> None:
+    """T-M2-MANIFEST-001: identical frozen inputs/items → identical digest."""
+    from qarunner.domain import CaseManifest
+
+    items = (
+        _item(0, "case-login", atomic_group_id="group-auth"),
+        _item(1, "case-logout", atomic_group_id="group-auth"),
+    )
+    first = CaseManifest.create(
+        manifest_id="manifest-a",
+        batch_id="batch-a",
+        inputs=_inputs(),
+        items=items,
+    )
+    second = CaseManifest.create(
+        manifest_id="manifest-b",
+        batch_id="batch-b",
+        inputs=_inputs(),
+        items=items,
+    )
+    assert first.digest == second.digest
+
+
+def test_plan_single_shard_thirty_thousand_items() -> None:
+    """T-M2-MANIFEST-002 + T-M2-SHARD-001: single-shard owns all 30k indices once."""
+    from qarunner.domain import plan_single_shard
+
+    item_count = 30_000
+    manifest = _manifest(*(_item(index, f"case-{index:05d}") for index in range(item_count)))
+    plan = plan_single_shard(plan_id="plan-30k", manifest=manifest)
+    assert plan.run_count == 1
+    assert plan.shards[0].manifest_item_indices[0] == 0
+    assert plan.shards[0].manifest_item_indices[-1] == item_count - 1
+    assert len(plan.shards[0].manifest_item_indices) == item_count
+    summary = manifest.reconciliation_summary()
+    assert summary.item_count == item_count
+    assert summary.missing_count == 0
+    assert summary.duplicate_count == 0
+    assert summary.manifest_digest == manifest.digest
+
+
+
+def test_reconciliation_summary_rejects_empty_item_count() -> None:
+    from qarunner.domain import DomainValidationError, ManifestReconciliationSummary, canonical_digest
+
+    with pytest.raises(DomainValidationError) as caught:
+        ManifestReconciliationSummary(
+            batch_id="batch-001",
+            manifest_id="manifest-001",
+            item_count=0,
+            manifest_digest=canonical_digest(
+                schema_version="qep.test-input.v1", payload={"label": "x"}
+            ),
+            first_item_index=0,
+            last_item_index=0,
+            missing_count=0,
+            duplicate_count=0,
+        )
+    assert caught.value.field == "item_count"
+    assert caught.value.reason == "empty"
+
+
+def test_plan_single_shard_rejects_non_manifest() -> None:
+    from qarunner.domain import DomainValidationError, plan_single_shard
+
+    with pytest.raises(DomainValidationError) as caught:
+        plan_single_shard(plan_id="plan-x", manifest=object())  # type: ignore[arg-type]
+    assert caught.value.field == "manifest"
+    assert caught.value.reason == "invalid_type"
+
+
+def test_reconciliation_summary_rejects_non_manifest() -> None:
+    from qarunner.domain import DomainValidationError, ManifestReconciliationSummary
+
+    with pytest.raises(DomainValidationError) as caught:
+        ManifestReconciliationSummary.from_manifest(object())  # type: ignore[arg-type]
+    assert caught.value.field == "manifest"
+    assert caught.value.reason == "invalid_type"

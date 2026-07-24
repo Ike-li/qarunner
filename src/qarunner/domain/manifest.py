@@ -11,6 +11,7 @@ from qarunner.domain.errors import DomainValidationError
 
 CASE_MANIFEST_SCHEMA_VERSION = "qep.case-manifest.v1"
 SHARD_PLAN_SCHEMA_VERSION = "qep.shard-plan.v1"
+SINGLE_SHARD_ALGORITHM_VERSION = "qep.single-shard.v1"
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 
@@ -221,6 +222,76 @@ class CaseManifest:
     def item_count(self) -> int:
         return len(self.items)
 
+    def reconciliation_summary(self) -> ManifestReconciliationSummary:
+        """Bounded recon view for large Manifests (T-M2-MANIFEST-002)."""
+        return ManifestReconciliationSummary.from_manifest(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestReconciliationSummary:
+    """Bounded completeness view — never carries the full item list.
+
+    Proves T-M2-MANIFEST-001/002 domain half: digest identity + zero-miss/
+    zero-dup counts without unbounded response material.
+    """
+
+    batch_id: str
+    manifest_id: str
+    item_count: int
+    manifest_digest: Digest
+    first_item_index: int
+    last_item_index: int
+    missing_count: int
+    duplicate_count: int
+
+    def __post_init__(self) -> None:
+        _require_nonempty_string("manifest_reconciliation_summary", "batch_id", self.batch_id)
+        _require_nonempty_string(
+            "manifest_reconciliation_summary", "manifest_id", self.manifest_id
+        )
+        _require_nonnegative_int("manifest_reconciliation_summary", "item_count", self.item_count)
+        if self.item_count < 1:
+            _invalid("manifest_reconciliation_summary", "item_count", "empty")
+        _require_digest("manifest_reconciliation_summary", "manifest_digest", self.manifest_digest)
+        _require_nonnegative_int(
+            "manifest_reconciliation_summary",
+            "first_item_index",
+            self.first_item_index,
+        )
+        _require_nonnegative_int(
+            "manifest_reconciliation_summary",
+            "last_item_index",
+            self.last_item_index,
+        )
+        _require_nonnegative_int(
+            "manifest_reconciliation_summary", "missing_count", self.missing_count
+        )
+        _require_nonnegative_int(
+            "manifest_reconciliation_summary", "duplicate_count", self.duplicate_count
+        )
+
+    @classmethod
+    def from_manifest(cls, manifest: CaseManifest) -> ManifestReconciliationSummary:
+        if not isinstance(manifest, CaseManifest):
+            _invalid("manifest_reconciliation_summary", "manifest", "invalid_type")
+        indices = tuple(item.item_index for item in manifest.items)
+        counts = Counter(indices)
+        duplicate_count = sum(count - 1 for count in counts.values() if count > 1)
+        # Contiguous 0..n-1 is required by CaseManifest validation; missing is 0
+        # for a valid aggregate. Surface the counters so recon APIs stay stable.
+        expected = set(range(len(manifest.items)))
+        missing_count = len(expected - set(indices))
+        return cls(
+            batch_id=manifest.batch_id,
+            manifest_id=manifest.id,
+            item_count=manifest.item_count,
+            manifest_digest=manifest.digest,
+            first_item_index=indices[0],
+            last_item_index=indices[-1],
+            missing_count=missing_count,
+            duplicate_count=duplicate_count,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class PlannedShard:
@@ -333,6 +404,43 @@ class ShardPlan:
     @property
     def total_estimated_duration_ms(self) -> int:
         return sum(shard.estimated_duration_ms for shard in self.shards)
+
+
+def plan_single_shard(
+    *,
+    plan_id: str,
+    manifest: CaseManifest,
+    algorithm_version: str = SINGLE_SHARD_ALGORITHM_VERSION,
+) -> ShardPlan:
+    """MVP first planner: map the full Manifest to exactly one Run (T-M2-SHARD-001).
+
+    Requires a uniform resource_profile_id across all items. Mixed profiles are
+    rejected rather than silently split — multi-shard planning is M6.
+    """
+    if not isinstance(manifest, CaseManifest):
+        _invalid("shard_plan", "manifest", "invalid_type")
+    profiles = {item.resource_profile_id for item in manifest.items}
+    if len(profiles) != 1:
+        _invalid("shard_plan", "resource_profile_id", "mixed")
+    resource_profile_id = next(iter(profiles))
+    indices = tuple(item.item_index for item in manifest.items)
+    estimated_duration_ms = sum(item.estimate.duration_ms for item in manifest.items)
+    requirements = _aggregate_shard_requirements(manifest.items)
+    shard = PlannedShard(
+        shard_index=0,
+        manifest_item_indices=indices,
+        resource_profile_id=resource_profile_id,
+        estimated_duration_ms=estimated_duration_ms,
+        requirements=requirements,
+        flags=(),
+    )
+    return ShardPlan.create(
+        plan_id=plan_id,
+        batch_id=manifest.batch_id,
+        manifest=manifest,
+        algorithm_version=algorithm_version,
+        shards=(shard,),
+    )
 
 
 @dataclass(frozen=True, slots=True)
