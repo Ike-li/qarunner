@@ -239,6 +239,17 @@ class AssignmentConflict(ValueError):
         super().__init__(f"assignment {assignment_id} conflicts with run {run_id}: {reason}")
 
 
+class SuiteConflict(ValueError):
+    """Raised when a Suite lifecycle command is illegal for the current aggregate."""
+
+    code = "suite_conflict"
+
+    def __init__(self, *, suite_id: str, reason: str) -> None:
+        self.suite_id = suite_id
+        self.reason = reason
+        super().__init__(f"suite {suite_id} conflicts: {reason}")
+
+
 class InvalidTransition(ValueError):
     """Raised when a domain aggregate rejects a requested state edge."""
 

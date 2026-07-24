@@ -78,6 +78,7 @@ from qarunner.domain.errors import (
     RetryNotAllowed,
     StaleFence,
     StaleGeneration,
+    SuiteConflict,
     UnknownObservationConflict,
     VersionConflict,
     WorkerGenerationConflict,
@@ -165,6 +166,7 @@ from qarunner.domain.run_retry_policy import (
     SuiteRetryPolicy,
     evaluate_run_retry,
 )
+from qarunner.domain.suite import Suite, SuiteRevision, SuiteRevisionStatus, SuiteStatus
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownAdjudicationDecision,
@@ -224,6 +226,11 @@ __all__ = [
     "ArtifactPath",
     "ArtifactValidationError",
     "Batch",
+    "Suite",
+    "SuiteConflict",
+    "SuiteRevision",
+    "SuiteRevisionStatus",
+    "SuiteStatus",
     "BatchItemClassification",
     "BatchFinalizationBasis",
     "BatchItemResolution",
