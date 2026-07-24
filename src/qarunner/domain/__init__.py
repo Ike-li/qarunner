@@ -120,6 +120,13 @@ from qarunner.domain.manifest import (
     WorkEstimate,
     plan_single_shard,
 )
+from qarunner.domain.rbac import (
+    AuthorizationAction,
+    AuthorizationDecision,
+    BusinessRole,
+    OwnershipScope,
+    authorize,
+)
 from qarunner.domain.retry import (
     PolicyRetryAuthority,
     RetryIntent,
@@ -373,6 +380,11 @@ __all__ = [
     "WorkerAuthority",
     "canonical_digest",
     "accept_collection_adapter_result",
+    "authorize",
+    "OwnershipScope",
+    "BusinessRole",
+    "AuthorizationDecision",
+    "AuthorizationAction",
     "is_forbidden_control_plane_import",
     "assert_accept_path_is_isolated",
     "canonicalize_batch_cancellation_scope_items",
