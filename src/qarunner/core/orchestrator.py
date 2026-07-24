@@ -9,6 +9,7 @@ import shlex
 import sys
 from typing import TYPE_CHECKING
 
+from qarunner.core.paths import JAIL_IGNORE_NAMES as _JAIL_IGNORE_NAMES
 from qarunner.core.paths import safe_subpath
 from qarunner.core.runners.base import BuildContext
 from qarunner.errors import InflightRunLimitExceeded, RunnerError, UnsafeArguments
@@ -82,10 +83,6 @@ _PLAYWRIGHT_TEST_SUFFIXES = (
     ".test.js",
     ".test.mjs",
 )
-
-
-# Directory entries never copied into the workspace jail.
-_JAIL_IGNORE_NAMES = frozenset({".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"})
 
 
 def _compile_args(req: RunRequest, tests_dir: str, runner_name: str = "pytest") -> list[str]:

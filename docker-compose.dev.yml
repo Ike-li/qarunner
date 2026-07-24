@@ -28,12 +28,11 @@ services:
     environment:
       - PYTHONPATH=/app/src
       - QARUNNER_TESTS_ROOT=/app/external_tests
-      # artifacts_root must be a path that is IDENTICAL on host and container
-      # (see the matching volume below). The docker executor bind-mounts the run
-      # workspace/results as ``cwd:cwd``, and that source string is resolved by
-      # the HOST daemon — a container-only path like /app/artifacts dangles, so
-      # the executor would mount an empty dir and the run would fail.
-      - QARUNNER_ARTIFACTS_ROOT=${PWD}/artifacts
+      # A normal container-local path — DockerRunner no longer bind-mounts
+      # cwd/results_dir into the sandbox container (it injects/extracts them
+      # via put_archive/get_archive, which only needs this process's own
+      # filesystem view), so this no longer has to equal a host path too.
+      - QARUNNER_ARTIFACTS_ROOT=/app/artifacts
       - QARUNNER_DATABASE_BACKEND=postgres
       - QARUNNER_DATABASE_URL=postgresql://qarunner@postgres:5432/qarunner
       - QARUNNER_TEST_DATABASE_URL=postgresql://qarunner@postgres:5432/qarunner
@@ -58,19 +57,21 @@ services:
       - ./examples:${PWD}/examples:ro
       - ./Dockerfile:/app/Dockerfile:ro
       - ./Dockerfile.playwright:/app/Dockerfile.playwright:ro
-      # artifacts at an IDENTICAL host==container path so the docker executor's
-      # cwd:cwd jail/results mounts resolve on the host daemon (see env above).
-      # ${PWD} is the host repo root when you run compose from here, so source
-      # (./artifacts) and the container path (${PWD}/artifacts) stay identical —
-      # and it works on any machine, unlike the old hard-coded absolute host path.
-      - ./artifacts:${PWD}/artifacts
+      # Ordinary dev-convenience bind mount (persists artifacts across
+      # container recreation, browsable from the host) — no host-path-identity
+      # requirement anymore; see QARUNNER_ARTIFACTS_ROOT above.
+      - ./artifacts:/app/artifacts
       - ./external_tests:/app/external_tests
       - ./examples/sample_playwright:/app/external_tests/sample_playwright:ro
-      # mount the host projects root at the SAME path (source==target) so
-      # symlinked local suites / env-referenced project paths resolve in-container.
-      # No suite is hard-coded here: link a local project via the UI
-      # (Add suite → local path) — it symlinks under external_tests and resolves
-      # through this mount. Narrow ${QARUNNER_PROJECTS_ROOT} in .env to tighten it.
+      # This one *does* still need source==target: unlike artifacts_root, this
+      # backs the real, intentional QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS
+      # bind-mount-into-the-sandbox feature below (a suite referencing a local
+      # project's files by path, e.g. APP_REPO_PATH) — deliberately a same-host
+      # integration point, not the dev-loop coupling this file's other paths
+      # used to have. No suite is hard-coded here: link a local project via
+      # the UI (Add suite → local path) — it symlinks under external_tests and
+      # resolves through this mount. Narrow ${QARUNNER_PROJECTS_ROOT} in .env
+      # to tighten it.
       - ${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:${QARUNNER_PROJECTS_ROOT:-${HOME}/code}:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

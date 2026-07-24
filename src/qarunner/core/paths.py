@@ -6,6 +6,12 @@ from pathlib import Path
 
 from qarunner.errors import UnsafePath
 
+# Directory entries never copied into a workspace jail/tarball (shared by the
+# legacy orchestrator's Workspace Jail and DockerRunner's source tarball
+# build). node_modules is deliberately NOT here: Playwright suites need it
+# present so the executor doesn't have to reinstall dependencies (§5.7).
+JAIL_IGNORE_NAMES = frozenset({".git", ".venv", ".pytest_cache", ".ruff_cache", "__pycache__"})
+
 
 def safe_subpath(root: str, relative: str) -> str:
     """Resolve *relative* under *root* and ensure it doesn't escape.

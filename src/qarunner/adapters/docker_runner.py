@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import logging
 import os
+import tarfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import docker
-import requests
-from docker.errors import ImageNotFound
+from docker.errors import ImageNotFound, NotFound
 
+from qarunner.core.paths import JAIL_IGNORE_NAMES, safe_subpath
 from qarunner.errors import RunnerError
 from qarunner.models import ProcessResult
 
@@ -23,11 +25,159 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Cap how many trailing log lines the final gather pulls from a finished
-# container into memory, so a test emitting unbounded output can't OOM the
-# platform (subprocess caps bytes; docker's logs API can only tail by line).
-_MAX_LOG_LINES = 50_000
-_LOG_STREAM_DRAIN_TIMEOUT_SECONDS = 1.0
+# Cap how many trailing bytes the exec-stream drain keeps in memory per
+# stream, so a test emitting unbounded output can't OOM the platform (the
+# full stream still lands on stdout_file/stderr_file on disk; only the bytes
+# kept for the in-memory ProcessResult are bounded). Byte-bounded equivalent
+# of the old container.logs(tail=50_000 lines) cap, now that output comes
+# from a live exec stream rather than a one-shot post-hoc log read.
+_MAX_LOG_BYTES = 10_000_000
+
+# Fixed in-container paths the sandbox always uses, regardless of what host
+# path the caller's own process sees `cwd`/results at — see build_source_tarball
+# / extract_results_archive / rewrite_results_paths module docstrings.
+_IN_CONTAINER_WORKDIR = "/workspace"
+_IN_CONTAINER_RESULTS_DIR = f"{_IN_CONTAINER_WORKDIR}/.qarunner-results"
+
+
+def build_source_tarball(source_dir: str, *, uid: int, gid: int) -> bytes:
+    """Package *source_dir* as an in-memory tar for ``put_archive`` injection.
+
+    Arcnames are root-relative (no leading path component) so extracting into
+    a fixed in-container directory reproduces the source tree there exactly,
+    regardless of what host path the calling process's own filesystem sees
+    *source_dir* at — replacing the bind-mount's host-path-identity
+    requirement with a plain byte payload. Entry ownership is forced to
+    *uid*/*gid* (the same values passed as the sandbox's non-root exec
+    ``user=``) rather than preserved from whatever uid happens to own the
+    files on the calling process's filesystem, so the sandboxed process can
+    always read/write what it's given regardless of who created it.
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        root = Path(source_dir)
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root)
+            if any(part in JAIL_IGNORE_NAMES for part in relative.parts):
+                continue
+            if path.is_dir():
+                continue
+            info = tar.gettarinfo(str(path), arcname=str(relative))
+            info.uid = uid
+            info.gid = gid
+            with open(path, "rb") as f:
+                tar.addfile(info, f)
+    return buf.getvalue()
+
+
+def extract_results_archive(tar_bytes: bytes, dest_dir: str) -> None:
+    """Unpack a ``get_archive`` response into *dest_dir*.
+
+    ``get_archive(path)`` wraps every entry in a leading component named for
+    *path*'s own basename (confirmed empirically against the Engine API, not
+    documented); this strips that wrapper so *dest_dir* mirrors the requested
+    directory's contents directly. Each member resolves through
+    ``safe_subpath`` so a crafted member name (``../../evil``) can't escape
+    *dest_dir* — the archive comes from inside the sandbox that just executed
+    untrusted test code.
+    """
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tar:
+        members = tar.getmembers()
+        if not members:
+            return
+        wrapper_prefix = f"{members[0].name.split('/', 1)[0]}/"
+        for member in members:
+            if member.isdir() or not member.name.startswith(wrapper_prefix):
+                continue
+            relative = member.name[len(wrapper_prefix) :]
+            if not relative:
+                continue
+            dest_path = safe_subpath(dest_dir, relative)
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                continue
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as f:
+                f.write(extracted.read())
+
+
+def rewrite_results_paths(
+    argv: list[str],
+    env: dict[str, str],
+    *,
+    host_results_dir: str,
+    container_results_dir: str,
+) -> tuple[list[str], dict[str, str]]:
+    """Redirect any ``--flag=value``/env value under *host_results_dir* to
+    *container_results_dir*.
+
+    Generalized over every matching value rather than a hand-maintained list
+    of recognized flags, so a results-shaped flag we don't special-case by
+    name never silently falls through as a broken host-only path now that
+    there's no bind mount making the two paths the same thing.
+    """
+    host_root = Path(host_results_dir)
+
+    def _rewrite(value: str) -> str:
+        try:
+            relative = Path(value).relative_to(host_root)
+        except ValueError:
+            return value
+        return str(Path(container_results_dir) / relative)
+
+    new_argv = []
+    for token in argv:
+        if token.startswith("--") and "=" in token:
+            flag, _, value = token.partition("=")
+            new_argv.append(f"{flag}={_rewrite(value)}")
+        else:
+            new_argv.append(token)
+
+    new_env = {key: _rewrite(value) for key, value in env.items()}
+    return new_argv, new_env
+
+
+def _drain_exec_stream(
+    api_client, exec_id: str, stdout_file: str | None, stderr_file: str | None
+) -> tuple[bytes, bytes]:
+    """Blocking: consume a demuxed ``exec_start(stream=True)`` generator.
+
+    Writes each chunk to *stdout_file*/*stderr_file* as it arrives, so a live
+    log-follow (e.g. the platform's SSE endpoint tailing stdout.log) sees
+    real-time output — the same live-tail behavior the old container.logs()
+    streaming task gave, now sourced from the exec stream instead. The
+    in-memory accumulation kept for the returned bytes is bounded to
+    ``_MAX_LOG_BYTES`` (a sliding window, trimmed as chunks arrive — not just
+    at the end) while the on-disk files still receive everything.
+    """
+    stdout_acc = bytearray()
+    stderr_acc = bytearray()
+    with contextlib.ExitStack() as files:
+        stdout_fh = None
+        stderr_fh = None
+        if stdout_file:
+            os.makedirs(os.path.dirname(stdout_file), exist_ok=True)
+            stdout_fh = files.enter_context(open(stdout_file, "ab"))
+        if stderr_file:
+            os.makedirs(os.path.dirname(stderr_file), exist_ok=True)
+            stderr_fh = files.enter_context(open(stderr_file, "ab"))
+
+        for stdout_chunk, stderr_chunk in api_client.exec_start(exec_id, stream=True, demux=True):
+            if stdout_chunk:
+                stdout_acc.extend(stdout_chunk)
+                if len(stdout_acc) > _MAX_LOG_BYTES:
+                    del stdout_acc[: len(stdout_acc) - _MAX_LOG_BYTES]
+                if stdout_fh:
+                    stdout_fh.write(stdout_chunk)
+                    stdout_fh.flush()
+            if stderr_chunk:
+                stderr_acc.extend(stderr_chunk)
+                if len(stderr_acc) > _MAX_LOG_BYTES:
+                    del stderr_acc[: len(stderr_acc) - _MAX_LOG_BYTES]
+                if stderr_fh:
+                    stderr_fh.write(stderr_chunk)
+                    stderr_fh.flush()
+    return bytes(stdout_acc), bytes(stderr_acc)
 
 
 class DockerRunner:
@@ -157,165 +307,172 @@ class DockerRunner:
         ):
             mapped_cmd[0] = "python"
 
-        # 3. Mount definitions: Extract results_dir to mount
-        results_dir = None
+        # 3. Detect the caller's host-facing results dir (same detection as
+        # before), then redirect every matching argv/env value to the fixed
+        # in-container results path — this replaces the bind mount that used
+        # to make the host and container paths the same thing. extra_readonly
+        # volumes are resolved from the *un-rewritten* env (unrelated paths).
+        host_results_dir = None
         for arg in cmd:
-            if arg.startswith("--junitxml=") or arg.startswith("--alluredir="):
+            if (
+                arg.startswith("--junitxml=")
+                or arg.startswith("--alluredir=")
+                or arg.startswith("--output=")
+            ):
                 results_path = arg.split("=", 1)[1]
-                results_dir = os.path.dirname(results_path)
+                host_results_dir = os.path.dirname(results_path)
         if proc_env.get("PLAYWRIGHT_JUNIT_OUTPUT_NAME"):
-            results_dir = os.path.dirname(proc_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"])
+            host_results_dir = os.path.dirname(proc_env["PLAYWRIGHT_JUNIT_OUTPUT_NAME"])
 
-        # Pre-create results_dir on host to avoid permission/root creation issues
-        if results_dir:
-            os.makedirs(results_dir, exist_ok=True)
+        if host_results_dir:
+            os.makedirs(host_results_dir, exist_ok=True)
+            exec_cmd, exec_env = rewrite_results_paths(
+                mapped_cmd,
+                proc_env,
+                host_results_dir=host_results_dir,
+                container_results_dir=_IN_CONTAINER_RESULTS_DIR,
+            )
+        else:
+            exec_cmd, exec_env = mapped_cmd, dict(proc_env)
 
-        volumes = {}
-        # Mount tests_dir (cwd)
-        volumes[cwd] = {"bind": cwd, "mode": "rw"}
-        # Mount results_dir if different
-        if results_dir and results_dir != cwd:
-            volumes[results_dir] = {"bind": results_dir, "mode": "rw"}
-        for path, spec in self._extra_readonly_volumes(proc_env).items():
-            volumes.setdefault(path, spec)
+        extra_volumes = self._extra_readonly_volumes(proc_env)
+
+        # 4. Package the source directory as an in-memory tar (put_archive
+        # payload) — reads only through the calling process's own filesystem
+        # view of *cwd*, so it needs no host-path relationship to whatever
+        # daemon ends up creating the sandbox container.
+        if not os.path.isdir(cwd):
+            # rglob() on a missing path silently yields nothing rather than
+            # raising, which would otherwise inject an empty tarball and run
+            # the sandboxed command against nothing — fail loudly instead.
+            raise RunnerError(f"source directory {cwd!r} does not exist")
+        uid, gid = os.getuid(), os.getgid()
+        try:
+            tarball = await asyncio.to_thread(build_source_tarball, cwd, uid=uid, gid=gid)
+        except OSError as exc:
+            raise RunnerError(f"Failed to package source directory: {exc}") from exc
+
+        # 5. A fresh named volume backs the sandbox's writable workspace.
+        # Named volumes are daemon-side storage independent of container
+        # start/stop state (unlike tmpfs, which only exists while the
+        # container's mount namespace is live) — put_archive/get_archive work
+        # against it regardless of the container's running state.
+        try:
+            volume = await asyncio.to_thread(client.volumes.create)
+        except Exception as exc:
+            raise RunnerError(f"Docker volume creation failed: {exc}") from exc
+
+        async def _kill_container(reason: str) -> None:
+            try:
+                await asyncio.to_thread(container.kill)
+            except Exception as kill_exc:
+                logger.warning("Failed to kill container (%s): %s", reason, kill_exc)
 
         container = None
-        log_task = None
         try:
-            # 4. Run container in detached mode
-            def _start_container():
-                run_kwargs = dict(
-                    command=mapped_cmd,
+            volumes = {volume.name: {"bind": _IN_CONTAINER_WORKDIR, "mode": "rw"}}
+            for path, spec in extra_volumes.items():
+                volumes.setdefault(path, spec)
+
+            # 6. Create (not started yet) with a placeholder command — the
+            # real command runs via exec after put_archive, since a
+            # newly-created-but-not-started container's volume mount isn't
+            # actually populated by put_archive until the container starts
+            # (confirmed empirically; contradicts the container.create-then-
+            # put_archive-then-start sequence one might otherwise expect).
+            def _create_container():
+                create_kwargs = dict(
+                    command=["sleep", str(max(int(timeout) + 60, 60))],
                     volumes=volumes,
-                    working_dir=cwd,
-                    environment=proc_env,
+                    working_dir=_IN_CONTAINER_WORKDIR,
                     detach=True,
-                    stdout=True,
-                    stderr=True,
                     # SEC-3: execute untrusted test code with least privilege.
-                    # Run as the host caller (non-root unless the platform itself
-                    # is root) so files written to bind mounts stay owned by us.
-                    user=f"{os.getuid()}:{os.getgid()}",
+                    user=f"{uid}:{gid}",
                     network_mode="none",
                     cap_drop=["ALL"],
                     security_opt=["no-new-privileges"],
                     pids_limit=512,
                     mem_limit="2g",
                     nano_cpus=2_000_000_000,  # SEC-3: cap CPU at 2.0 cores.
-                    # SEC-3: read-only root filesystem so untrusted test code
-                    # can't tamper with the image. The bind-mounted cwd and
-                    # results dir stay writable (declared above); pytest's own
-                    # temp/cache needs a writable /tmp, supplied as a tmpfs.
+                    # SEC-3: read-only root filesystem; the named volume above
+                    # and this tmpfs are the only writable locations.
                     read_only=True,
                     tmpfs={"/tmp": ""},
                 )
                 if labels:
-                    run_kwargs["labels"] = dict(labels)
+                    create_kwargs["labels"] = dict(labels)
                 if is_playwright:
                     # Chromium needs more shared memory than Docker's tiny
                     # default /dev/shm; keep it container-local rather than
                     # using host IPC.
-                    run_kwargs["shm_size"] = "1g"
-                return client.containers.run(image, **run_kwargs)
+                    create_kwargs["shm_size"] = "1g"
+                return client.containers.create(image, **create_kwargs)
 
-            container = await asyncio.to_thread(_start_container)
+            container = await asyncio.to_thread(_create_container)
+            await asyncio.to_thread(container.start)
+            await asyncio.to_thread(container.put_archive, _IN_CONTAINER_WORKDIR, tarball)
 
-            # Streaming-based log streamer to write logs in real-time
-            async def log_streamer():
-                def _stream(is_stdout: bool):
-                    try:
-                        filepath = stdout_file if is_stdout else stderr_file
-                        container.reload()
-                        try:
-                            stream = container.logs(
-                                stream=True,
-                                follow=True,
-                                stdout=is_stdout,
-                                stderr=not is_stdout,
-                            )
-                        except TypeError:
-                            stream = container.logs(
-                                stdout=is_stdout,
-                                stderr=not is_stdout,
-                            )
-                        chunks = [stream] if isinstance(stream, bytes) else stream
-                        if filepath:
-                            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                            with open(filepath, "ab") as f:
-                                for chunk in chunks:
-                                    f.write(chunk)
-                                    f.flush()
-                        else:
-                            for _ in chunks:
-                                pass
-                    except Exception:
-                        logger.warning("Failed to stream container logs to file", exc_info=True)
+            # 7. Run the real command via the low-level exec API (the
+            # high-level container.exec_run()'s streamed form doesn't expose
+            # the exec_id needed to retrieve an exit code once the stream is
+            # drained, per docker-py's ExecResult shape).
+            def _create_exec():
+                return client.api.exec_create(
+                    container.id,
+                    exec_cmd,
+                    environment=exec_env,
+                    workdir=_IN_CONTAINER_WORKDIR,
+                    stdout=True,
+                    stderr=True,
+                )["Id"]
 
-                stdout_fut = asyncio.to_thread(_stream, True)
-                stderr_fut = asyncio.to_thread(_stream, False)
-                await asyncio.gather(stdout_fut, stderr_fut, return_exceptions=True)
-
-            log_task = asyncio.create_task(log_streamer())
-
-            # 5. Wait for completion with timeout
-            def _wait_container():
-                return container.wait(timeout=timeout)
+            exec_id = await asyncio.to_thread(_create_exec)
+            stream_task = asyncio.create_task(
+                asyncio.to_thread(
+                    _drain_exec_stream, client.api, exec_id, stdout_file, stderr_file
+                )
+            )
 
             try:
-                wait_result = await asyncio.to_thread(_wait_container)
-                exit_code = wait_result.get("StatusCode", -1)
-            except requests.exceptions.ReadTimeout:
-                # BUG-10: this is the *only* exception docker-py's own
-                # Container.wait() docstring attributes to the timeout
-                # actually elapsing — everything else (APIError, connection
-                # resets) is an infrastructure failure, not "the suite ran
-                # too long", and must not be reported as timed_out=True.
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(stream_task, timeout=timeout)
+                exit_code = await asyncio.to_thread(
+                    lambda: client.api.exec_inspect(exec_id)["ExitCode"]
+                )
+                # The real command finished; stop the `sleep` placeholder.
+                await _kill_container("post-exec cleanup")
+            except TimeoutError:
+                # This is an explicit asyncio-level deadline we impose, not a
+                # daemon-reported signal — unlike an infra failure below,
+                # elapsing it always means "the suite ran too long."
                 timed_out = True
                 logger.warning("Container execution timed out. Killing container...")
-                try:
-                    await asyncio.to_thread(container.kill)
-                except Exception as kill_exc:
-                    logger.warning("Failed to kill container: %s", kill_exc)
+                await _kill_container("timeout")
                 exit_code = 137  # Standard SIGKILL exit code
-            except Exception as wait_exc:
+            except Exception as exec_exc:
+                # BUG-10 carried into the exec model: any other exception
+                # (daemon connection reset, API error) during exec is an
+                # infrastructure failure, not "the suite ran too long", and
+                # must not be reported as timed_out=True.
                 logger.warning(
-                    "Container wait failed (not a timeout): %s. Killing container...",
-                    wait_exc,
+                    "Container exec failed (not a timeout): %s. Killing container...",
+                    exec_exc,
                 )
-                try:
-                    await asyncio.to_thread(container.kill)
-                except Exception as kill_exc:
-                    logger.warning("Failed to kill container: %s", kill_exc)
+                await _kill_container("exec failure")
                 exit_code = 137  # Standard SIGKILL exit code; state is unknown
-            finally:
-                if timed_out:
-                    log_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await log_task
-                else:
-                    try:
-                        await asyncio.wait_for(log_task, timeout=_LOG_STREAM_DRAIN_TIMEOUT_SECONDS)
-                    except TimeoutError:
-                        log_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await log_task
 
-            # 6. Gather logs
-            def _get_logs():
-                return (
-                    container.logs(stdout=True, stderr=False, tail=_MAX_LOG_LINES),
-                    container.logs(stdout=False, stderr=True, tail=_MAX_LOG_LINES),
-                )
-
-            stdout_bytes, stderr_bytes = await asyncio.to_thread(_get_logs)
-            if stdout_file:
-                os.makedirs(os.path.dirname(stdout_file), exist_ok=True)
-                with open(stdout_file, "wb") as f:
-                    f.write(stdout_bytes)
-            if stderr_file:
-                os.makedirs(os.path.dirname(stderr_file), exist_ok=True)
-                with open(stderr_file, "wb") as f:
-                    f.write(stderr_bytes)
+            # 8. Pull results back out, if the command was expected to
+            # produce any — silently skip if it never wrote them (crashed
+            # before producing output), matching the old bind-mount behavior
+            # where a missing file was simply absent.
+            if host_results_dir:
+                try:
+                    bits, _stat = await asyncio.to_thread(
+                        container.get_archive, _IN_CONTAINER_RESULTS_DIR
+                    )
+                    raw = b"".join(bits)
+                    await asyncio.to_thread(extract_results_archive, raw, host_results_dir)
+                except NotFound:
+                    pass
 
         except Exception as exc:
             if not timed_out:
@@ -324,6 +481,8 @@ class DockerRunner:
             if container:
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(container.remove, force=True)
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(volume.remove, force=True)
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 

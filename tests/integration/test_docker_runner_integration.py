@@ -1,10 +1,15 @@
 """Real-Docker integration tests for :class:`DockerRunner` (TEST-1 / SEC-3 / DEP-1).
 
 These exercise the *real* container lifecycle — no mocks — to verify what the
-unit suite cannot: that bind-mounted artifacts actually land on the host, that
-real exit codes propagate, and that the SEC-3 isolation flags take effect on the
-container DockerRunner truly launches (asserted from its live ``docker inspect``
-attributes rather than from the kwargs we hand it).
+unit suite cannot: that source/results actually round-trip through
+put_archive/get_archive onto the host, that real exit codes propagate, and
+that the SEC-3 isolation flags take effect on the container DockerRunner
+truly launches (asserted from its live ``docker inspect`` attributes rather
+than from the kwargs we hand it). ``cmd`` never includes an absolute
+``cwd``-rooted path: DockerRunner injects source into a fixed in-container
+workspace via put_archive rather than bind-mounting *cwd* at its host path,
+so pytest/Playwright must collect via ``working_dir`` (relative), not an
+absolute positional path argument.
 
 Opt-in: they need a running Docker daemon and the ``qarunner-executor:latest``
 image (built on demand by ``DockerRunner._ensure_image``). They carry the
@@ -41,18 +46,19 @@ def docker_client():
 
 class _CapturingContainers:
     """Wrap ``client.containers`` so we keep the real container's inspect attrs
-    before DockerRunner removes it in its ``finally`` block."""
+    before DockerRunner removes it in its ``finally`` block. DockerRunner now
+    calls ``create()`` (not ``run()``) — the sandbox's own command is a
+    `sleep` placeholder, and the real command runs via exec after
+    put_archive — but HostConfig/Config (what SEC-3 asserts against) are
+    fixed at create time regardless."""
 
     def __init__(self, real, sink: dict) -> None:
         self._real = real
         self._sink = sink
 
-    def run(self, *args, **kwargs):
-        container = self._real.run(*args, **kwargs)
-        # ``attrs`` here is the create-time ``docker inspect`` payload (docker-py
-        # inspects the container inside ``containers.run``), so HostConfig/Config
-        # are fully populated even though the container is detached.
-        self._sink["run_kwargs"] = kwargs
+    def create(self, *args, **kwargs):
+        container = self._real.create(*args, **kwargs)
+        self._sink["create_kwargs"] = kwargs
         self._sink["attrs"] = container.attrs
         return container
 
@@ -84,8 +90,9 @@ def _write_test(d: Path, body: str) -> Path:
 
 @pytest.mark.asyncio
 async def test_real_container_runs_pytest_and_lands_artifacts(docker_client, tmp_path):
-    """A passing suite → exit 0, junit.xml written to the host volume, and the
-    container stdout streamed to the on-disk log file."""
+    """A passing suite → exit 0, junit.xml round-trips back to the host via
+    get_archive, and the container's exec output is streamed to the on-disk
+    log file."""
     tests_dir = tmp_path / "suite"
     _write_test(tests_dir, "def test_pass():\n    assert 1 + 1 == 2\n")
     results_dir = tmp_path / "results"
@@ -94,7 +101,7 @@ async def test_real_container_runs_pytest_and_lands_artifacts(docker_client, tmp
 
     runner = DockerRunner(client=docker_client)
     result = await runner.run(
-        ["python", "-m", "pytest", f"--junitxml={results_dir}/junit.xml", str(tests_dir)],
+        ["python", "-m", "pytest", f"--junitxml={results_dir}/junit.xml"],
         cwd=str(tests_dir),
         timeout=180,
         stdout_file=str(stdout_file),
@@ -104,7 +111,8 @@ async def test_real_container_runs_pytest_and_lands_artifacts(docker_client, tmp
     # Real exit code from the container.
     assert result.exit_code == 0
     assert result.timed_out is False
-    # Bind mount worked: the report file the container wrote is on the host.
+    # put_archive/get_archive round-trip worked: the report the container
+    # wrote inside its own workspace landed back on the host.
     assert (results_dir / "junit.xml").is_file()
     # Logs landed on disk and match the ProcessResult.
     assert stdout_file.is_file()
@@ -148,7 +156,7 @@ async def test_real_container_failing_test_returns_nonzero(docker_client, tmp_pa
 
     runner = DockerRunner(client=docker_client)
     result = await runner.run(
-        ["python", "-m", "pytest", str(tests_dir)],
+        ["python", "-m", "pytest"],
         cwd=str(tests_dir),
         timeout=180,
     )
@@ -167,7 +175,7 @@ async def test_real_container_sec3_isolation_via_inspect(docker_client, tmp_path
     sink: dict = {}
     runner = DockerRunner(client=_CapturingClient(docker_client, sink))
     await runner.run(
-        ["python", "-m", "pytest", str(tests_dir)],
+        ["python", "-m", "pytest"],
         cwd=str(tests_dir),
         timeout=180,
     )
@@ -176,8 +184,9 @@ async def test_real_container_sec3_isolation_via_inspect(docker_client, tmp_path
     host = attrs["HostConfig"]
     config = attrs["Config"]
 
-    # Non-root: runs as the host caller's uid:gid (so bind-mounted artifacts stay
-    # owned by us). NB this is the *host* uid, not a hard-coded 1000:1000.
+    # Non-root: runs as the calling process's uid:gid (least privilege —
+    # SEC-3 — not for bind-mount ownership, since source/results now travel
+    # via put_archive/get_archive rather than a bind mount).
     assert config["User"] == f"{os.getuid()}:{os.getgid()}"
     assert not config["User"].startswith("0:"), "must not run as root uid 0"
     # No network.
@@ -211,7 +220,7 @@ async def test_real_container_has_no_network(docker_client, tmp_path):
 
     runner = DockerRunner(client=docker_client)
     result = await runner.run(
-        ["python", "-m", "pytest", "-q", str(tests_dir)],
+        ["python", "-m", "pytest", "-q"],
         cwd=str(tests_dir),
         timeout=180,
     )

@@ -13,19 +13,14 @@ default coverage gate::
     uv run pytest -m docker --no-cov
 
 These tests run inside the ``backend`` dev container, which reaches the *host*
-Docker daemon over a mounted socket (see ``docker-compose.dev.yml``). Bind
-mount sources are resolved by that host daemon, so any directory a container
-must see has to live at a path that is identical on host and in-container —
-``QARUNNER_ARTIFACTS_ROOT`` is the one directory tree wired up that way. A bare
-``tmp_path`` is container-local only and would bind-mount an empty directory
-on the host.
+Docker daemon over a mounted socket (see ``docker-compose.dev.yml``).
+DockerRunner injects/extracts source and results via ``put_archive``/
+``get_archive`` (not bind mounts), so plain ``tmp_path`` — container-local
+only — works fine here without needing any host-path-identical location.
 """
 
 from __future__ import annotations
 
-import os
-import shutil
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -52,18 +47,6 @@ def docker_client():
         pytest.skip(f"Docker daemon unavailable: {exc}")
     yield client
     client.close()
-
-
-@pytest.fixture
-def mirrored_root():
-    """A fresh directory under the host-mirrored artifacts root, cleaned up after."""
-    base = Path(os.environ.get("QARUNNER_ARTIFACTS_ROOT", "./artifacts")).resolve()
-    root = base / "test-m4-isolate" / uuid.uuid4().hex
-    root.mkdir(parents=True, exist_ok=True)
-    try:
-        yield root
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 def _proof(*, attempt_id: str, fence: int) -> CommitStartProof:
@@ -101,11 +84,11 @@ def _write_shared_suite(root: Path) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_consecutive_attempts_cannot_read_prior_workspace(docker_client, mirrored_root):
+async def test_consecutive_attempts_cannot_read_prior_workspace(docker_client, tmp_path):
     """T-M4-ISOLATE-001: Attempt 2's real container never sees what Attempt 1's
-    real container wrote into its own bind-mounted jail."""
-    source = _write_shared_suite(mirrored_root / "suite")
-    workspace_root = mirrored_root / "workspaces"
+    real container wrote into its own workspace."""
+    source = _write_shared_suite(tmp_path / "suite")
+    workspace_root = tmp_path / "workspaces"
     executor = DockerWorkerExecutor(
         runner=DockerRunner(client=docker_client),
         workspace_root=str(workspace_root),
@@ -138,11 +121,11 @@ async def test_consecutive_attempts_cannot_read_prior_workspace(docker_client, m
 
 
 @pytest.mark.asyncio
-async def test_retried_fence_cannot_read_prior_fence_workspace(docker_client, mirrored_root):
+async def test_retried_fence_cannot_read_prior_fence_workspace(docker_client, tmp_path):
     """A retry that reuses attempt_id with a bumped fence is isolated from the
     prior fence's workspace exactly like a distinct attempt_id would be."""
-    source = _write_shared_suite(mirrored_root / "suite")
-    workspace_root = mirrored_root / "workspaces"
+    source = _write_shared_suite(tmp_path / "suite")
+    workspace_root = tmp_path / "workspaces"
     executor = DockerWorkerExecutor(
         runner=DockerRunner(client=docker_client),
         workspace_root=str(workspace_root),
