@@ -250,6 +250,17 @@ class SuiteConflict(ValueError):
         super().__init__(f"suite {suite_id} conflicts: {reason}")
 
 
+class CollectionAdapterRejected(ValueError):
+    """Raised when a collection adapter result cannot enter the trusted domain."""
+
+    code = "collection_adapter_rejected"
+
+    def __init__(self, *, reason: str, reason_class: str) -> None:
+        self.reason = reason
+        self.reason_class = reason_class
+        super().__init__(f"collection adapter rejected: {reason} ({reason_class})")
+
+
 class InvalidTransition(ValueError):
     """Raised when a domain aggregate rejects a requested state edge."""
 

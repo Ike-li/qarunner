@@ -45,6 +45,11 @@ from qarunner.domain.cancellation import (
     TrustedCancellationStop,
     canonicalize_batch_cancellation_scope_items,
 )
+from qarunner.domain.collection_adapter import accept_collection_adapter_result
+from qarunner.domain.collection_isolation import (
+    assert_accept_path_is_isolated,
+    is_forbidden_control_plane_import,
+)
 from qarunner.domain.digest import (
     Digest,
     canonical_digest,
@@ -68,6 +73,7 @@ from qarunner.domain.errors import (
     BatchCancellationConflict,
     CancellationConflict,
     CanonicalizationError,
+    CollectionAdapterRejected,
     DomainValidationError,
     EventConflict,
     EvidenceConflict,
@@ -230,6 +236,7 @@ __all__ = [
     "Batch",
     "Suite",
     "SuiteConflict",
+    "CollectionAdapterRejected",
     "SuiteRevision",
     "SuiteRevisionStatus",
     "SuiteStatus",
@@ -365,6 +372,9 @@ __all__ = [
     "WorkEstimate",
     "WorkerAuthority",
     "canonical_digest",
+    "accept_collection_adapter_result",
+    "is_forbidden_control_plane_import",
+    "assert_accept_path_is_isolated",
     "canonicalize_batch_cancellation_scope_items",
     "consume_duplicate_risk_acceptance",
     "build_evidence_manifest",
