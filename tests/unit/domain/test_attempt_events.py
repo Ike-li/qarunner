@@ -313,3 +313,78 @@ def test_event_id_or_sequence_reuse_with_different_content_is_rejected() -> None
     assert caught.value.received_event == conflict
     assert updated.events == (original,)
     assert updated.version == 1
+
+
+def test_event_sequence_gap_is_rejected_without_mutation() -> None:
+    """WORKER_PROTOCOL: seq > next returns gap with expected next; no state write."""
+    from qarunner.domain import (
+        AttemptEvent,
+        EventSequenceGap,
+        WorkerRef,
+        canonical_digest,
+    )
+
+    attempt = _attempt_at_fence_two()
+    worker = WorkerRef(worker_id="worker-001", generation=3)
+    first = AttemptEvent(
+        event_id="event-001",
+        event_seq=1,
+        event_type="sandbox_create_started",
+        payload_digest=canonical_digest(
+            schema_version="qep.attempt-event-payload.v1",
+            payload={"runtime": "rootless-docker"},
+        ),
+    )
+    updated = attempt.record_event(
+        first,
+        authority=_authority(),
+        worker=worker,
+        fence=2,
+        expected_version=0,
+    )
+    gap = AttemptEvent(
+        event_id="event-003",
+        event_seq=3,
+        event_type="running",
+        payload_digest=canonical_digest(
+            schema_version="qep.attempt-event-payload.v1",
+            payload={"phase": "running"},
+        ),
+    )
+    with pytest.raises(EventSequenceGap) as caught:
+        updated.record_event(
+            gap,
+            authority=_authority(),
+            worker=worker,
+            fence=2,
+            expected_version=1,
+        )
+    assert caught.value.attempt_id == "attempt-002"
+    assert caught.value.expected_next == 2
+    assert caught.value.received_seq == 3
+    assert updated.events == (first,)
+    assert updated.version == 1
+
+
+def test_event_sequence_must_start_at_one() -> None:
+    from qarunner.domain import AttemptEvent, EventSequenceGap, WorkerRef, canonical_digest
+
+    attempt = _attempt_at_fence_two()
+    with pytest.raises(EventSequenceGap) as caught:
+        attempt.record_event(
+            AttemptEvent(
+                event_id="event-002",
+                event_seq=2,
+                event_type="running",
+                payload_digest=canonical_digest(
+                    schema_version="qep.attempt-event-payload.v1",
+                    payload={"phase": "running"},
+                ),
+            ),
+            authority=_authority(),
+            worker=WorkerRef(worker_id="worker-001", generation=3),
+            fence=2,
+            expected_version=0,
+        )
+    assert caught.value.expected_next == 1
+    assert attempt.events == ()

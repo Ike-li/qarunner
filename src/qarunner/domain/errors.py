@@ -337,6 +337,21 @@ class EventConflict(ValueError):
         super().__init__(f"attempt {attempt_id} received conflicting event identity")
 
 
+class EventSequenceGap(ValueError):
+    """Raised when a Worker event skips ahead of the expected contiguous sequence."""
+
+    code = "event_sequence_gap"
+
+    def __init__(self, *, attempt_id: str, expected_next: int, received_seq: int) -> None:
+        self.attempt_id = attempt_id
+        self.expected_next = expected_next
+        self.received_seq = received_seq
+        super().__init__(
+            f"attempt {attempt_id} event sequence gap: expected {expected_next}, "
+            f"received {received_seq}"
+        )
+
+
 class AttemptEventRejected(ValueError):
     """Raised when a terminal Attempt receives a new event fact."""
 

@@ -13,6 +13,7 @@ from qarunner.domain.errors import (
     AttemptEventRejected,
     DomainValidationError,
     EventConflict,
+    EventSequenceGap,
     EvidenceConflict,
     EvidenceDigestMismatch,
     EvidenceNotReady,
@@ -363,6 +364,9 @@ class Attempt:
                     received_event=event,
                 )
             return self
+        # Precedence: authority already checked; then CAS, terminal, then contiguous
+        # sequence. Stale writers and terminal Attempts keep their existing error classes;
+        # only live non-terminal Attempts classify sequence gaps.
         ensure_expected_version(
             entity_type="attempt",
             entity_id=self.id,
@@ -373,6 +377,13 @@ class Attempt:
             raise AttemptEventRejected(
                 attempt_id=self.id,
                 reason="attempt_terminal",
+            )
+        expected_next = (self.events[-1].event_seq + 1) if self.events else 1
+        if event.event_seq != expected_next:
+            raise EventSequenceGap(
+                attempt_id=self.id,
+                expected_next=expected_next,
+                received_seq=event.event_seq,
             )
         return replace(self, events=(*self.events, event), version=self.version + 1)
 

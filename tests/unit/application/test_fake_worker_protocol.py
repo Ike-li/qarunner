@@ -239,3 +239,48 @@ def test_fake_worker_does_not_import_runtime() -> None:
     forbidden = ("import docker", "subprocess", "asyncpg", "importlib")
     for token in forbidden:
         assert token not in source, token
+
+
+def test_fake_worker_event_sequence_gap_preserves_history() -> None:
+    from tests.fakes.greenfield.fake_worker_protocol import FakeWorkerProtocolSession
+
+    from qarunner.domain import EventSequenceGap
+
+    worker, authority = _ready_worker()
+    session = FakeWorkerProtocolSession(
+        worker=worker,
+        worker_authority=authority,
+        clock_start=T0 + timedelta(minutes=1),
+    )
+    session.seed_offered_run(
+        run_id="run-001",
+        assignment_id="assignment-001",
+        spec_digest=_spec(),
+        expires_at=T0 + timedelta(hours=1),
+    )
+    session.claim(run_id="run-001", assignment_id="assignment-001")
+    session.commit_start(
+        run_id="run-001",
+        assignment_id="assignment-001",
+        start_commit_key="commit-key-1",
+        new_attempt_id="attempt-001",
+    )
+    session.record_event(
+        run_id="run-001",
+        attempt_id="attempt-001",
+        event_id="evt-1",
+        event_seq=1,
+        event_type="phase",
+        payload_label="running",
+    )
+    with pytest.raises(EventSequenceGap) as caught:
+        session.record_event(
+            run_id="run-001",
+            attempt_id="attempt-001",
+            event_id="evt-3",
+            event_seq=3,
+            event_type="phase",
+            payload_label="uploading",
+        )
+    assert caught.value.expected_next == 2
+    assert caught.value.received_seq == 3
