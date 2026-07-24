@@ -21,6 +21,9 @@ from qarunner.domain import (
     ReconcileWorkerFacts,
     Run,
     RunState,
+    UnknownObservation,
+    UnknownReason,
+    UnknownSource,
     WorkerAuthority,
     WorkerGeneration,
     WorkerLeaseConflict,
@@ -62,6 +65,7 @@ class FakeWorkerProtocolSession:
         self._runs: dict[str, Run] = {}
         self._leases: dict[str, AssignmentLease] = {}
         self._reconcile_pending = False
+        self._automatic_second_execution_attempt_total = 0
         self._offline_worker: WorkerGeneration | None = None
 
     @property
@@ -104,6 +108,10 @@ class FakeWorkerProtocolSession:
     def reconcile_pending(self) -> bool:
         return self._reconcile_pending
 
+    @property
+    def automatic_second_execution_attempt_total(self) -> int:
+        return self._automatic_second_execution_attempt_total
+
     def get_run(self, run_id: str) -> Run:
         return self._require_run(run_id)
 
@@ -138,7 +146,40 @@ class FakeWorkerProtocolSession:
         self._worker = recovered
         self._offline_worker = None
         self._reconcile_pending = False
+        self._automatic_second_execution_attempt_total = 0
         return recovered
+
+    def mark_unknown_from_silence(self, *, run_id: str, observation_id: str) -> Run:
+        """Enter unknown after post-commit silence; never auto-starts a second Attempt."""
+        run = self._require_run(run_id)
+        if not run.attempts:
+            raise WorkerLeaseConflict(assignment_id="none", reason="no_attempt")
+        attempt = run.attempts[-1]
+        observation = UnknownObservation(
+            id=observation_id,
+            reason=UnknownReason.WORKER_LOST_AFTER_COMMIT,
+            source=UnknownSource.COORDINATOR,
+            review_basis_digest=canonical_digest(
+                schema_version="qep.unknown-review-basis.v1",
+                payload={
+                    "run_id": run_id,
+                    "attempt_id": attempt.id,
+                    "reason": "worker_lost_after_commit",
+                },
+            ),
+            recorded_at=self._now,
+        )
+        updated = run.mark_current_attempt_unknown(
+            attempt_id=attempt.id,
+            observation=observation,
+            expected_version=run.version,
+            expected_attempt_version=attempt.version,
+        )
+        # Critical invariant: no automatic second execution Attempt.
+        if len(updated.attempts) > len(run.attempts):
+            self._automatic_second_execution_attempt_total += 1
+        self._runs[run_id] = updated
+        return updated
 
     def outcome_from_silence(self, *, run_id: str) -> SilenceOutcome:
         """Silence never proves test success (T-M3-RECON-001 / unknown safety)."""
