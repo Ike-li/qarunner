@@ -18,15 +18,25 @@ from qarunner.domain import (
     AttemptEvent,
     Digest,
     LeaseCommand,
+    ReconcileWorkerFacts,
     Run,
     RunState,
     WorkerAuthority,
     WorkerGeneration,
     WorkerLeaseConflict,
+    WorkerNotClaimable,
     WorkerRef,
+    WorkerState,
     canonical_digest,
 )
 from qarunner.domain.run import CommitStartResult
+
+
+@dataclass(frozen=True, slots=True)
+class SilenceOutcome:
+    success: bool
+    requires_unknown: bool
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +61,8 @@ class FakeWorkerProtocolSession:
         self._now = clock_start
         self._runs: dict[str, Run] = {}
         self._leases: dict[str, AssignmentLease] = {}
+        self._reconcile_pending = False
+        self._offline_worker: WorkerGeneration | None = None
 
     @property
     def now(self) -> datetime:
@@ -88,7 +100,80 @@ class FakeWorkerProtocolSession:
         self._runs[run_id] = offered
         return offered
 
+    @property
+    def reconcile_pending(self) -> bool:
+        return self._reconcile_pending
+
+    def get_run(self, run_id: str) -> Run:
+        return self._require_run(run_id)
+
+    def begin_agent_restart(self) -> None:
+        """Mark agent restart: freeze claims until reconcile succeeds."""
+        offline = self._worker.transition(
+            WorkerState.OFFLINE,
+            authority=self._worker_authority,
+            expected_version=self._worker.version,
+            occurred_at=self._now,
+        )
+        self._offline_worker = offline
+        self._worker = offline
+        self._reconcile_pending = True
+
+    def reconcile(
+        self,
+        *,
+        facts: ReconcileWorkerFacts,
+        authenticated_ref: WorkerRef | None = None,
+    ) -> WorkerGeneration:
+        """Authenticated reconcile after restart; only trusted facts, never success inference."""
+        current = self._offline_worker if self._offline_worker is not None else self._worker
+        ref = authenticated_ref if authenticated_ref is not None else current.ref
+        recovered = current.reconcile(
+            authority=self._worker_authority,
+            authenticated_ref=ref,
+            facts=facts,
+            expected_version=current.version,
+            observed_at=self._now,
+        )
+        self._worker = recovered
+        self._offline_worker = None
+        self._reconcile_pending = False
+        return recovered
+
+    def outcome_from_silence(self, *, run_id: str) -> SilenceOutcome:
+        """Silence never proves test success (T-M3-RECON-001 / unknown safety)."""
+        run = self._require_run(run_id)
+        # If no terminal attempt facts exist, require unknown — never succeeded.
+        has_terminal_attempt = any(
+            attempt.state.value
+            in {
+                "succeeded",
+                "failed",
+                "cancelled",
+                "timed_out",
+                "unknown",
+            }
+            for attempt in run.attempts
+        )
+        if has_terminal_attempt:
+            return SilenceOutcome(
+                success=False,
+                requires_unknown=False,
+                reason="terminal_facts_present",
+            )
+        return SilenceOutcome(
+            success=False,
+            requires_unknown=True,
+            reason="silence_no_terminal_facts",
+        )
+
     def claim(self, *, run_id: str, assignment_id: str) -> Run:
+        if self._reconcile_pending:
+            raise WorkerNotClaimable(
+                worker_id=self._worker.ref.worker_id,
+                generation=self._worker.ref.generation,
+                reason="reconcile_pending",
+            )
         # claimable_ref raises WorkerNotClaimable when generation is not READY/BUSY.
         self._worker.claimable_ref(authority=self._worker_authority)
         run = self._require_run(run_id)
