@@ -82,6 +82,16 @@ class WorkerLeaseConflict(ValueError):
         super().__init__(f"worker lease conflict for {assignment_id}: {reason}")
 
 
+class ExecutionAdmissionError(ValueError):
+    """Raised when Worker execution is attempted without a durable commit-start proof."""
+
+    code = "execution_admission_error"
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"execution admission rejected: {reason}")
+
+
 class EvidenceNotReady(ValueError):
     """Raised when trusted facts are incomplete or contradictory."""
 

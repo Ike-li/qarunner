@@ -80,6 +80,7 @@ from qarunner.domain.errors import (
     EvidenceConflict,
     EvidenceDigestMismatch,
     EvidenceNotReady,
+    ExecutionAdmissionError,
     IdempotencyConflict,
     InvalidTransition,
     RetryNotAllowed,
@@ -210,6 +211,12 @@ from qarunner.domain.worker import (
     WorkerGeneration,
     WorkerRef,
     WorkerState,
+)
+from qarunner.domain.worker_execution import (
+    CommitStartProof,
+    ExecutionSandboxProfile,
+    require_execution_admission,
+    sandbox_labels_for_proof,
 )
 from qarunner.domain.worker_lease import AssignmentLease, LeaseCommand
 
@@ -379,6 +386,11 @@ __all__ = [
     "WorkerGenerationConflict",
     "WorkerNotClaimable",
     "WorkerRef",
+    "ExecutionAdmissionError",
+    "sandbox_labels_for_proof",
+    "require_execution_admission",
+    "ExecutionSandboxProfile",
+    "CommitStartProof",
     "WorkerLeaseConflict",
     "LeaseCommand",
     "AssignmentLease",
