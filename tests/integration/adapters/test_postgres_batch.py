@@ -493,3 +493,120 @@ async def test_aenter_start_failure_releases_connection(batch_store: PostgresSto
     # restore unused real pool reference so fixture teardown is unaffected
     gateway._pool = pool  # type: ignore[assignment]
     del real_acquire
+
+
+# --- CRASH-RECOVERY (T-M2-CRASH-001): create path leaves no duplicate Batch ---
+
+
+@pytest.mark.asyncio
+async def test_create_crash_before_commit_leaves_zero_rows_and_retry_succeeds(
+    batch_store: PostgresStore,
+) -> None:
+    """Crash after insert but before commit: sticky-abort rolls back; retry creates once."""
+    pool = batch_store._require_pool()
+    await _seed_project(pool)
+    suite = await _register_active_suite(pool)
+    batch = _open_batch(suite=suite)
+    with pytest.raises(RuntimeError, match="simulated-create-crash"):
+        async with PostgresBatchGateway(pool) as gateway:
+            await gateway.create(batch=batch)
+            raise RuntimeError("simulated-create-crash")
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_batches") == 0
+    async with PostgresBatchGateway(pool) as gateway:
+        result = await gateway.create(batch=batch)
+    assert result.replayed is False
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_batches") == 1
+
+
+@pytest.mark.asyncio
+async def test_create_committed_then_client_retry_is_exact_replay(
+    batch_store: PostgresStore,
+) -> None:
+    """Client crashes after successful create and retries: same key → one row, replayed."""
+    pool = batch_store._require_pool()
+    await _seed_project(pool)
+    suite = await _register_active_suite(pool)
+    batch = _open_batch(suite=suite)
+    async with PostgresBatchGateway(pool) as gateway:
+        first = await gateway.create(batch=batch)
+    assert first.replayed is False
+    # Simulate lost response / process restart: same identity retried.
+    async with PostgresBatchGateway(pool) as gateway:
+        second = await gateway.create(batch=batch)
+    assert second.replayed is True
+    assert second.value.id == first.value.id
+    async with pool.acquire() as connection:
+        assert await connection.fetchval("SELECT count(*) FROM qep_batches") == 1
+
+
+@pytest.mark.asyncio
+async def test_collection_accept_is_deterministic_after_retry() -> None:
+    """Collection crash recovery: re-accepting identical structured result is pure & stable."""
+    from qarunner.domain import (
+        EstimateConfidence,
+        FrameworkLocator,
+        ManifestConstraints,
+        ManifestInputs,
+        ManifestItem,
+        WorkEstimate,
+        accept_collection_adapter_result,
+        canonical_digest,
+    )
+
+    def digest(label: str):
+        return canonical_digest(
+            schema_version="qep.test-collection-input.v1",
+            payload={"label": label},
+        )
+
+    inputs = ManifestInputs(
+        suite_revision_digest=digest("suite"),
+        source_digest=digest("source"),
+        dependency_digest=digest("deps"),
+        config_digest=digest("config"),
+        runner_digest=digest("runner"),
+        collection_contract_version="qep.pytest-collection.v1",
+    )
+    item = ManifestItem(
+        item_index=0,
+        stable_case_id="tests/test_shop.py::test_checkout",
+        framework_locator=FrameworkLocator(
+            schema_version="qep.pytest-locator.v1",
+            kind="pytest_nodeid",
+            parts=(
+                ("file", "tests/test_shop.py"),
+                ("node", "tests/test_shop.py::test_checkout"),
+            ),
+        ),
+        atomic_group_id="tests/test_shop.py::test_checkout",
+        resource_profile_id="profile-default",
+        constraints=ManifestConstraints(
+            serial_group=None,
+            environment_requirements=(),
+            account_requirements=(),
+            data_lease_requirements=(),
+        ),
+        estimate=WorkEstimate(duration_ms=100, confidence=EstimateConfidence.MEDIUM),
+        tags=("regression",),
+        selection_metadata_digest=digest("selection"),
+    )
+    first = accept_collection_adapter_result(
+        framework="pytest",
+        expected_inputs=inputs,
+        claimed_inputs=inputs,
+        items=(item,),
+        manifest_id="manifest-001",
+        batch_id="batch-001",
+    )
+    second = accept_collection_adapter_result(
+        framework="pytest",
+        expected_inputs=inputs,
+        claimed_inputs=inputs,
+        items=(item,),
+        manifest_id="manifest-001",
+        batch_id="batch-001",
+    )
+    assert first.digest == second.digest
+    assert first.items == second.items
