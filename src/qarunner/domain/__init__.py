@@ -88,6 +88,7 @@ from qarunner.domain.errors import (
     UnknownObservationConflict,
     VersionConflict,
     WorkerGenerationConflict,
+    WorkerLeaseConflict,
     WorkerNotClaimable,
 )
 from qarunner.domain.event import AttemptEvent
@@ -209,6 +210,7 @@ from qarunner.domain.worker import (
     WorkerRef,
     WorkerState,
 )
+from qarunner.domain.worker_lease import AssignmentLease, LeaseCommand
 
 __all__ = [
     "UnknownReviewActor",
@@ -375,6 +377,9 @@ __all__ = [
     "WorkerGenerationConflict",
     "WorkerNotClaimable",
     "WorkerRef",
+    "WorkerLeaseConflict",
+    "LeaseCommand",
+    "AssignmentLease",
     "WorkerState",
     "WorkEstimate",
     "WorkerAuthority",

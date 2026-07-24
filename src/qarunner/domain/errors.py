@@ -71,6 +71,17 @@ class WorkerNotClaimable(ValueError):
         super().__init__(f"worker {worker_id}/{generation} cannot claim: {reason}")
 
 
+class WorkerLeaseConflict(ValueError):
+    """Raised when a Worker renew/lease command cannot extend the assignment."""
+
+    code = "worker_lease_conflict"
+
+    def __init__(self, *, assignment_id: str, reason: str) -> None:
+        self.assignment_id = assignment_id
+        self.reason = reason
+        super().__init__(f"worker lease conflict for {assignment_id}: {reason}")
+
+
 class EvidenceNotReady(ValueError):
     """Raised when trusted facts are incomplete or contradictory."""
 
