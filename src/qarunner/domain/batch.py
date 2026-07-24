@@ -19,6 +19,8 @@ from qarunner.domain.errors import (
     InvalidTransition,
     ensure_expected_version,
 )
+from qarunner.domain.idempotency import IdempotencyRecord, IdempotencyResolution
+from qarunner.domain.suite import Suite
 
 
 class BatchState(enum.StrEnum):
@@ -562,7 +564,12 @@ class BatchPreexecutionClosureBasis:
 
 @dataclass(frozen=True, slots=True)
 class Batch:
-    """Immutable Batch state; successful commands return a new version."""
+    """Immutable Batch state; successful commands return a new version.
+
+    Create identity fields (`project_id` / `suite_revision_id` / digests / keys)
+    are optional so existing lifecycle-only rehydration paths keep working; the
+    M2 create path always materializes them via `open_for_suite`.
+    """
 
     id: str
     state: BatchState
@@ -570,6 +577,14 @@ class Batch:
     rejection_fact: BatchRejection | None = None
     cancellation_intent: BatchCancellationIntent | None = None
     preexecution_closure_basis: BatchPreexecutionClosureBasis | None = None
+    project_id: str | None = None
+    suite_revision_id: str | None = None
+    request_digest: Digest | None = None
+    idempotency_scope: str | None = None
+    idempotency_key: str | None = None
+    created_at: datetime | None = None
+    priority_class: str = "background"
+    deadline_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -601,6 +616,11 @@ class Batch:
             BatchPreexecutionClosureBasis,
         ):
             _invalid("batch", "preexecution_closure_basis", "invalid_type")
+        _require_create_identity_consistency(self)
+        if not isinstance(self.priority_class, str) or not self.priority_class.strip():
+            _invalid("batch", "priority_class", "invalid")
+        if self.deadline_at is not None:
+            _require_utc("batch", "deadline_at", self.deadline_at)
         basis = self.preexecution_closure_basis
         if basis is None:
             if self.rejection_fact is not None:
@@ -644,10 +664,77 @@ class Batch:
             _invalid("batch", "cancellation_intent", "basis_mismatch")
         _require_cancel_basis_binding(self.cancellation_intent, basis)
 
+    @property
+    def has_create_identity(self) -> bool:
+        return self.request_digest is not None
+
     @classmethod
     def create(cls, *, batch_id: str) -> Batch:
-        """Create a Batch at the initial draft state."""
+        """Create a lifecycle-only Batch at the initial draft state.
+
+        Prefer `open_for_suite` when create identity (project / suite revision /
+        idempotency) must be durable for M2 create/idempotency paths.
+        """
         return cls(id=batch_id, state=BatchState.DRAFT, version=0)
+
+    @classmethod
+    def open_for_suite(
+        cls,
+        *,
+        batch_id: str,
+        suite: Suite,
+        request_digest: Digest,
+        idempotency_scope: str,
+        idempotency_key: str,
+        created_at: datetime,
+        suite_revision_id: str | None = None,
+        priority_class: str = "background",
+        deadline_at: datetime | None = None,
+    ) -> Batch:
+        """Open a draft Batch bound to an active Suite revision (T-M2-BATCH-001)."""
+        if not isinstance(suite, Suite):
+            _invalid("batch", "suite", "not_suite")
+        suite.require_accepts_new_batch()
+        revision_id = suite.current_revision_id if suite_revision_id is None else suite_revision_id
+        suite.revision(revision_id)  # raises SuiteConflict if unknown
+        _require_nonempty_string("batch", "id", batch_id)
+        _require_nonempty_string("batch", "idempotency_scope", idempotency_scope)
+        _require_nonempty_string("batch", "idempotency_key", idempotency_key)
+        _require_digest("batch", "request_digest", request_digest)
+        _require_utc("batch", "created_at", created_at)
+        return cls(
+            id=batch_id,
+            state=BatchState.DRAFT,
+            version=0,
+            project_id=suite.project_id,
+            suite_revision_id=revision_id,
+            request_digest=request_digest,
+            idempotency_scope=idempotency_scope,
+            idempotency_key=idempotency_key,
+            created_at=created_at,
+            priority_class=priority_class,
+            deadline_at=deadline_at,
+        )
+
+    def resolve_create_replay(self, *, request_digest: Digest) -> IdempotencyResolution:
+        """Replay create when the scoped key is reused with the same digest."""
+        if not self.has_create_identity:
+            raise DomainValidationError(
+                entity_type="batch",
+                field="request_digest",
+                reason="create_identity_missing",
+            )
+        assert self.request_digest is not None
+        assert self.idempotency_scope is not None
+        assert self.idempotency_key is not None
+        record = IdempotencyRecord.create(
+            scope=self.idempotency_scope,
+            key=self.idempotency_key,
+            request_digest=self.request_digest,
+            response_status=200,
+            response_ref=self.id,
+        )
+        return record.resolve(request_digest=request_digest)
 
     def transition(self, target: BatchState, *, expected_version: int) -> Batch:
         """Return the next Batch version or reject an illegal state edge."""
@@ -1097,6 +1184,29 @@ def _require_cancel_scope_binding(
 
 def _optional_digest_value(digest: Digest | None) -> str | None:
     return None if digest is None else digest.value
+
+
+def _require_create_identity_consistency(batch: Batch) -> None:
+    """Create-identity fields are all-or-nothing (lifecycle-only Batch may omit them)."""
+    identity = (
+        batch.project_id,
+        batch.suite_revision_id,
+        batch.request_digest,
+        batch.idempotency_scope,
+        batch.idempotency_key,
+        batch.created_at,
+    )
+    present = tuple(value is not None for value in identity)
+    if not any(present):
+        return
+    if not all(present):
+        _invalid("batch", "create_identity", "partial")
+    _require_nonempty_string("batch", "project_id", batch.project_id)
+    _require_nonempty_string("batch", "suite_revision_id", batch.suite_revision_id)
+    _require_digest("batch", "request_digest", batch.request_digest)
+    _require_nonempty_string("batch", "idempotency_scope", batch.idempotency_scope)
+    _require_nonempty_string("batch", "idempotency_key", batch.idempotency_key)
+    _require_utc("batch", "created_at", batch.created_at)
 
 
 def _require_nonempty_string(entity_type: str, field: str, value: object) -> None:
