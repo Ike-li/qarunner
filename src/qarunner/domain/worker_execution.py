@@ -108,3 +108,14 @@ def sandbox_labels_for_proof(proof: CommitStartProof) -> dict[str, str]:
         "qarunner.worker_generation": str(admitted.worker.generation),
         "qarunner.start_commit_key": admitted.start_commit_key,
     }
+
+
+def workspace_subpath_for_proof(proof: CommitStartProof) -> str:
+    """Relative workspace path segment unique to this Attempt (T-M4-ISOLATE-001).
+
+    Binds run/assignment/attempt/fence so a retried Attempt (same attempt_id,
+    higher fence) resolves to a distinct path and can never collide with —
+    and so can never read — a prior Attempt's workspace.
+    """
+    admitted = require_execution_admission(proof=proof)
+    return f"{admitted.run_id}/{admitted.assignment_id}/{admitted.attempt_id}/{admitted.fence}"

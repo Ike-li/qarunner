@@ -115,6 +115,59 @@ def test_sandbox_labels_bind_attempt_and_fence() -> None:
     assert labels["qarunner.worker_generation"] == "1"
 
 
+def test_workspace_subpath_binds_full_attempt_identity() -> None:
+    from qarunner.domain import CommitStartProof, workspace_subpath_for_proof
+
+    proof = CommitStartProof(
+        run_id="run-001",
+        assignment_id="assignment-001",
+        attempt_id="attempt-001",
+        fence=3,
+        start_commit_key="commit-key-1",
+        worker=_worker(),
+        spec_digest=_digest("spec"),
+        committed_at=T0,
+    )
+    subpath = workspace_subpath_for_proof(proof)
+    assert subpath == "run-001/assignment-001/attempt-001/3"
+
+
+def test_workspace_subpath_differs_for_retried_fence() -> None:
+    """T-M4-ISOLATE-001: a retry that reuses attempt_id but bumps fence must
+    still resolve to a distinct workspace path, so it can never collide with
+    (and thus can never read) the prior attempt's workspace."""
+    from qarunner.domain import CommitStartProof, workspace_subpath_for_proof
+
+    first = CommitStartProof(
+        run_id="run-001",
+        assignment_id="assignment-001",
+        attempt_id="attempt-001",
+        fence=1,
+        start_commit_key="commit-key-1",
+        worker=_worker(),
+        spec_digest=_digest("spec"),
+        committed_at=T0,
+    )
+    retried = CommitStartProof(
+        run_id="run-001",
+        assignment_id="assignment-001",
+        attempt_id="attempt-001",
+        fence=2,
+        start_commit_key="commit-key-2",
+        worker=_worker(),
+        spec_digest=_digest("spec"),
+        committed_at=T0,
+    )
+    assert workspace_subpath_for_proof(first) != workspace_subpath_for_proof(retried)
+
+
+def test_workspace_subpath_requires_execution_admission() -> None:
+    from qarunner.domain import ExecutionAdmissionError, workspace_subpath_for_proof
+
+    with pytest.raises(ExecutionAdmissionError):
+        workspace_subpath_for_proof(None)  # type: ignore[arg-type]
+
+
 def test_commit_start_proof_rejects_invalid_identity_fields() -> None:
     from qarunner.domain import CommitStartProof, DomainValidationError
 
