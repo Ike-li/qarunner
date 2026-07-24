@@ -123,6 +123,7 @@ class DockerRunner:
         timeout: int = 1800,
         stdout_file: str | None = None,
         stderr_file: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> ProcessResult:
         start_time = time.monotonic()
         timed_out = False
@@ -208,6 +209,8 @@ class DockerRunner:
                     read_only=True,
                     tmpfs={"/tmp": ""},
                 )
+                if labels:
+                    run_kwargs["labels"] = dict(labels)
                 if is_playwright:
                     # Chromium needs more shared memory than Docker's tiny
                     # default /dev/shm; keep it container-local rather than

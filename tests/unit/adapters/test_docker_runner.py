@@ -590,3 +590,16 @@ async def test_docker_runner_streamer_cancellation_and_sleep() -> None:
 
     assert result.exit_code == 0
     assert result.stdout == "hello"
+
+
+async def test_docker_runner_forwards_labels() -> None:
+    mock_client = MockClient(images_exist=True, wait_status=0)
+    runner = DockerRunner(client=mock_client)
+    await runner.run(
+        ["python", "-m", "pytest"],
+        cwd="/tmp/tests",
+        timeout=10,
+        labels={"qarunner.attempt_id": "attempt-001", "qarunner.fence": "1"},
+    )
+    assert mock_client.run_kwargs["labels"]["qarunner.attempt_id"] == "attempt-001"
+    assert mock_client.run_kwargs["labels"]["qarunner.fence"] == "1"
