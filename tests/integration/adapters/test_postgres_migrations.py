@@ -40,6 +40,7 @@ from qarunner.migrations.versions import (
     m1_greenfield_core,
     m1_greenfield_facts,
     m1_preexecution_proof,
+    m2_suite_aggregate,
 )
 
 _EXPECTED_LEGACY_TABLES = {
@@ -218,6 +219,12 @@ def test_in_process_revision_scripts_execute_upgrade_and_downgrade() -> None:
                     lambda sync: invoke(sync, m1_preexecution_proof, "upgrade")
                 )
                 await sql_connection.run_sync(
+                    lambda sync: invoke(sync, m2_suite_aggregate, "upgrade")
+                )
+                await sql_connection.run_sync(
+                    lambda sync: invoke(sync, m2_suite_aggregate, "downgrade")
+                )
+                await sql_connection.run_sync(
                     lambda sync: invoke(sync, m1_preexecution_proof, "downgrade")
                 )
                 await sql_connection.run_sync(
@@ -368,7 +375,7 @@ def test_migration_config_rejects_unsafe_inputs_and_supports_postgres_urls(
         schema="safe_schema",
     )
     assert config.attributes["qarunner_schema"] == "safe_schema"
-    assert expected_heads() == ("m1_preexecution_proof",)
+    assert expected_heads() == ("m2_suite_aggregate",)
 
 
 @pytest.mark.asyncio
@@ -456,7 +463,7 @@ async def test_empty_schema_upgrade_matches_authorized_catalog(
         await connection.close()
 
     assert tables == {"alembic_version"} | _EXPECTED_LEGACY_TABLES | _EXPECTED_GREENFIELD_TABLES
-    assert revision == "m1_preexecution_proof"
+    assert revision == "m2_suite_aggregate"
     assert [row["version"] for row in legacy_ledger] == list(range(1, 11))
     assert all(len(row["checksum"]) == 64 for row in legacy_ledger)
 
@@ -594,7 +601,7 @@ async def test_application_uow_migration_adds_generic_fact_and_replay_relations(
         ("qep_versioned_fact_commands", "recorded_at"),
     }
     assert len(foreign_keys) == 1
-    assert revision == "m1_preexecution_proof"
+    assert revision == "m2_suite_aggregate"
 
 
 @pytest.mark.asyncio
@@ -748,7 +755,7 @@ async def test_exact_legacy_v10_schema_can_be_adopted_then_upgraded(
         "password_hash": "legacy-hash",
         "role": "user",
     }
-    assert revision == "m1_preexecution_proof"
+    assert revision == "m2_suite_aggregate"
 
 
 @pytest.mark.asyncio
