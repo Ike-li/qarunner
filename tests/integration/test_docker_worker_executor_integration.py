@@ -21,6 +21,7 @@ only — works fine here without needing any host-path-identical location.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -259,3 +260,65 @@ async def test_hard_timeout_is_enforced(docker_client, tmp_path):
     # Actually enforced near the 5s deadline, nowhere close to the full 120s
     # sleep the test body asked for.
     assert elapsed < 60
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_task_stops_the_real_container(docker_client, tmp_path):
+    """T-M4-CANCEL-001: cancelling the asyncio Task awaiting
+    execute_pytest_shard — the same mechanism the legacy orchestrator's own
+    cancel() already relies on (propagating CancelledError into the running
+    execution so its runner's finally block kills the sandbox) — actually
+    stops the real container within a bounded time, not left running for the
+    rest of its original timeout budget."""
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_slow.py").write_text(
+        "import time\n\ndef test_runs_long():\n    time.sleep(120)\n"
+    )
+    workspace_root = tmp_path / "workspaces"
+    executor = DockerWorkerExecutor(
+        runner=DockerRunner(client=docker_client),
+        workspace_root=str(workspace_root),
+    )
+    label_filter = {"label": "qarunner.attempt_id=attempt-cancel-001"}
+
+    task = asyncio.create_task(
+        executor.execute_pytest_shard(
+            proof=_proof(attempt_id="attempt-cancel-001", fence=1),
+            cmd=["python", "-m", "pytest", "-k", "test_runs_long"],
+            cwd=str(source),
+            timeout=180,
+        )
+    )
+
+    # Let the sandbox actually reach "running" before cancelling — proving
+    # cancellation stops a real in-flight container, not just an unstarted one.
+    deadline = time.monotonic() + 30
+    running = []
+    while time.monotonic() < deadline:
+        running = docker_client.containers.list(filters=label_filter)
+        if running:
+            break
+        await asyncio.sleep(0.5)
+    assert running, "expected the sandbox container to appear before cancelling"
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Bounded cleanup window — comfortably inside even the design doc's own
+    # "cancel soft grace 10s / hard cap 120s" bootstrap targets (§6.6),
+    # since a force-kill+remove has no graceful-stop wait built in.
+    deadline = time.monotonic() + 15
+    remaining = running
+    while time.monotonic() < deadline:
+        remaining = docker_client.containers.list(all=True, filters=label_filter)
+        if not remaining:
+            break
+        await asyncio.sleep(0.5)
+    assert not remaining, "sandbox container was not cleaned up after cancellation"
+
+    # The workspace jail is also cleaned up, not leaked.
+    assert not (
+        workspace_root / "run-isolate-001/assignment-isolate-001/attempt-cancel-001/1"
+    ).exists()
