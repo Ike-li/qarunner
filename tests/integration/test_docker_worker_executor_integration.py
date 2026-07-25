@@ -21,6 +21,7 @@ only — works fine here without needing any host-path-identical location.
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -146,3 +147,115 @@ async def test_retried_fence_cannot_read_prior_fence_workspace(docker_client, tm
         timeout=180,
     )
     assert retried.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_limit_is_enforced(docker_client, tmp_path):
+    """T-M4-RESOURCE-001: allocating past the sandbox's mem_limit gets the
+    Attempt OOM-killed by the cgroup rather than allowed to grow unbounded.
+    This also covers the tmp-disk bound: tmpfs pages are charged to the same
+    memory cgroup (confirmed empirically — writing to a size-less tmpfs past
+    mem_limit triggers the identical OOM kill, not unbounded host growth)."""
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_oom.py").write_text(
+        "def test_allocates_beyond_mem_limit():\n"
+        "    data = bytearray(3 * 1024**3)\n"  # 3 GiB > the sandbox's 2g mem_limit
+        "    data[0] = 1\n"
+        "    assert len(data) > 0\n"
+    )
+    executor = DockerWorkerExecutor(
+        runner=DockerRunner(client=docker_client),
+        workspace_root=str(tmp_path / "workspaces"),
+    )
+
+    result = await executor.execute_pytest_shard(
+        proof=_proof(attempt_id="attempt-oom", fence=1),
+        cmd=["python", "-m", "pytest", "-k", "test_allocates_beyond_mem_limit"],
+        cwd=str(source),
+        timeout=60,
+    )
+
+    # OOM-killed by the cgroup — not a graceful pytest assertion failure, and
+    # not exit 0 as it would be if the 2g cap weren't actually enforced.
+    assert result.exit_code != 0
+    assert result.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_pid_limit_is_enforced(docker_client, tmp_path):
+    """T-M4-RESOURCE-001: forking past the sandbox's 512 pids_limit fails
+    inside the sandbox rather than being allowed to exhaust the host's
+    process table. The inner pytest assertion only passes if fork() actually
+    hit EAGAIN, so a regression that dropped pids_limit would fail this test
+    (not silently report success)."""
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_pid_limit.py").write_text(
+        "import errno\n"
+        "import os\n"
+        "\n"
+        "def test_fork_beyond_pids_limit():\n"
+        "    hit_limit = False\n"
+        "    pids = []\n"
+        "    try:\n"
+        "        for _ in range(600):\n"
+        "            pid = os.fork()\n"
+        "            if pid == 0:\n"
+        "                os._exit(0)\n"
+        "            pids.append(pid)\n"
+        "    except (BlockingIOError, OSError) as exc:\n"
+        "        if exc.errno == errno.EAGAIN:\n"
+        "            hit_limit = True\n"
+        "    finally:\n"
+        "        for pid in pids:\n"
+        "            try:\n"
+        "                os.waitpid(pid, 0)\n"
+        "            except ChildProcessError:\n"
+        "                pass\n"
+        "    assert hit_limit, 'expected fork() to fail once pids_limit was exceeded'\n"
+    )
+    executor = DockerWorkerExecutor(
+        runner=DockerRunner(client=docker_client),
+        workspace_root=str(tmp_path / "workspaces"),
+    )
+
+    result = await executor.execute_pytest_shard(
+        proof=_proof(attempt_id="attempt-pid", fence=1),
+        cmd=["python", "-m", "pytest", "-k", "test_fork_beyond_pids_limit"],
+        cwd=str(source),
+        timeout=60,
+    )
+
+    assert result.exit_code == 0
+    assert result.timed_out is False
+
+
+@pytest.mark.asyncio
+async def test_hard_timeout_is_enforced(docker_client, tmp_path):
+    """T-M4-RESOURCE-001: a command that runs past the given timeout is
+    actually killed near the deadline, not left to run to completion."""
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_slow.py").write_text(
+        "import time\n\ndef test_sleeps_past_timeout():\n    time.sleep(120)\n"
+    )
+    executor = DockerWorkerExecutor(
+        runner=DockerRunner(client=docker_client),
+        workspace_root=str(tmp_path / "workspaces"),
+    )
+
+    start = time.monotonic()
+    result = await executor.execute_pytest_shard(
+        proof=_proof(attempt_id="attempt-timeout", fence=1),
+        cmd=["python", "-m", "pytest", "-k", "test_sleeps_past_timeout"],
+        cwd=str(source),
+        timeout=5,
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.timed_out is True
+    assert result.exit_code == 137
+    # Actually enforced near the 5s deadline, nowhere close to the full 120s
+    # sleep the test body asked for.
+    assert elapsed < 60

@@ -227,3 +227,33 @@ async def test_real_container_has_no_network(docker_client, tmp_path):
     # The network call raises (OSError: Network is unreachable) → pytest fails.
     assert result.exit_code != 0
     assert "Network is unreachable" in result.stdout or "unreachable" in result.stdout.lower()
+
+
+@pytest.mark.asyncio
+async def test_real_container_stdout_bounded_in_memory_but_full_on_disk(docker_client, tmp_path):
+    """T-M4-RESOURCE-001: a real container emitting far more than
+    _MAX_LOG_BYTES of stdout must not let the returned ProcessResult grow
+    unbounded (protecting the platform's own process from an OOM), while the
+    full output still lands on stdout_file for anyone who needs all of it."""
+    from qarunner.adapters.docker_runner import _MAX_LOG_BYTES
+
+    tests_dir = tmp_path / "suite"
+    huge_size = _MAX_LOG_BYTES + 2_000_000
+    _write_test(
+        tests_dir,
+        f"def test_emits_huge_output():\n    print('x' * {huge_size})\n",
+    )
+    stdout_file = tmp_path / "logs" / "stdout.log"
+
+    runner = DockerRunner(client=docker_client)
+    result = await runner.run(
+        ["python", "-m", "pytest", "-s"],
+        cwd=str(tests_dir),
+        timeout=180,
+        stdout_file=str(stdout_file),
+    )
+
+    assert result.exit_code == 0
+    assert len(result.stdout.encode()) <= _MAX_LOG_BYTES
+    # The full output landed on disk even though memory was bounded.
+    assert stdout_file.stat().st_size > _MAX_LOG_BYTES
