@@ -261,3 +261,57 @@ async def test_docker_worker_executor_retried_fence_gets_fresh_workspace(
     jailed_cwd = runner.run.await_args.kwargs["cwd"]
     assert jailed_cwd == str(workspace_root / "run-001/assignment-001/attempt-001/2")
     assert not Path(jailed_cwd, "leftover.txt").exists()
+
+
+def test_list_residual_sandbox_observations_maps_labeled_containers() -> None:
+    """T-M4-RESTART-001: residual listing is pure observation over M4 labels."""
+    from qarunner.adapters.docker_worker_executor import list_residual_sandbox_observations
+    from qarunner.domain import ResidualSandboxObservation
+
+    class _C:
+        def __init__(self, cid: str, labels: dict, status: str = "running") -> None:
+            self.id = cid
+            self.labels = labels
+            self.status = status
+
+    full_labels = {
+        "qarunner.run_id": "run-001",
+        "qarunner.assignment_id": "assignment-001",
+        "qarunner.attempt_id": "attempt-001",
+        "qarunner.fence": "2",
+        "qarunner.worker_id": "worker-001",
+        "qarunner.worker_generation": "1",
+        "qarunner.start_commit_key": "commit-key-1",
+    }
+    incomplete = {"qarunner.attempt_id": "attempt-x"}  # missing the rest
+    bad_fence = {**full_labels, "qarunner.fence": "not-int"}
+
+    client = MagicMock()
+    client.containers.list.return_value = [
+        _C("ctr-good", full_labels, "running"),
+        _C("ctr-incomplete", incomplete, "exited"),
+        _C("ctr-bad-fence", bad_fence, "running"),
+        _C("ctr-stopped", {**full_labels, "qarunner.attempt_id": "attempt-002"}, "exited"),
+    ]
+
+    observations = list_residual_sandbox_observations(client, worker_id="worker-001")
+    assert client.containers.list.call_args.kwargs["all"] is True
+    assert "label" in client.containers.list.call_args.kwargs["filters"]
+
+    assert len(observations) == 2
+    assert all(isinstance(o, ResidualSandboxObservation) for o in observations)
+    by_attempt = {o.attempt_id: o for o in observations}
+    assert by_attempt["attempt-001"].container_id == "ctr-good"
+    assert by_attempt["attempt-001"].fence == 2
+    assert by_attempt["attempt-001"].running is True
+    assert by_attempt["attempt-002"].running is False
+    assert "attempt-x" not in by_attempt
+
+
+def test_list_residual_sandbox_observations_without_worker_filter() -> None:
+    from qarunner.adapters.docker_worker_executor import list_residual_sandbox_observations
+
+    client = MagicMock()
+    client.containers.list.return_value = []
+    assert list_residual_sandbox_observations(client) == ()
+    assert client.containers.list.call_args.kwargs["filters"] == {"label": ["qarunner.attempt_id"]}

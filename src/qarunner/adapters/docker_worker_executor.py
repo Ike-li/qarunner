@@ -30,11 +30,79 @@ from qarunner.application.ports.worker_execution import (
 from qarunner.core.paths import safe_subpath
 from qarunner.domain.worker_execution import (
     CommitStartProof,
+    ResidualSandboxObservation,
     require_execution_admission,
     sandbox_labels_for_proof,
     workspace_subpath_for_proof,
 )
 from qarunner.errors import RunnerError
+
+# Label keys stamped by sandbox_labels_for_proof — used both for create and
+# for post-restart residual listing (T-M4-RESTART-001).
+_LABEL_RUN = "qarunner.run_id"
+_LABEL_ASSIGNMENT = "qarunner.assignment_id"
+_LABEL_ATTEMPT = "qarunner.attempt_id"
+_LABEL_FENCE = "qarunner.fence"
+_LABEL_WORKER = "qarunner.worker_id"
+_LABEL_GENERATION = "qarunner.worker_generation"
+_LABEL_COMMIT = "qarunner.start_commit_key"
+
+
+def list_residual_sandbox_observations(
+    client,
+    *,
+    worker_id: str | None = None,
+) -> tuple[ResidualSandboxObservation, ...]:
+    """List residual M4 sandboxes via attempt/fence labels (T-M4-RESTART-001).
+
+    Pure observation helper: never starts, stops, or removes containers. The
+    caller feeds the result into :func:`reconcile_residual_sandboxes` together
+    with the control-plane expected-live set. Filters to containers that carry
+    the full M4 label set; optionally scopes to one ``worker_id``.
+    """
+    filters: dict[str, list[str]] = {"label": [_LABEL_ATTEMPT]}
+    if worker_id is not None:
+        filters["label"] = [_LABEL_ATTEMPT, f"{_LABEL_WORKER}={worker_id}"]
+    containers = client.containers.list(all=True, filters=filters)
+    observations: list[ResidualSandboxObservation] = []
+    for container in containers:
+        labels = getattr(container, "labels", None) or {}
+        required = (
+            _LABEL_RUN,
+            _LABEL_ASSIGNMENT,
+            _LABEL_ATTEMPT,
+            _LABEL_FENCE,
+            _LABEL_WORKER,
+            _LABEL_GENERATION,
+            _LABEL_COMMIT,
+        )
+        if any(key not in labels for key in required):
+            continue
+        try:
+            fence = int(labels[_LABEL_FENCE])
+            generation = int(labels[_LABEL_GENERATION])
+        except (TypeError, ValueError):
+            continue
+        status = getattr(container, "status", "") or ""
+        observations.append(
+            ResidualSandboxObservation(
+                container_id=str(container.id),
+                run_id=labels[_LABEL_RUN],
+                assignment_id=labels[_LABEL_ASSIGNMENT],
+                attempt_id=labels[_LABEL_ATTEMPT],
+                fence=fence,
+                worker_id=labels[_LABEL_WORKER],
+                worker_generation=generation,
+                start_commit_key=labels[_LABEL_COMMIT],
+                running=status == "running",
+            )
+        )
+    return tuple(
+        sorted(
+            observations,
+            key=lambda o: (o.run_id, o.assignment_id, o.attempt_id, o.fence, o.container_id),
+        )
+    )
 
 
 class DockerWorkerExecutor(WorkerExecutor):
