@@ -199,6 +199,12 @@ from qarunner.domain.run_retry_policy import (
     SuiteRetryPolicy,
     evaluate_run_retry,
 )
+from qarunner.domain.secret_delivery import (
+    SecretDelivery,
+    SecretDeliveryLedger,
+    SecretDeliveryState,
+    redact_secret_material,
+)
 from qarunner.domain.suite import Suite, SuiteRevision, SuiteRevisionStatus, SuiteStatus
 from qarunner.domain.target_access import (
     EgressDecision,
@@ -446,6 +452,10 @@ __all__ = [
     "EnvironmentLeaseBook",
     "EnvironmentLeaseState",
     "LeaseDimension",
+    "SecretDelivery",
+    "SecretDeliveryLedger",
+    "SecretDeliveryState",
+    "redact_secret_material",
     "EgressDecision",
     "EgressDenyReason",
     "EgressEvaluation",
