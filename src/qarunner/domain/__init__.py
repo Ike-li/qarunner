@@ -126,9 +126,12 @@ from qarunner.domain.manifest import (
 from qarunner.domain.pytest_execution_result import (
     CaseOutcome,
     DeclaredArtifact,
+    PytestAttemptResult,
+    PytestAttemptResultClass,
     PytestResultAdapterRejected,
     ValidatedCaseResult,
     accept_pytest_execution_result,
+    classify_pytest_attempt_result,
     pytest_nodeid_locator,
     verify_declared_artifact,
 )
@@ -423,9 +426,12 @@ __all__ = [
     "select_latest_authorized_complete_attempt",
     "CaseOutcome",
     "DeclaredArtifact",
+    "PytestAttemptResult",
+    "PytestAttemptResultClass",
     "PytestResultAdapterRejected",
     "ValidatedCaseResult",
     "accept_pytest_execution_result",
+    "classify_pytest_attempt_result",
     "pytest_nodeid_locator",
     "verify_declared_artifact",
 ]

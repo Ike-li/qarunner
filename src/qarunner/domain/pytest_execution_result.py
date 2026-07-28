@@ -20,6 +20,7 @@ from qarunner.domain.errors import ArtifactValidationError, DomainValidationErro
 from qarunner.domain.evidence import (
     ArtifactClass,
     ArtifactPath,
+    PlatformExitClass,
     ValidatedCaseSummary,
     VerifiedArtifact,
 )
@@ -265,4 +266,197 @@ def verify_declared_artifact(
         content_class=declared.content_class,
         size_bytes=recomputed_size,
         digest=recomputed_digest,
+    )
+
+
+# ── T-M4-RESULT-001: Attempt-level classification at the Worker boundary ─────
+
+
+class PytestAttemptResultClass(enum.StrEnum):
+    """Worker-boundary classification of one pytest Attempt.
+
+    Distinct from per-case :class:`CaseOutcome` and from orchestration phase.
+    Maps onto EvidenceOutcome / AttemptState terminal facts:
+
+    - ``passed`` / ``test_failed`` → platform exit COMPLETED + Evidence outcome
+    - ``infra_failed`` → platform exit INFRA_FAILED (dominates case content)
+    - ``cancelled`` → platform exit CANCELLED (needs a separate stop proof at
+      Evidence finalize; this class only records the cancel *signal*)
+    - ``unknown`` → cannot produce a terminal Evidence outcome; control plane
+      must enter the unknown-observation path instead of finalizing
+    """
+
+    PASSED = "passed"
+    TEST_FAILED = "test_failed"
+    INFRA_FAILED = "infra_failed"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class PytestAttemptResult:
+    """Result of :func:`classify_pytest_attempt_result`."""
+
+    result_class: PytestAttemptResultClass
+    platform_exit_class: PlatformExitClass
+    exit_code: int | None
+    timed_out: bool
+    oom: bool
+    cancelled: bool
+    requires_unknown_observation: bool
+
+    @property
+    def timeout(self) -> bool:
+        """Alias matching :class:`TrustedExitFacts.timeout` naming."""
+        return self.timed_out
+
+
+def classify_pytest_attempt_result(
+    *,
+    exit_code: int | None,
+    timed_out: bool,
+    cancelled: bool,
+    case_summary: ValidatedCaseSummary | None,
+    oom: bool = False,
+) -> PytestAttemptResult:
+    """Classify one pytest Attempt from platform process facts + case summary.
+
+    Priority (highest first), kept intentionally parallel to
+    ``evidence._classify_outcome``:
+
+    1. ``cancelled`` → CANCELLED (dominates timeout/case content)
+    2. ``timed_out`` / ``oom`` → INFRA_FAILED (dominates case content)
+    3. missing ``exit_code`` → UNKNOWN (no observed process end)
+    4. missing ``case_summary`` → INFRA_FAILED (plugin never produced results)
+    5. incomplete summary (``not_reported``/``unexpected``) → UNKNOWN
+    6. exit 0 + zero failures → PASSED
+    7. nonzero exit + failures > 0 → TEST_FAILED
+    8. nonzero exit + zero failures → INFRA_FAILED (pytest infra/collection)
+    9. exit 0 + failures > 0 → UNKNOWN (process/summary contradiction)
+    """
+    entity = "pytest_attempt_result"
+    if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
+        raise DomainValidationError(entity_type=entity, field="exit_code", reason="invalid")
+    if not isinstance(timed_out, bool):
+        raise DomainValidationError(entity_type=entity, field="timed_out", reason="not_bool")
+    if not isinstance(cancelled, bool):
+        raise DomainValidationError(entity_type=entity, field="cancelled", reason="not_bool")
+    if not isinstance(oom, bool):
+        raise DomainValidationError(entity_type=entity, field="oom", reason="not_bool")
+    if case_summary is not None and not isinstance(case_summary, ValidatedCaseSummary):
+        raise DomainValidationError(
+            entity_type=entity, field="case_summary", reason="not_validated_case_summary"
+        )
+
+    if cancelled:
+        return _result(
+            PytestAttemptResultClass.CANCELLED,
+            PlatformExitClass.CANCELLED,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            oom=oom,
+            cancelled=True,
+            unknown=False,
+        )
+    if timed_out or oom:
+        return _result(
+            PytestAttemptResultClass.INFRA_FAILED,
+            PlatformExitClass.INFRA_FAILED,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            oom=oom,
+            cancelled=False,
+            unknown=False,
+        )
+    if exit_code is None:
+        return _result(
+            PytestAttemptResultClass.UNKNOWN,
+            PlatformExitClass.INFRA_FAILED,
+            exit_code=None,
+            timed_out=False,
+            oom=False,
+            cancelled=False,
+            unknown=True,
+        )
+    if case_summary is None:
+        return _result(
+            PytestAttemptResultClass.INFRA_FAILED,
+            PlatformExitClass.INFRA_FAILED,
+            exit_code=exit_code,
+            timed_out=False,
+            oom=False,
+            cancelled=False,
+            unknown=False,
+        )
+    incomplete = case_summary.not_reported > 0 or case_summary.unexpected > 0
+    if incomplete:
+        return _result(
+            PytestAttemptResultClass.UNKNOWN,
+            PlatformExitClass.INFRA_FAILED,
+            exit_code=exit_code,
+            timed_out=False,
+            oom=False,
+            cancelled=False,
+            unknown=True,
+        )
+    if exit_code == 0 and case_summary.failed == 0:
+        return _result(
+            PytestAttemptResultClass.PASSED,
+            PlatformExitClass.COMPLETED,
+            exit_code=exit_code,
+            timed_out=False,
+            oom=False,
+            cancelled=False,
+            unknown=False,
+        )
+    if exit_code != 0 and case_summary.failed > 0:
+        return _result(
+            PytestAttemptResultClass.TEST_FAILED,
+            PlatformExitClass.COMPLETED,
+            exit_code=exit_code,
+            timed_out=False,
+            oom=False,
+            cancelled=False,
+            unknown=False,
+        )
+    if exit_code != 0 and case_summary.failed == 0:
+        return _result(
+            PytestAttemptResultClass.INFRA_FAILED,
+            PlatformExitClass.INFRA_FAILED,
+            exit_code=exit_code,
+            timed_out=False,
+            oom=False,
+            cancelled=False,
+            unknown=False,
+        )
+    # exit_code == 0 and case_summary.failed > 0
+    return _result(
+        PytestAttemptResultClass.UNKNOWN,
+        PlatformExitClass.INFRA_FAILED,
+        exit_code=exit_code,
+        timed_out=False,
+        oom=False,
+        cancelled=False,
+        unknown=True,
+    )
+
+
+def _result(
+    result_class: PytestAttemptResultClass,
+    platform_exit_class: PlatformExitClass,
+    *,
+    exit_code: int | None,
+    timed_out: bool,
+    oom: bool,
+    cancelled: bool,
+    unknown: bool,
+) -> PytestAttemptResult:
+    return PytestAttemptResult(
+        result_class=result_class,
+        platform_exit_class=platform_exit_class,
+        exit_code=exit_code,
+        timed_out=timed_out,
+        oom=oom,
+        cancelled=cancelled,
+        requires_unknown_observation=unknown,
     )
