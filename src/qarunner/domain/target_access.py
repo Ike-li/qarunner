@@ -193,6 +193,276 @@ class TargetGrant:
         )
 
 
+# ── T-M5-LEASE-001: Environment Lease under Grant ceiling ────────────────────
+
+
+class LeaseDimension(enum.StrEnum):
+    """What a Lease occupies against the Grant's concurrent unit budget."""
+
+    SESSION = "session"
+    ACCOUNT = "account"
+    TENANT = "tenant"
+    DATA_NAMESPACE = "data_namespace"
+    QPS_TOKEN = "qps_token"
+    DESTRUCTIVE_LANE = "destructive_lane"
+
+
+class EnvironmentLeaseState(enum.StrEnum):
+    ACTIVE = "active"
+    RELEASED = "released"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentLease:
+    """One Attempt's occupancy of a TargetGrant unit budget (DES §8.2)."""
+
+    lease_id: str
+    grant_id: str
+    target_id: str
+    attempt_id: str
+    fence: int
+    dimension: LeaseDimension
+    units: int
+    acquired_at: datetime
+    expires_at: datetime
+    state: EnvironmentLeaseState
+
+    def __post_init__(self) -> None:
+        entity = "environment_lease"
+        for field in ("lease_id", "grant_id", "target_id", "attempt_id"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value.strip():
+                raise DomainValidationError(entity_type=entity, field=field, reason="invalid")
+        if isinstance(self.fence, bool) or not isinstance(self.fence, int) or self.fence < 1:
+            raise DomainValidationError(entity_type=entity, field="fence", reason="invalid")
+        if not isinstance(self.dimension, LeaseDimension):
+            raise DomainValidationError(entity_type=entity, field="dimension", reason="invalid")
+        if isinstance(self.units, bool) or not isinstance(self.units, int) or self.units < 1:
+            raise DomainValidationError(entity_type=entity, field="units", reason="invalid")
+        for field in ("acquired_at", "expires_at"):
+            value = getattr(self, field)
+            if not isinstance(value, datetime):
+                raise DomainValidationError(entity_type=entity, field=field, reason="not_datetime")
+            if value.tzinfo is None or value.utcoffset() != timedelta(0):
+                raise DomainValidationError(entity_type=entity, field=field, reason="not_utc")
+        if self.expires_at <= self.acquired_at:
+            raise DomainValidationError(
+                entity_type=entity, field="expires_at", reason="not_after_acquired_at"
+            )
+        if not isinstance(self.state, EnvironmentLeaseState):
+            raise DomainValidationError(entity_type=entity, field="state", reason="invalid")
+
+    def is_effective_at(self, observed_at: datetime) -> bool:
+        if not isinstance(observed_at, datetime):
+            raise DomainValidationError(
+                entity_type="environment_lease", field="observed_at", reason="not_datetime"
+            )
+        if observed_at.tzinfo is None or observed_at.utcoffset() != timedelta(0):
+            raise DomainValidationError(
+                entity_type="environment_lease", field="observed_at", reason="not_utc"
+            )
+        if self.state is not EnvironmentLeaseState.ACTIVE:
+            return False
+        return self.acquired_at <= observed_at < self.expires_at
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentLeaseBook:
+    """Global unit ledger for one TargetGrant (single fact source, DES §8.2).
+
+    Pure domain: concurrent oversell is rejected by counting active units at
+    the acquire instant. Persistence/adapters must serialize acquires against
+    the same grant_id so this invariant holds under multi-Worker races.
+    """
+
+    grant: TargetGrant
+    leases: tuple[EnvironmentLease, ...]
+
+    def __post_init__(self) -> None:
+        entity = "environment_lease_book"
+        if not isinstance(self.grant, TargetGrant):
+            raise DomainValidationError(
+                entity_type=entity, field="grant", reason="not_target_grant"
+            )
+        if not isinstance(self.leases, tuple) or any(
+            not isinstance(lease, EnvironmentLease) for lease in self.leases
+        ):
+            raise DomainValidationError(entity_type=entity, field="leases", reason="invalid")
+        ids = tuple(lease.lease_id for lease in self.leases)
+        if len(ids) != len(set(ids)):
+            raise DomainValidationError(entity_type=entity, field="leases", reason="duplicate_id")
+        for lease in self.leases:
+            if lease.grant_id != self.grant.grant_id:
+                raise DomainValidationError(
+                    entity_type=entity, field="leases", reason="grant_mismatch"
+                )
+            if lease.target_id != self.grant.target.target_id:
+                raise DomainValidationError(
+                    entity_type=entity, field="leases", reason="target_mismatch"
+                )
+
+    @classmethod
+    def empty(cls, *, grant: TargetGrant) -> EnvironmentLeaseBook:
+        return cls(grant=grant, leases=())
+
+    def lease_by_id(self, lease_id: str) -> EnvironmentLease | None:
+        return next((lease for lease in self.leases if lease.lease_id == lease_id), None)
+
+    def active_units_at(self, observed_at: datetime) -> int:
+        return sum(lease.units for lease in self.leases if lease.is_effective_at(observed_at))
+
+    def acquire(
+        self,
+        *,
+        lease_id: str,
+        attempt_id: str,
+        fence: int,
+        dimension: LeaseDimension,
+        units: int,
+        acquired_at: datetime,
+        ttl: timedelta,
+    ) -> tuple[EnvironmentLeaseBook, EnvironmentLease]:
+        entity = "environment_lease_book"
+        if not isinstance(lease_id, str) or not lease_id.strip():
+            raise DomainValidationError(entity_type=entity, field="lease_id", reason="invalid")
+        if not isinstance(attempt_id, str) or not attempt_id.strip():
+            raise DomainValidationError(entity_type=entity, field="attempt_id", reason="invalid")
+        if isinstance(fence, bool) or not isinstance(fence, int) or fence < 1:
+            raise DomainValidationError(entity_type=entity, field="fence", reason="invalid")
+        if not isinstance(dimension, LeaseDimension):
+            raise DomainValidationError(entity_type=entity, field="dimension", reason="invalid")
+        if isinstance(units, bool) or not isinstance(units, int) or units < 1:
+            raise DomainValidationError(entity_type=entity, field="units", reason="invalid")
+        if not isinstance(acquired_at, datetime):
+            raise DomainValidationError(
+                entity_type=entity, field="acquired_at", reason="not_datetime"
+            )
+        if acquired_at.tzinfo is None or acquired_at.utcoffset() != timedelta(0):
+            raise DomainValidationError(entity_type=entity, field="acquired_at", reason="not_utc")
+        if not isinstance(ttl, timedelta) or ttl <= timedelta(0):
+            raise DomainValidationError(entity_type=entity, field="ttl", reason="invalid")
+        if self.lease_by_id(lease_id) is not None:
+            raise DomainValidationError(entity_type=entity, field="lease_id", reason="duplicate")
+        if not self.grant.is_effective_at(acquired_at):
+            raise DomainValidationError(
+                entity_type=entity, field="grant", reason="grant_not_effective"
+            )
+        if self.active_units_at(acquired_at) + units > self.grant.max_concurrent_units:
+            raise DomainValidationError(entity_type=entity, field="units", reason="oversell")
+        lease = EnvironmentLease(
+            lease_id=lease_id,
+            grant_id=self.grant.grant_id,
+            target_id=self.grant.target.target_id,
+            attempt_id=attempt_id,
+            fence=fence,
+            dimension=dimension,
+            units=units,
+            acquired_at=acquired_at,
+            expires_at=acquired_at + ttl,
+            state=EnvironmentLeaseState.ACTIVE,
+        )
+        return (
+            EnvironmentLeaseBook(grant=self.grant, leases=(*self.leases, lease)),
+            lease,
+        )
+
+    def release(self, *, lease_id: str, released_at: datetime) -> EnvironmentLeaseBook:
+        entity = "environment_lease_book"
+        if not isinstance(released_at, datetime):
+            raise DomainValidationError(
+                entity_type=entity, field="released_at", reason="not_datetime"
+            )
+        if released_at.tzinfo is None or released_at.utcoffset() != timedelta(0):
+            raise DomainValidationError(entity_type=entity, field="released_at", reason="not_utc")
+        current = self.lease_by_id(lease_id)
+        if current is None:
+            raise DomainValidationError(entity_type=entity, field="lease_id", reason="not_found")
+        if current.state is EnvironmentLeaseState.RELEASED:
+            return self  # exact replay
+        if current.state is not EnvironmentLeaseState.ACTIVE:
+            raise DomainValidationError(entity_type=entity, field="lease_id", reason="not_active")
+        updated = replace_lease_state(current, EnvironmentLeaseState.RELEASED)
+        return EnvironmentLeaseBook(
+            grant=self.grant,
+            leases=tuple(
+                updated if lease.lease_id == lease_id else lease for lease in self.leases
+            ),
+        )
+
+    def revoke(self, *, lease_id: str, revoked_at: datetime) -> EnvironmentLeaseBook:
+        entity = "environment_lease_book"
+        if not isinstance(revoked_at, datetime):
+            raise DomainValidationError(
+                entity_type=entity, field="revoked_at", reason="not_datetime"
+            )
+        if revoked_at.tzinfo is None or revoked_at.utcoffset() != timedelta(0):
+            raise DomainValidationError(entity_type=entity, field="revoked_at", reason="not_utc")
+        current = self.lease_by_id(lease_id)
+        if current is None:
+            raise DomainValidationError(entity_type=entity, field="lease_id", reason="not_found")
+        if current.state is EnvironmentLeaseState.REVOKED:
+            return self
+        if current.state is not EnvironmentLeaseState.ACTIVE:
+            raise DomainValidationError(entity_type=entity, field="lease_id", reason="not_active")
+        updated = replace_lease_state(current, EnvironmentLeaseState.REVOKED)
+        return EnvironmentLeaseBook(
+            grant=self.grant,
+            leases=tuple(
+                updated if lease.lease_id == lease_id else lease for lease in self.leases
+            ),
+        )
+
+    def revoke_all_for_grant(self, *, revoked_at: datetime) -> EnvironmentLeaseBook:
+        """Grant suspend/revoke path: every still-active lease becomes REVOKED."""
+        entity = "environment_lease_book"
+        if not isinstance(revoked_at, datetime):
+            raise DomainValidationError(
+                entity_type=entity, field="revoked_at", reason="not_datetime"
+            )
+        if revoked_at.tzinfo is None or revoked_at.utcoffset() != timedelta(0):
+            raise DomainValidationError(entity_type=entity, field="revoked_at", reason="not_utc")
+        leases = tuple(
+            replace_lease_state(lease, EnvironmentLeaseState.REVOKED)
+            if lease.state is EnvironmentLeaseState.ACTIVE
+            else lease
+            for lease in self.leases
+        )
+        return EnvironmentLeaseBook(grant=self.grant, leases=leases)
+
+    def expire_due(self, *, observed_at: datetime) -> EnvironmentLeaseBook:
+        entity = "environment_lease_book"
+        if not isinstance(observed_at, datetime):
+            raise DomainValidationError(
+                entity_type=entity, field="observed_at", reason="not_datetime"
+            )
+        if observed_at.tzinfo is None or observed_at.utcoffset() != timedelta(0):
+            raise DomainValidationError(entity_type=entity, field="observed_at", reason="not_utc")
+        leases = tuple(
+            replace_lease_state(lease, EnvironmentLeaseState.EXPIRED)
+            if lease.state is EnvironmentLeaseState.ACTIVE and observed_at >= lease.expires_at
+            else lease
+            for lease in self.leases
+        )
+        return EnvironmentLeaseBook(grant=self.grant, leases=leases)
+
+
+def replace_lease_state(lease: EnvironmentLease, state: EnvironmentLeaseState) -> EnvironmentLease:
+    return EnvironmentLease(
+        lease_id=lease.lease_id,
+        grant_id=lease.grant_id,
+        target_id=lease.target_id,
+        attempt_id=lease.attempt_id,
+        fence=lease.fence,
+        dimension=lease.dimension,
+        units=lease.units,
+        acquired_at=lease.acquired_at,
+        expires_at=lease.expires_at,
+        state=state,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class EgressEvaluation:
     """Audit-ready allow/deny for one destination hop."""
