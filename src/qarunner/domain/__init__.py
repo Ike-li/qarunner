@@ -126,13 +126,16 @@ from qarunner.domain.manifest import (
 from qarunner.domain.pytest_execution_result import (
     CaseOutcome,
     DeclaredArtifact,
+    DeclaredArtifactPart,
     PytestAttemptResult,
     PytestAttemptResultClass,
     PytestResultAdapterRejected,
     ValidatedCaseResult,
     accept_pytest_execution_result,
     classify_pytest_attempt_result,
+    complete_declared_artifact_parts,
     pytest_nodeid_locator,
+    trusted_exit_facts_from_pytest_result,
     verify_declared_artifact,
 )
 from qarunner.domain.rbac import (
@@ -426,12 +429,15 @@ __all__ = [
     "select_latest_authorized_complete_attempt",
     "CaseOutcome",
     "DeclaredArtifact",
+    "DeclaredArtifactPart",
     "PytestAttemptResult",
     "PytestAttemptResultClass",
     "PytestResultAdapterRejected",
     "ValidatedCaseResult",
     "accept_pytest_execution_result",
     "classify_pytest_attempt_result",
+    "complete_declared_artifact_parts",
     "pytest_nodeid_locator",
+    "trusted_exit_facts_from_pytest_result",
     "verify_declared_artifact",
 ]

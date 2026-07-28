@@ -21,6 +21,7 @@ from qarunner.domain.evidence import (
     ArtifactClass,
     ArtifactPath,
     PlatformExitClass,
+    TrustedExitFacts,
     ValidatedCaseSummary,
     VerifiedArtifact,
 )
@@ -266,6 +267,140 @@ def verify_declared_artifact(
         content_class=declared.content_class,
         size_bytes=recomputed_size,
         digest=recomputed_digest,
+    )
+
+
+# ── T-M4-EVIDENCE-001: multi-part declared digests (same-host Upload Session) ─
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredArtifactPart:
+    """One declared upload part — untrusted until recomputed locally.
+
+    Mirrors DES §7.3's per-part SHA-256 check for the same-host vertical
+    slice: multi-host pre-signed upload sessions are not yet built; this
+    type is the domain-level part-digest contract those sessions will also
+    feed.
+    """
+
+    part_no: int
+    size_bytes: int
+    digest: Digest
+
+    def __post_init__(self) -> None:
+        if isinstance(self.part_no, bool) or not isinstance(self.part_no, int) or self.part_no < 1:
+            raise ArtifactValidationError(field="part_no", reason="must be positive")
+        if (
+            isinstance(self.size_bytes, bool)
+            or not isinstance(self.size_bytes, int)
+            or self.size_bytes < 0
+        ):
+            raise ArtifactValidationError(field="size_bytes", reason="must be non-negative")
+        if not isinstance(self.digest, Digest):
+            raise ArtifactValidationError(field="digest", reason="not_digest")
+
+
+def complete_declared_artifact_parts(
+    *,
+    path: ArtifactPath,
+    content_class: ArtifactClass,
+    declared_parts: Sequence[DeclaredArtifactPart],
+    declared_total_digest: Digest,
+    recomputed_parts: Sequence[tuple[Digest, int]],
+    recomputed_total_digest: Digest,
+) -> VerifiedArtifact:
+    """Promote multi-part declared digests only when every part and the total
+    recompute. Contiguous ``part_no`` starting at 1 is required; any mismatch
+    raises — the caller must not invent a VerifiedArtifact and therefore
+    cannot reach a terminal Evidence finalize (T-M4-EVIDENCE-001)."""
+    if not isinstance(path, ArtifactPath):
+        raise ArtifactValidationError(field="path", reason="not_artifact_path")
+    if not isinstance(content_class, ArtifactClass):
+        raise ArtifactValidationError(field="content_class", reason="not_artifact_class")
+    if not isinstance(declared_total_digest, Digest) or not isinstance(
+        recomputed_total_digest, Digest
+    ):
+        raise ArtifactValidationError(field="total_digest", reason="not_digest")
+    if not isinstance(declared_parts, (tuple, list)) or not declared_parts:
+        raise ArtifactValidationError(field="parts", reason="empty")
+    if any(not isinstance(part, DeclaredArtifactPart) for part in declared_parts):
+        raise ArtifactValidationError(field="parts", reason="invalid_member")
+    if not isinstance(recomputed_parts, (tuple, list)):
+        raise ArtifactValidationError(field="recomputed_parts", reason="invalid")
+    if len(declared_parts) != len(recomputed_parts):
+        raise ArtifactValidationError(field="parts", reason="count_mismatch")
+
+    for index, part in enumerate(declared_parts, start=1):
+        if part.part_no != index:
+            raise ArtifactValidationError(field="part_no", reason="not_contiguous")
+        recomputed_digest, recomputed_size = recomputed_parts[index - 1]
+        if not isinstance(recomputed_digest, Digest) or (
+            isinstance(recomputed_size, bool) or not isinstance(recomputed_size, int)
+        ):
+            raise ArtifactValidationError(field="recomputed_parts", reason="invalid_member")
+        if part.digest != recomputed_digest or part.size_bytes != recomputed_size:
+            raise ArtifactValidationError(
+                field="part_digest", reason="declared_mismatch_recomputed"
+            )
+
+    if declared_total_digest != recomputed_total_digest:
+        raise ArtifactValidationError(field="total_digest", reason="declared_mismatch_recomputed")
+
+    return VerifiedArtifact(
+        path=path,
+        content_class=content_class,
+        size_bytes=sum(part.size_bytes for part in declared_parts),
+        digest=recomputed_total_digest,
+    )
+
+
+def trusted_exit_facts_from_pytest_result(
+    *,
+    result: PytestAttemptResult,
+    source_event_id: str,
+    pid: int | None,
+) -> TrustedExitFacts | None:
+    """Map a Worker-boundary classification onto platform-owned exit facts.
+
+    Returns ``None`` for ``unknown`` — those Attempts must enter the
+    unknown-observation path, not Evidence finalize. Cancelled/infra/completed
+    classifications produce a matching :class:`PlatformExitClass` with the
+    timeout/oom flags carried through; Evidence finalize still requires a
+    separate cancellation stop proof for CANCELLED (this helper only records
+    the exit class).
+    """
+    if not isinstance(result, PytestAttemptResult):
+        raise DomainValidationError(
+            entity_type="trusted_exit_facts",
+            field="result",
+            reason="not_pytest_attempt_result",
+        )
+    if not isinstance(source_event_id, str) or not source_event_id.strip():
+        raise DomainValidationError(
+            entity_type="trusted_exit_facts",
+            field="source_event_id",
+            reason="invalid",
+        )
+    if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0):
+        raise DomainValidationError(
+            entity_type="trusted_exit_facts", field="pid", reason="invalid"
+        )
+    if result.result_class is PytestAttemptResultClass.UNKNOWN:
+        return None
+    if result.result_class is PytestAttemptResultClass.CANCELLED:
+        exit_class = PlatformExitClass.CANCELLED
+    elif result.result_class is PytestAttemptResultClass.INFRA_FAILED:
+        exit_class = PlatformExitClass.INFRA_FAILED
+    else:
+        exit_class = PlatformExitClass.COMPLETED
+    return TrustedExitFacts(
+        source_event_id=source_event_id,
+        pid=pid,
+        exit_class=exit_class,
+        exit_code=result.exit_code,
+        signal=None,
+        oom=result.oom,
+        timeout=result.timed_out,
     )
 
 
