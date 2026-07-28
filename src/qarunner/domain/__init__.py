@@ -200,6 +200,15 @@ from qarunner.domain.run_retry_policy import (
     evaluate_run_retry,
 )
 from qarunner.domain.suite import Suite, SuiteRevision, SuiteRevisionStatus, SuiteStatus
+from qarunner.domain.target_access import (
+    EgressDecision,
+    EgressDenyReason,
+    EgressEvaluation,
+    TargetGrant,
+    TargetGrantState,
+    TargetSpec,
+    evaluate_egress_request,
+)
 from qarunner.domain.unknown import (
     UnknownAdjudication,
     UnknownAdjudicationDecision,
@@ -426,6 +435,13 @@ __all__ = [
     "WorkerState",
     "WorkEstimate",
     "WorkerAuthority",
+    "TargetGrant",
+    "TargetGrantState",
+    "TargetSpec",
+    "EgressDecision",
+    "EgressDenyReason",
+    "EgressEvaluation",
+    "evaluate_egress_request",
     "canonical_digest",
     "accept_collection_adapter_result",
     "authorize",
