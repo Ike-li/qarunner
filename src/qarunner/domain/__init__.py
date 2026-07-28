@@ -123,6 +123,15 @@ from qarunner.domain.manifest import (
     WorkEstimate,
     plan_single_shard,
 )
+from qarunner.domain.pytest_execution_result import (
+    CaseOutcome,
+    DeclaredArtifact,
+    PytestResultAdapterRejected,
+    ValidatedCaseResult,
+    accept_pytest_execution_result,
+    pytest_nodeid_locator,
+    verify_declared_artifact,
+)
 from qarunner.domain.rbac import (
     AuthorizationAction,
     AuthorizationDecision,
@@ -412,4 +421,11 @@ __all__ = [
     "consume_duplicate_risk_acceptance",
     "build_evidence_manifest",
     "select_latest_authorized_complete_attempt",
+    "CaseOutcome",
+    "DeclaredArtifact",
+    "PytestResultAdapterRejected",
+    "ValidatedCaseResult",
+    "accept_pytest_execution_result",
+    "pytest_nodeid_locator",
+    "verify_declared_artifact",
 ]

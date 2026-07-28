@@ -890,7 +890,12 @@ class BatchFinalizationBasis:
             for entry in resolution_set.entries
             if entry.source_kind is BatchItemSourceKind.NOT_EXECUTED
         )
-        if len(non_run_refs) != len(not_executed_entries):
+        # Unreachable once the NOT_EXECUTED/RUN_FANOUT branches above have
+        # accepted every scope fact: each NOT_EXECUTED scope fact requires an
+        # exact matching NOT_EXECUTED resolution entry (and RUN_FANOUT facts
+        # refuse a NOT_EXECUTED entry), so the two collections are forced equal.
+        # Kept as defense-in-depth for a future caller that loosens those checks.
+        if len(non_run_refs) != len(not_executed_entries):  # pragma: no cover
             _invalid(entity, "cancellation_scope_items", "not_executed_coverage_mismatch")
         terminal_refs_tuple = tuple(sorted(terminal_refs, key=lambda ref: ref.run_id))
         non_run_refs_tuple = tuple(sorted(non_run_refs, key=lambda ref: ref.item_key))

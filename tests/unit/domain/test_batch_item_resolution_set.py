@@ -227,6 +227,13 @@ def test_set_rejects_wrong_manifest_and_untyped_collections() -> None:
         _set(entries=(object(),))
 
 
+def test_build_rejects_duplicate_expected_item_keys() -> None:
+    from qarunner.domain import RunItemKey
+
+    with pytest.raises(ValueError, match="duplicate_key"):
+        _set(expected=(RunItemKey("manifest-1", 0), RunItemKey("manifest-1", 0)))
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

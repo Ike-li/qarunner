@@ -63,7 +63,7 @@ exclude_also = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
     "raise NotImplementedError",
-    "\\.\\.\\.",          # Protocol method stubs
+    "^\\s*\\.\\.\\.\\s*(#.*)?$",          # Protocol method stubs (whole-line only)
     'if __name__ == "__main__":',
     "pragma: no cover",
 ]

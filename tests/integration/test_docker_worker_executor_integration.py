@@ -32,7 +32,13 @@ docker = pytest.importorskip("docker")
 
 from qarunner.adapters.docker_runner import DockerRunner  # noqa: E402
 from qarunner.adapters.docker_worker_executor import DockerWorkerExecutor  # noqa: E402
-from qarunner.domain import CommitStartProof, WorkerRef, canonical_digest  # noqa: E402
+from qarunner.adapters.pytest_result_adapter import load_validated_pytest_result  # noqa: E402
+from qarunner.domain import (  # noqa: E402
+    CaseOutcome,
+    CommitStartProof,
+    WorkerRef,
+    canonical_digest,
+)
 
 pytestmark = pytest.mark.docker
 
@@ -322,3 +328,71 @@ async def test_cancelling_the_task_stops_the_real_container(docker_client, tmp_p
     assert not (
         workspace_root / "run-isolate-001/assignment-isolate-001/attempt-cancel-001/1"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_canonical_plugin_produces_validated_results_through_a_real_container(
+    docker_client, tmp_path
+):
+    """T-M4-PYTEST-ADAPTER-001: the plugin baked into the executor image (see
+    ``Dockerfile``) is loadable via ``-p qarunner_canonical_plugin`` against
+    the real, rebuilt image, and its case-results.json — pulled back by
+    DockerRunner's existing get_archive step, no new extraction path — round-
+    trips through ``load_validated_pytest_result`` into the expected per-case
+    outcomes and aggregate counts. This is the real proof the caller-side
+    wiring (adding the plugin flag + env var to cmd/env) actually works
+    end-to-end, not just against a mock."""
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_mixed.py").write_text(
+        "import pytest\n"
+        "\n"
+        "def test_pass():\n"
+        "    assert True\n"
+        "\n"
+        "def test_fail():\n"
+        "    assert False\n"
+        "\n"
+        "def test_skip():\n"
+        "    pytest.skip('nope')\n"
+    )
+    results_dir = tmp_path / "results"
+    executor = DockerWorkerExecutor(
+        runner=DockerRunner(client=docker_client),
+        workspace_root=str(tmp_path / "workspaces"),
+    )
+
+    result = await executor.execute_pytest_shard(
+        proof=_proof(attempt_id="attempt-pytest-adapter", fence=1),
+        cmd=[
+            "python",
+            "-m",
+            "pytest",
+            "-p",
+            "qarunner_canonical_plugin",
+            f"--junitxml={results_dir}/junit.xml",
+        ],
+        cwd=str(source),
+        env={"QARUNNER_CASE_RESULTS_PATH": f"{results_dir}/case-results.json"},
+        timeout=60,
+    )
+
+    assert result.exit_code == 1  # one real failure among the three cases
+    assert result.timed_out is False
+
+    loaded = load_validated_pytest_result(str(results_dir), exit_code=result.exit_code)
+    assert loaded is not None
+    cases, summary = loaded
+    by_id = {case.stable_case_id: case for case in cases}
+    assert set(by_id) == {
+        "test_mixed.py::test_pass",
+        "test_mixed.py::test_fail",
+        "test_mixed.py::test_skip",
+    }
+    assert by_id["test_mixed.py::test_pass"].outcome is CaseOutcome.PASSED
+    assert by_id["test_mixed.py::test_fail"].outcome is CaseOutcome.FAILED
+    assert by_id["test_mixed.py::test_skip"].outcome is CaseOutcome.SKIPPED
+    assert summary.expected == 3
+    assert summary.passed == 1
+    assert summary.failed == 1
+    assert summary.skipped == 1

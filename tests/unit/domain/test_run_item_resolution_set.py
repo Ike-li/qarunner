@@ -128,6 +128,11 @@ def test_build_rejects_non_resolution_entries_with_stable_domain_error() -> None
         _set(entries=(object(),), expected=(_entry(0).item_key,))
 
 
+def test_build_rejects_non_run_item_key_expected_keys() -> None:
+    with pytest.raises(ValueError, match="expected_item_keys"):
+        _set(expected=(object(),))
+
+
 def test_envelope_and_optional_chain_digests_are_typed() -> None:
     with pytest.raises(ValueError, match="batch_id"):
         _set(batch_id="")
@@ -282,6 +287,49 @@ def test_selector_validates_expected_keys_run_identity_and_original_fence() -> N
         select_latest_authorized_complete_attempt(
             expected_item_keys=(_entry(0).item_key, _entry(1).item_key),
             **(common | {"original_attempt_fence": 2}),
+        )
+
+
+def test_selector_rejects_empty_or_non_tuple_attempts() -> None:
+    from qarunner.domain import select_latest_authorized_complete_attempt
+
+    common = {
+        "expected_item_keys": (_entry(0).item_key, _entry(1).item_key),
+        "run_item_set_digest": _digest("items"),
+        "original_attempt_no": 1,
+        "original_attempt_fence": 1,
+        "run_id": "run-1",
+    }
+    for attempts in ((), []):
+        with pytest.raises(ValueError, match="attempts"):
+            select_latest_authorized_complete_attempt(attempts=attempts, **common)
+
+
+def test_selector_rejects_a_non_verified_attempt_member() -> None:
+    from qarunner.domain import select_latest_authorized_complete_attempt
+
+    with pytest.raises(ValueError, match="attempts"):
+        select_latest_authorized_complete_attempt(
+            expected_item_keys=(_entry(0).item_key, _entry(1).item_key),
+            run_item_set_digest=_digest("items"),
+            original_attempt_no=1,
+            original_attempt_fence=1,
+            attempts=(object(),),
+            run_id="run-1",
+        )
+
+
+def test_selector_rejects_an_attempt_carrying_a_cross_run_item() -> None:
+    from qarunner.domain import select_latest_authorized_complete_attempt
+
+    with pytest.raises(ValueError, match="cross_run_item"):
+        select_latest_authorized_complete_attempt(
+            expected_item_keys=(_entry(0).item_key,),
+            run_item_set_digest=_digest("items"),
+            original_attempt_no=1,
+            original_attempt_fence=1,
+            attempts=(_retry_attempt(2, indexes=(0, 1)),),
+            run_id="run-1",
         )
 
 

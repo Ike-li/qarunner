@@ -2505,6 +2505,180 @@ def test_run_owned_cancel_finalize_requires_a_run_cancellation_intent() -> None:
     assert caught.value.reason == "cancellation intent is missing"
 
 
+def test_run_owned_cancel_finalize_rejects_a_non_trusted_stop_value() -> None:
+    import pytest
+
+    from qarunner.domain import EvidenceNotReady
+
+    requested, worker = _cancel_requested_uploading_run()
+    assert requested.cancel_intent is not None
+    stop = _trusted_cancellation_stop(
+        worker=worker.ref,
+        intent_digest=requested.cancel_intent.digest,
+    )
+    proposal, trusted_exit, requirements = _cancel_finalize_inputs(
+        run=requested,
+        stop=stop,
+    )
+    attempt = requested.attempts[-1]
+
+    with pytest.raises(EvidenceNotReady) as caught:
+        requested.finalize_cancelled_attempt_evidence(
+            attempt_id=attempt.id,
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            cancellation_stop="not-a-trusted-stop",  # type: ignore[arg-type]
+            case_summary=None,
+            artifacts=(),
+            requirements=requirements,
+            authority=None,
+            worker=worker.ref,
+            fence=attempt.fence,
+            expected_version=requested.version,
+            expected_attempt_version=attempt.version,
+        )
+
+    assert caught.value.reason == "trusted cancellation stop proof is invalid"
+
+
+def test_run_owned_cancel_finalize_rejects_a_stale_stop_already_converged_on_run() -> None:
+    """A Run that already carries a cancellation_stop cannot be re-finalized with a
+    non-replay payload — including corrupt in-memory states that bypassed
+    rehydration guards (e.g. stop recorded while the Attempt is still uploading)."""
+    from dataclasses import fields
+
+    import pytest
+
+    from qarunner.domain import AttemptAuthority, EvidenceNotReady
+
+    requested, worker = _cancel_requested_uploading_run()
+    assert requested.cancel_intent is not None
+    stop = _trusted_cancellation_stop(
+        worker=worker.ref,
+        intent_digest=requested.cancel_intent.digest,
+    )
+    proposal, trusted_exit, requirements = _cancel_finalize_inputs(
+        run=requested,
+        stop=stop,
+    )
+    attempt = requested.attempts[-1]
+
+    # Corrupt-store shape: stop fact is already attached, but the Attempt is still
+    # UPLOADING and the Run is still RUNNING — not a legal rehydrated aggregate.
+    corrupt = object.__new__(type(requested))
+    for field in fields(requested):
+        object.__setattr__(
+            corrupt,
+            field.name,
+            stop if field.name == "cancellation_stop" else getattr(requested, field.name),
+        )
+
+    with pytest.raises(EvidenceNotReady) as caught:
+        corrupt.finalize_cancelled_attempt_evidence(
+            attempt_id=attempt.id,
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            cancellation_stop=stop,
+            case_summary=None,
+            artifacts=(),
+            requirements=requirements,
+            authority=AttemptAuthority(
+                current_fence=attempt.fence,
+                current_worker=worker.ref,
+            ),
+            worker=worker.ref,
+            fence=attempt.fence,
+            expected_version=requested.version,
+            expected_attempt_version=attempt.version,
+        )
+
+    assert caught.value.reason == "run cancellation is already converged"
+
+
+def test_run_owned_cancel_finalize_requires_running_when_first_converging() -> None:
+    """First-time cancel finalization is only legal from RUNNING; a non-RUNNING
+    cancel-intent carrier (corrupt store) must fail closed before mutating."""
+    from dataclasses import fields
+
+    import pytest
+
+    from qarunner.domain import AttemptAuthority, InvalidTransition, RunState
+
+    requested, worker = _cancel_requested_uploading_run()
+    assert requested.cancel_intent is not None
+    stop = _trusted_cancellation_stop(
+        worker=worker.ref,
+        intent_digest=requested.cancel_intent.digest,
+    )
+    proposal, trusted_exit, requirements = _cancel_finalize_inputs(
+        run=requested,
+        stop=stop,
+    )
+    attempt = requested.attempts[-1]
+
+    corrupt = object.__new__(type(requested))
+    for field in fields(requested):
+        value = getattr(requested, field.name)
+        if field.name == "state":
+            value = RunState.QUEUED
+        elif field.name == "current_assignment_id":
+            value = None
+        object.__setattr__(corrupt, field.name, value)
+
+    with pytest.raises(InvalidTransition) as caught:
+        corrupt.finalize_cancelled_attempt_evidence(
+            attempt_id=attempt.id,
+            proposal=proposal,
+            trusted_exit=trusted_exit,
+            cancellation_stop=stop,
+            case_summary=None,
+            artifacts=(),
+            requirements=requirements,
+            authority=AttemptAuthority(
+                current_fence=attempt.fence,
+                current_worker=worker.ref,
+            ),
+            worker=worker.ref,
+            fence=attempt.fence,
+            expected_version=requested.version,
+            expected_attempt_version=attempt.version,
+        )
+
+    assert caught.value.current_state is RunState.QUEUED
+    assert caught.value.requested_state is RunState.CANCELLED
+
+
+def test_replace_current_assignment_requires_the_live_current_id() -> None:
+    """Internal assignment swap refuses a non-current or missing Assignment id —
+    public claim/close paths cannot reach these branches without a corrupt store,
+    so we exercise the guard through the same unsafe-replace pattern used elsewhere."""
+    from dataclasses import fields, replace
+
+    import pytest
+
+    from qarunner.domain import AssignmentConflict
+    from tests.unit.domain.test_assignment_precommit_closure import _offered_initial
+
+    offered, _worker = _offered_initial()
+    current = offered.assignment
+    assert current is not None
+
+    with pytest.raises(AssignmentConflict) as wrong_id:
+        offered._replace_current_assignment(replace(current, id="assignment-other"))
+    assert wrong_id.value.reason == "current_assignment_missing"
+
+    stripped = object.__new__(type(offered))
+    for field in fields(offered):
+        object.__setattr__(
+            stripped,
+            field.name,
+            () if field.name == "assignments" else getattr(offered, field.name),
+        )
+    with pytest.raises(AssignmentConflict) as missing:
+        stripped._replace_current_assignment(current)
+    assert missing.value.reason == "current_assignment_missing"
+
+
 def test_late_cancel_stop_proof_cannot_rewrite_unknown_attempt() -> None:
     import pytest
 

@@ -511,6 +511,17 @@ def test_manifest_rehydration_rejects_mutable_item_container() -> None:
     assert caught.value.reason == "not_tuple"
 
 
+def test_manifest_rehydration_rejects_wrong_item_type_within_tuple() -> None:
+    from qarunner.domain import DomainValidationError
+
+    manifest = _representative_manifest()
+    with pytest.raises(DomainValidationError) as caught:
+        replace(manifest, items=(*manifest.items, "bad"))  # type: ignore[arg-type]
+
+    assert caught.value.field == "items"
+    assert caught.value.reason == "invalid_type"
+
+
 @pytest.mark.parametrize("case", ["inputs", "items"])
 def test_manifest_factory_rejects_wrong_nested_types_stably(case: str) -> None:
     from qarunner.domain import CaseManifest, DomainValidationError
@@ -842,6 +853,23 @@ def test_plan_rehydration_rejects_mutable_shard_container() -> None:
     assert caught.value.reason == "not_tuple"
 
 
+def test_plan_rehydration_rejects_wrong_shard_type_within_tuple() -> None:
+    from qarunner.domain import DomainValidationError
+
+    manifest = _representative_manifest()
+    plan = _plan(
+        manifest,
+        _shard(0, (0, 1), estimated_duration_ms=200),
+        _shard(1, (2, 3), estimated_duration_ms=200),
+    )
+
+    with pytest.raises(DomainValidationError) as caught:
+        replace(plan, shards=(*plan.shards, "bad"))  # type: ignore[arg-type]
+
+    assert caught.value.field == "shards"
+    assert caught.value.reason == "invalid_type"
+
+
 @pytest.mark.parametrize("case", ["manifest", "shards"])
 def test_plan_factory_rejects_wrong_nested_types_stably(case: str) -> None:
     from qarunner.domain import DomainValidationError, ShardPlan
@@ -1160,9 +1188,12 @@ def test_plan_single_shard_thirty_thousand_items() -> None:
     assert summary.manifest_digest == manifest.digest
 
 
-
 def test_reconciliation_summary_rejects_empty_item_count() -> None:
-    from qarunner.domain import DomainValidationError, ManifestReconciliationSummary, canonical_digest
+    from qarunner.domain import (
+        DomainValidationError,
+        ManifestReconciliationSummary,
+        canonical_digest,
+    )
 
     with pytest.raises(DomainValidationError) as caught:
         ManifestReconciliationSummary(

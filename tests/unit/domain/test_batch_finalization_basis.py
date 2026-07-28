@@ -524,3 +524,181 @@ def test_direct_basis_cannot_drop_required_run_non_run_unknown_or_cancel_refs() 
     unknown = BatchFinalizationBasis.build(**_unknown_basis_inputs())
     with pytest.raises(ValueError, match="unknown_fact_refs"):
         replace(unknown, unknown_fact_refs=())
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("resolution_set", object(), "invalid"),
+        ("policy", object(), "invalid"),
+        ("evaluation", object(), "invalid"),
+        ("run_resolution_sets", object(), "invalid"),
+        ("run_resolution_sets", (object(),), "invalid"),
+        ("run_bases", object(), "invalid"),
+        ("run_bases", (object(),), "invalid"),
+    ],
+)
+def test_basis_builder_rejects_untyped_core_inputs(field, value, reason) -> None:
+    from qarunner.domain import BatchFinalizationBasis, DomainValidationError
+
+    inputs = _basis_inputs()
+    inputs[field] = value
+    with pytest.raises(DomainValidationError) as caught:
+        BatchFinalizationBasis.build(**inputs)
+    assert caught.value.field == field
+    assert caught.value.reason == reason
+
+
+def test_basis_builder_rejects_evaluation_counts_and_policy_digest_drift() -> None:
+    from qarunner.domain import (
+        BatchFinalizationBasis,
+        BatchResolutionCounts,
+        DomainValidationError,
+    )
+
+    inputs = _basis_inputs()
+    drifted_counts = BatchResolutionCounts(2, 2, 0, 0, 0, 0, 0)
+    with pytest.raises(DomainValidationError) as counts_caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "evaluation": replace(inputs["evaluation"], counts=drifted_counts),
+            }
+        )
+    assert counts_caught.value.field == "evaluation"
+    assert counts_caught.value.reason == "counts_mismatch"
+
+    with pytest.raises(DomainValidationError) as policy_caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "evaluation": replace(inputs["evaluation"], policy_digest=_digest("other-policy")),
+            }
+        )
+    assert policy_caught.value.field == "evaluation"
+    assert policy_caught.value.reason == "policy_mismatch"
+
+
+def test_basis_builder_rejects_run_bases_set_and_envelope_and_item_overlap() -> None:
+    from qarunner.domain import BatchFinalizationBasis, DomainValidationError
+    from tests.unit.application.test_finalize_run import bound_basis
+
+    inputs = _basis_inputs()
+    with pytest.raises(DomainValidationError) as set_caught:
+        BatchFinalizationBasis.build(**{**inputs, "run_bases": ()})
+    assert set_caught.value.field == "run_bases"
+    assert set_caught.value.reason == "run_set_mismatch"
+
+    with pytest.raises(DomainValidationError) as envelope_caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "run_resolution_sets": (
+                    replace(inputs["run_resolution_sets"][0], batch_id="batch-forged"),
+                ),
+            }
+        )
+    assert envelope_caught.value.field == "run_resolution_sets"
+    assert envelope_caught.value.reason == "envelope_mismatch"
+
+    second_set = replace(inputs["run_resolution_sets"][0], run_id="run-2")
+    second_basis = bound_basis(second_set)
+    with pytest.raises(DomainValidationError) as overlap_caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "run_resolution_sets": inputs["run_resolution_sets"] + (second_set,),
+                "run_bases": inputs["run_bases"] + (second_basis,),
+                "resolution_set": replace(
+                    inputs["resolution_set"],
+                    canonical_run_set_digest=_canonical_run_set(
+                        inputs["resolution_set"].batch_id, "run-1", "run-2"
+                    ),
+                ),
+            }
+        )
+    assert overlap_caught.value.field == "run_resolution_sets"
+    assert overlap_caught.value.reason == "item_overlap"
+
+
+def test_basis_builder_rejects_run_item_resolution_mismatch() -> None:
+    from qarunner.domain import BatchFinalizationBasis, DomainValidationError
+
+    inputs = _basis_inputs()
+    # Keep the RUN_RESOLUTION entry in the batch resolution_set, but drop every
+    # run source that would re-derive it. Completeness requires those entries
+    # to be reconstructible from the typed run bases.
+    with pytest.raises(DomainValidationError) as caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "run_resolution_sets": (),
+                "run_bases": (),
+                "resolution_set": replace(
+                    inputs["resolution_set"],
+                    canonical_run_set_digest=_canonical_run_set(inputs["resolution_set"].batch_id),
+                ),
+            }
+        )
+    assert caught.value.field == "run_resolution_sets"
+    assert caught.value.reason == "item_resolution_mismatch"
+
+
+def test_basis_builder_rejects_unexpected_cancel_scope_without_intent() -> None:
+    from qarunner.domain import BatchFinalizationBasis, DomainValidationError
+    from tests.unit.domain.test_batch_cancellation_scope_item import _scope_item
+
+    inputs = _unknown_basis_inputs()
+    with pytest.raises(DomainValidationError) as caught:
+        BatchFinalizationBasis.build(**{**inputs, "cancellation_scope_items": (_scope_item(),)})
+    assert caught.value.field == "cancellation_scope_items"
+    assert caught.value.reason == "unexpected"
+
+
+def test_basis_builder_rejects_not_executed_and_run_fanout_scope_mismatches() -> None:
+    from qarunner.domain import BatchFinalizationBasis, DomainValidationError
+    from tests.unit.domain.test_batch_cancellation_scope_item import _scope_item
+
+    inputs = _basis_inputs()
+    not_executed_scope, run_scope = inputs["cancellation_scope_items"]
+
+    # Same delivery key / item index as the real NOT_EXECUTED fact, but a different
+    # recorded_at so the digest diverges — builder must refuse the stale entry.
+    forged_not_executed = _scope_item(
+        1,
+        batch_id=not_executed_scope.batch_id,
+        batch_cancellation_intent_digest=not_executed_scope.batch_cancellation_intent_digest,
+        manifest_digest=not_executed_scope.manifest_digest,
+        shard_plan_digest=not_executed_scope.shard_plan_digest,
+        recorded_at=not_executed_scope.recorded_at.replace(minute=1),
+    )
+    with pytest.raises(DomainValidationError) as not_executed_caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "cancellation_scope_items": (forged_not_executed, run_scope),
+            }
+        )
+    assert not_executed_caught.value.field == "cancellation_scope_items"
+    assert not_executed_caught.value.reason == "not_executed_mismatch"
+
+    forged_run_fanout = _scope_item(
+        0,
+        kind="RUN_FANOUT",
+        batch_id=run_scope.batch_id,
+        batch_cancellation_intent_digest=run_scope.batch_cancellation_intent_digest,
+        manifest_digest=run_scope.manifest_digest,
+        shard_plan_digest=run_scope.shard_plan_digest,
+        run_id="run-other",
+        source_run_version=run_scope.source_run_version,
+        recorded_at=run_scope.recorded_at,
+    )
+    with pytest.raises(DomainValidationError) as fanout_caught:
+        BatchFinalizationBasis.build(
+            **{
+                **inputs,
+                "cancellation_scope_items": (not_executed_scope, forged_run_fanout),
+            }
+        )
+    assert fanout_caught.value.field == "cancellation_scope_items"
+    assert fanout_caught.value.reason == "run_fanout_mismatch"

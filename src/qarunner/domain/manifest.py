@@ -634,7 +634,10 @@ def _aggregate_shard_requirements(items: tuple[ManifestItem, ...]) -> ShardRequi
 
 
 def _validate_run_bindings(*, plan: ShardPlan, bindings: tuple[RunBinding, ...]) -> None:
-    if any(not isinstance(binding, RunBinding) for binding in bindings):
+    # Unreachable via this module's only caller, BoundShardPlan.__post_init__,
+    # which already rejects a non-RunBinding entry before ever calling here
+    # (and .create() does too) — kept as defense-in-depth for a future caller.
+    if any(not isinstance(binding, RunBinding) for binding in bindings):  # pragma: no cover
         _invalid("bound_shard_plan", "bindings", "invalid_type")
     run_ids = tuple(binding.run_id for binding in bindings)
     if len(run_ids) != len(set(run_ids)):

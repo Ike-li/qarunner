@@ -305,3 +305,18 @@ def test_scope_collection_rejects_internally_coherent_but_wrong_frozen_envelope(
             expected_item_keys=(RunItemKey("manifest-1", 0),),
             items=(wrong,),
         )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["batch_cancellation_intent_digest", "manifest_digest", "shard_plan_digest"],
+)
+def test_scope_collection_rejects_non_digest_authoritative_field(field) -> None:
+    from qarunner.domain import RunItemKey
+
+    with pytest.raises(ValueError, match="not_digest"):
+        _canonicalize(
+            expected_item_keys=(RunItemKey("manifest-1", 0),),
+            items=(_scope_item(0),),
+            **{field: "not-a-digest"},
+        )
