@@ -1221,6 +1221,45 @@ def test_plan_single_shard_rejects_non_manifest() -> None:
     assert caught.value.reason == "invalid_type"
 
 
+def test_plan_multi_shard_covers_mixed_resource_profiles_and_preserves_atomic_groups() -> None:
+    """T-M6-SHARD-001: mixed profiles covered; atomic groups stay whole."""
+    from qarunner.domain import plan_multi_shard
+
+    # Mixed profiles across atomic groups; multi-item group must stay whole.
+    manifest = _manifest(
+        _item(0, "case-login", atomic_group_id="group-auth", resource_profile_id="profile-api"),
+        _item(1, "case-logout", atomic_group_id="group-auth", resource_profile_id="profile-api"),
+        _item(2, "case-ui", atomic_group_id="group-ui", resource_profile_id="profile-browser"),
+        _item(
+            3, "case-checkout", atomic_group_id="group-checkout", resource_profile_id="profile-api"
+        ),
+    )
+    first = plan_multi_shard(plan_id="plan-multi-001", manifest=manifest)
+    second = plan_multi_shard(plan_id="plan-multi-002", manifest=manifest)
+
+    assert first.algorithm_version == "qep.multi-shard.v1"
+    assert first.run_count == 2
+    # Lexicographic profile order → api before browser.
+    assert first.shards[0].resource_profile_id == "profile-api"
+    assert first.shards[0].manifest_item_indices == (0, 1, 3)
+    assert first.shards[0].estimated_duration_ms == 300
+    assert first.shards[1].resource_profile_id == "profile-browser"
+    assert first.shards[1].manifest_item_indices == (2,)
+    assert first.shards[1].estimated_duration_ms == 100
+    # Atomic group group-auth stays on a single shard (indices 0 and 1 together).
+    assert set(first.shards[0].manifest_item_indices) >= {0, 1}
+    # Deterministic: content digest and ownership independent of plan_id.
+    assert first.digest == second.digest
+    assert first.shards == second.shards
+    # plan_single_shard still rejects this mixed Manifest.
+    from qarunner.domain import DomainValidationError, plan_single_shard
+
+    with pytest.raises(DomainValidationError) as caught:
+        plan_single_shard(plan_id="plan-single-mixed", manifest=manifest)
+    assert caught.value.field == "resource_profile_id"
+    assert caught.value.reason == "mixed"
+
+
 def test_reconciliation_summary_rejects_non_manifest() -> None:
     from qarunner.domain import DomainValidationError, ManifestReconciliationSummary
 

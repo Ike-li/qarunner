@@ -443,6 +443,54 @@ def plan_single_shard(
     )
 
 
+MULTI_SHARD_ALGORITHM_VERSION = "qep.multi-shard.v1"
+
+
+def plan_multi_shard(
+    *,
+    plan_id: str,
+    manifest: CaseManifest,
+    algorithm_version: str = MULTI_SHARD_ALGORITHM_VERSION,
+) -> ShardPlan:
+    """M6 first-cut deterministic multi-shard planner (T-M6-SHARD-001).
+
+    Groups items by resource_profile_id into one shard per profile. Atomic groups
+    stay intact because each shard owns whole groups that share a single profile;
+    ShardPlan validation still rejects any residual atomic-group split.
+    """
+    if not isinstance(manifest, CaseManifest):
+        _invalid("shard_plan", "manifest", "invalid_type")
+
+    groups: dict[str, list[int]] = {}
+    for item in manifest.items:
+        groups.setdefault(item.resource_profile_id, []).append(item.item_index)
+
+    items_by_index = {item.item_index: item for item in manifest.items}
+    shards: list[PlannedShard] = []
+    # Lexicographic profile order makes shard indices deterministic.
+    for resource_profile_id, indices in sorted(groups.items()):
+        ordered_indices = tuple(sorted(indices))
+        shard_items = tuple(items_by_index[index] for index in ordered_indices)
+        shards.append(
+            PlannedShard(
+                shard_index=len(shards),
+                manifest_item_indices=ordered_indices,
+                resource_profile_id=resource_profile_id,
+                estimated_duration_ms=sum(item.estimate.duration_ms for item in shard_items),
+                requirements=_aggregate_shard_requirements(shard_items),
+                flags=(),
+            )
+        )
+
+    return ShardPlan.create(
+        plan_id=plan_id,
+        batch_id=manifest.batch_id,
+        manifest=manifest,
+        algorithm_version=algorithm_version,
+        shards=tuple(shards),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RunBinding:
     """Persistence identity assigned to one stable planned shard."""

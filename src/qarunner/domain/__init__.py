@@ -121,6 +121,7 @@ from qarunner.domain.manifest import (
     ShardPlan,
     ShardRequirements,
     WorkEstimate,
+    plan_multi_shard,
     plan_single_shard,
 )
 from qarunner.domain.playwright_execution_result import (
@@ -143,6 +144,15 @@ from qarunner.domain.pytest_execution_result import (
     pytest_nodeid_locator,
     trusted_exit_facts_from_pytest_result,
     verify_declared_artifact,
+)
+from qarunner.domain.resource_profile import (
+    ResourceProfileSpec,
+    ResourceVector,
+    ShardBudgetDecision,
+    ShardBudgetDecisionKind,
+    ShardPlanningBudget,
+    admit_concurrent_shards,
+    plan_shard_count_under_budget,
 )
 from qarunner.domain.rbac import (
     AuthorizationAction,
@@ -373,6 +383,7 @@ __all__ = [
     "ManifestItem",
     "ManifestReconciliationSummary",
     "PlannedShard",
+    "plan_multi_shard",
     "plan_single_shard",
     "OriginalItemResolution",
     "OriginalSourceKind",
@@ -502,4 +513,11 @@ __all__ = [
     "accept_playwright_execution_result",
     "playwright_stable_case_id",
     "playwright_test_locator",
+    "ResourceProfileSpec",
+    "ResourceVector",
+    "ShardBudgetDecision",
+    "ShardBudgetDecisionKind",
+    "ShardPlanningBudget",
+    "admit_concurrent_shards",
+    "plan_shard_count_under_budget",
 ]
