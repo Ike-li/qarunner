@@ -123,6 +123,12 @@ from qarunner.domain.manifest import (
     WorkEstimate,
     plan_single_shard,
 )
+from qarunner.domain.playwright_execution_result import (
+    PlaywrightResultAdapterRejected,
+    accept_playwright_execution_result,
+    playwright_stable_case_id,
+    playwright_test_locator,
+)
 from qarunner.domain.pytest_execution_result import (
     CaseOutcome,
     DeclaredArtifact,
@@ -492,4 +498,8 @@ __all__ = [
     "pytest_nodeid_locator",
     "trusted_exit_facts_from_pytest_result",
     "verify_declared_artifact",
+    "PlaywrightResultAdapterRejected",
+    "accept_playwright_execution_result",
+    "playwright_stable_case_id",
+    "playwright_test_locator",
 ]

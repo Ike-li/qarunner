@@ -5,10 +5,12 @@ WORKDIR /app
 RUN npm install -g @playwright/test@1.61.1 \
     && npm cache clean --force
 
-ENV HOME=/tmp \
-    XDG_CACHE_HOME=/tmp/.cache \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    NODE_PATH=/usr/local/lib/node_modules:/usr/lib/node_modules
+# Qarunner canonical reporter (M5, T-M5-PLAYWRIGHT-ADAPTER-001).
+# Stdlib-only; no package dependencies — the image has @playwright/test global
+# but this reporter must import nothing beyond core Node.
+COPY src/qarunner/playwright_reporter/qarunner_canonical_reporter.js /opt/qarunner-adapter/
+ENV PLAYWRIGHT_REPORTER=/opt/qarunner-adapter/qarunner_canonical_reporter.js
+ENV QARUNNER_CASE_RESULTS_PATH=/workspace/.qarunner-results/case-results.json
 
 # Keep a non-root baked default, even though DockerRunner overrides uid:gid at
 # runtime so bind-mounted artifacts stay owned by the platform caller.
