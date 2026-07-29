@@ -145,6 +145,13 @@ from qarunner.domain.pytest_execution_result import (
     trusted_exit_facts_from_pytest_result,
     verify_declared_artifact,
 )
+from qarunner.domain.rbac import (
+    AuthorizationAction,
+    AuthorizationDecision,
+    BusinessRole,
+    OwnershipScope,
+    authorize,
+)
 from qarunner.domain.resource_profile import (
     ResourceProfileSpec,
     ResourceVector,
@@ -153,13 +160,6 @@ from qarunner.domain.resource_profile import (
     ShardPlanningBudget,
     admit_concurrent_shards,
     plan_shard_count_under_budget,
-)
-from qarunner.domain.rbac import (
-    AuthorizationAction,
-    AuthorizationDecision,
-    BusinessRole,
-    OwnershipScope,
-    authorize,
 )
 from qarunner.domain.retry import (
     PolicyRetryAuthority,
