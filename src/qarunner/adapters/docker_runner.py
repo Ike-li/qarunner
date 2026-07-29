@@ -347,8 +347,17 @@ class DockerRunner:
             # the sandboxed command against nothing — fail loudly instead.
             raise RunnerError(f"source directory {cwd!r} does not exist")
         uid, gid = os.getuid(), os.getgid()
+        # T-M5-BROWSER-001: Chromium must not run as root even when the
+        # control-plane process is root (backend dev container). Match the
+        # Playwright image's baked non-root user (pwuser / uid 1000).
+        if is_playwright and uid == 0:
+            sandbox_uid, sandbox_gid = 1000, 1000
+        else:
+            sandbox_uid, sandbox_gid = uid, gid
         try:
-            tarball = await asyncio.to_thread(build_source_tarball, cwd, uid=uid, gid=gid)
+            tarball = await asyncio.to_thread(
+                build_source_tarball, cwd, uid=sandbox_uid, gid=sandbox_gid
+            )
         except OSError as exc:
             raise RunnerError(f"Failed to package source directory: {exc}") from exc
 
@@ -387,7 +396,7 @@ class DockerRunner:
                     working_dir=_IN_CONTAINER_WORKDIR,
                     detach=True,
                     # SEC-3: execute untrusted test code with least privilege.
-                    user=f"{uid}:{gid}",
+                    user=f"{sandbox_uid}:{sandbox_gid}",
                     network_mode="none",
                     cap_drop=["ALL"],
                     security_opt=["no-new-privileges"],
@@ -402,10 +411,20 @@ class DockerRunner:
                 if labels:
                     create_kwargs["labels"] = dict(labels)
                 if is_playwright:
-                    # Chromium needs more shared memory than Docker's tiny
-                    # default /dev/shm; keep it container-local rather than
-                    # using host IPC.
-                    create_kwargs["shm_size"] = "1g"
+                    # T-M5-BROWSER-001 / DES §4.6: apply the formal browser
+                    # sandbox profile (container-local shm, non-root, no
+                    # privileged / SYS_ADMIN / host IPC) and fail closed if
+                    # anything in the create kwargs violates it.
+                    from qarunner.domain import (
+                        BrowserSandboxProfile,
+                        browser_container_create_kwargs,
+                    )
+
+                    browser_kwargs = browser_container_create_kwargs(
+                        profile=BrowserSandboxProfile.m5_browser_default(),
+                        user=f"{sandbox_uid}:{sandbox_gid}",
+                    )
+                    create_kwargs.update(browser_kwargs)
                 return client.containers.create(image, **create_kwargs)
 
             container = await asyncio.to_thread(_create_container)

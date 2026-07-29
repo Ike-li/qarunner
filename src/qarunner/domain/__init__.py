@@ -247,6 +247,7 @@ from qarunner.domain.worker import (
     WorkerState,
 )
 from qarunner.domain.worker_execution import (
+    BrowserSandboxProfile,
     CommitStartProof,
     ExecutionSandboxProfile,
     ExpectedLiveAttempt,
@@ -254,9 +255,11 @@ from qarunner.domain.worker_execution import (
     ResidualSandboxDisposition,
     ResidualSandboxObservation,
     ResidualSandboxReconcilePlan,
+    browser_container_create_kwargs,
     reconcile_residual_sandboxes,
     require_execution_admission,
     sandbox_labels_for_proof,
+    validate_browser_container_create_kwargs,
     workspace_subpath_for_proof,
 )
 from qarunner.domain.worker_lease import AssignmentLease, LeaseCommand
@@ -429,6 +432,9 @@ __all__ = [
     "WorkerRef",
     "ExecutionAdmissionError",
     "ExpectedLiveAttempt",
+    "BrowserSandboxProfile",
+    "browser_container_create_kwargs",
+    "validate_browser_container_create_kwargs",
     "ResidualSandboxAction",
     "ResidualSandboxDisposition",
     "ResidualSandboxObservation",

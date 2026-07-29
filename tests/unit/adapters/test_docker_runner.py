@@ -356,6 +356,17 @@ async def test_docker_runner_uses_playwright_image_and_env_junit_mount(tmp_path:
         == "/workspace/.qarunner-results/junit.xml"
     )
     assert mock_client.create_kwargs["shm_size"] == "1g"
+    # T-M5-BROWSER-001 red lines: never privileged / SYS_ADMIN / host IPC.
+    assert mock_client.create_kwargs.get("privileged") is False
+    assert "cap_add" not in mock_client.create_kwargs
+    assert mock_client.create_kwargs.get("ipc_mode") != "host"
+    assert mock_client.create_kwargs["cap_drop"] == ["ALL"]
+    assert mock_client.create_kwargs["network_mode"] == "none"
+    assert mock_client.create_kwargs["security_opt"] == ["no-new-privileges"]
+    # Non-root even if the host process is root (dev backend container).
+    user = mock_client.create_kwargs["user"]
+    assert user not in {"0", "0:0", "root", "root:root"}
+    assert not str(user).startswith("0:")
 
 
 async def test_docker_runner_mounts_allowlisted_env_directory_readonly(tmp_path: Path) -> None:

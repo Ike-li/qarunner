@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from qarunner.domain.digest import Digest
+from qarunner.domain.digest import Digest, canonical_digest
 from qarunner.domain.errors import DomainValidationError, ExecutionAdmissionError
 from qarunner.domain.worker import WorkerRef
 
@@ -87,6 +87,215 @@ class ExecutionSandboxProfile:
             mem_limit="2g",
             nano_cpus=2_000_000_000,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserSandboxProfile:
+    """Hardened Chromium/Playwright sandbox (T-M5-BROWSER-001 / DES §4.6).
+
+    Extends the M4 SEC-3 baseline with browser-specific requirements: container-
+    local bounded ``/dev/shm``, mandatory non-root user, and explicit bans on
+    ``privileged``, ``SYS_ADMIN``, and host IPC — these must never be used as
+    "make Chromium work" bypasses.
+    """
+
+    network_mode: str
+    read_only_root: bool
+    cap_drop: tuple[str, ...]
+    no_new_privileges: bool
+    pids_limit: int
+    mem_limit: str
+    nano_cpus: int
+    shm_size: str
+    require_non_root_user: bool
+    forbid_privileged: bool
+    forbid_sys_admin: bool
+    forbid_host_ipc: bool
+
+    def __post_init__(self) -> None:
+        entity = "browser_sandbox_profile"
+        if not isinstance(self.network_mode, str) or not self.network_mode.strip():
+            raise DomainValidationError(entity_type=entity, field="network_mode", reason="invalid")
+        for field in (
+            "read_only_root",
+            "no_new_privileges",
+            "require_non_root_user",
+            "forbid_privileged",
+            "forbid_sys_admin",
+            "forbid_host_ipc",
+        ):
+            if not isinstance(getattr(self, field), bool):
+                raise DomainValidationError(entity_type=entity, field=field, reason="not_bool")
+        if (
+            not isinstance(self.cap_drop, tuple)
+            or not self.cap_drop
+            or any(not isinstance(cap, str) or not cap.strip() for cap in self.cap_drop)
+        ):
+            raise DomainValidationError(entity_type=entity, field="cap_drop", reason="invalid")
+        if (
+            isinstance(self.pids_limit, bool)
+            or not isinstance(self.pids_limit, int)
+            or self.pids_limit < 1
+        ):
+            raise DomainValidationError(entity_type=entity, field="pids_limit", reason="invalid")
+        if not isinstance(self.mem_limit, str) or not self.mem_limit.strip():
+            raise DomainValidationError(entity_type=entity, field="mem_limit", reason="invalid")
+        if (
+            isinstance(self.nano_cpus, bool)
+            or not isinstance(self.nano_cpus, int)
+            or self.nano_cpus < 1
+        ):
+            raise DomainValidationError(entity_type=entity, field="nano_cpus", reason="invalid")
+        if not isinstance(self.shm_size, str) or not self.shm_size.strip():
+            raise DomainValidationError(entity_type=entity, field="shm_size", reason="invalid")
+
+    @classmethod
+    def m5_browser_default(cls) -> BrowserSandboxProfile:
+        return cls(
+            network_mode="none",
+            read_only_root=True,
+            cap_drop=("ALL",),
+            no_new_privileges=True,
+            pids_limit=512,
+            mem_limit="2g",
+            nano_cpus=2_000_000_000,
+            shm_size="1g",
+            require_non_root_user=True,
+            forbid_privileged=True,
+            forbid_sys_admin=True,
+            forbid_host_ipc=True,
+        )
+
+    @property
+    def profile_digest(self) -> Digest:
+        return canonical_digest(
+            schema_version="qep.browser-sandbox-profile.v1",
+            payload={
+                "network_mode": self.network_mode,
+                "read_only_root": self.read_only_root,
+                "cap_drop": list(self.cap_drop),
+                "no_new_privileges": self.no_new_privileges,
+                "pids_limit": self.pids_limit,
+                "mem_limit": self.mem_limit,
+                "nano_cpus": self.nano_cpus,
+                "shm_size": self.shm_size,
+                "require_non_root_user": self.require_non_root_user,
+                "forbid_privileged": self.forbid_privileged,
+                "forbid_sys_admin": self.forbid_sys_admin,
+                "forbid_host_ipc": self.forbid_host_ipc,
+            },
+        )
+
+
+def browser_container_create_kwargs(
+    *,
+    profile: BrowserSandboxProfile,
+    user: str,
+) -> dict[str, object]:
+    """Docker create-kwargs fragment for a browser sandbox under *profile*."""
+    if not isinstance(profile, BrowserSandboxProfile):
+        raise DomainValidationError(
+            entity_type="browser_sandbox_profile",
+            field="profile",
+            reason="not_browser_sandbox_profile",
+        )
+    if not isinstance(user, str) or not user.strip():
+        raise DomainValidationError(
+            entity_type="browser_sandbox_profile", field="user", reason="invalid"
+        )
+    kwargs: dict[str, object] = {
+        "user": user.strip(),
+        "network_mode": profile.network_mode,
+        "cap_drop": list(profile.cap_drop),
+        "security_opt": ["no-new-privileges"] if profile.no_new_privileges else [],
+        "pids_limit": profile.pids_limit,
+        "mem_limit": profile.mem_limit,
+        "nano_cpus": profile.nano_cpus,
+        "read_only": profile.read_only_root,
+        "tmpfs": {"/tmp": ""},
+        "shm_size": profile.shm_size,
+        "privileged": False,
+    }
+    validate_browser_container_create_kwargs(kwargs, profile=profile)
+    return kwargs
+
+
+def validate_browser_container_create_kwargs(
+    kwargs: dict[str, object],
+    *,
+    profile: BrowserSandboxProfile | None = None,
+) -> None:
+    """Fail closed if create kwargs violate T-M5-BROWSER-001 / DES §4.6."""
+    entity = "browser_container_create"
+    if not isinstance(kwargs, dict):
+        raise DomainValidationError(entity_type=entity, field="kwargs", reason="not_dict")
+    policy = profile if profile is not None else BrowserSandboxProfile.m5_browser_default()
+    if not isinstance(policy, BrowserSandboxProfile):
+        raise DomainValidationError(
+            entity_type=entity, field="profile", reason="not_browser_sandbox_profile"
+        )
+
+    if policy.forbid_privileged and kwargs.get("privileged") is True:
+        raise DomainValidationError(entity_type=entity, field="privileged", reason="forbidden")
+
+    cap_add = kwargs.get("cap_add") or ()
+    if isinstance(cap_add, str):
+        cap_add = (cap_add,)
+    if policy.forbid_sys_admin and any(
+        str(cap).upper().replace(" ", "_") in {"SYS_ADMIN", "CAP_SYS_ADMIN"} for cap in cap_add
+    ):
+        raise DomainValidationError(
+            entity_type=entity, field="cap_add", reason="sys_admin_forbidden"
+        )
+
+    ipc_mode = kwargs.get("ipc_mode")
+    if policy.forbid_host_ipc and isinstance(ipc_mode, str) and ipc_mode.lower() == "host":
+        raise DomainValidationError(
+            entity_type=entity, field="ipc_mode", reason="host_ipc_forbidden"
+        )
+
+    if kwargs.get("network_mode") != policy.network_mode:
+        raise DomainValidationError(entity_type=entity, field="network_mode", reason="mismatch")
+
+    cap_drop = kwargs.get("cap_drop") or ()
+    if isinstance(cap_drop, str):
+        cap_drop = (cap_drop,)
+    required_drops = {cap.upper() for cap in policy.cap_drop}
+    actual_drops = {str(cap).upper() for cap in cap_drop}
+    if not required_drops.issubset(actual_drops):
+        raise DomainValidationError(entity_type=entity, field="cap_drop", reason="incomplete")
+
+    if policy.no_new_privileges:
+        security_opt = kwargs.get("security_opt") or ()
+        if isinstance(security_opt, str):
+            security_opt = (security_opt,)
+        if "no-new-privileges" not in {str(opt) for opt in security_opt}:
+            raise DomainValidationError(
+                entity_type=entity, field="security_opt", reason="no_new_privileges_missing"
+            )
+
+    if policy.read_only_root and kwargs.get("read_only") is not True:
+        raise DomainValidationError(entity_type=entity, field="read_only", reason="required")
+
+    if kwargs.get("pids_limit") != policy.pids_limit:
+        raise DomainValidationError(entity_type=entity, field="pids_limit", reason="mismatch")
+    if kwargs.get("mem_limit") != policy.mem_limit:
+        raise DomainValidationError(entity_type=entity, field="mem_limit", reason="mismatch")
+    if kwargs.get("nano_cpus") != policy.nano_cpus:
+        raise DomainValidationError(entity_type=entity, field="nano_cpus", reason="mismatch")
+
+    if not kwargs.get("shm_size"):
+        raise DomainValidationError(entity_type=entity, field="shm_size", reason="required")
+    if kwargs.get("shm_size") != policy.shm_size:
+        raise DomainValidationError(entity_type=entity, field="shm_size", reason="mismatch")
+
+    if policy.require_non_root_user:
+        user = kwargs.get("user")
+        if not isinstance(user, str) or not user.strip():
+            raise DomainValidationError(entity_type=entity, field="user", reason="required")
+        user_norm = user.strip().lower()
+        if user_norm in {"0", "0:0", "root", "root:root"} or user_norm.startswith("0:"):
+            raise DomainValidationError(entity_type=entity, field="user", reason="root_forbidden")
 
 
 def require_execution_admission(*, proof: CommitStartProof) -> CommitStartProof:
