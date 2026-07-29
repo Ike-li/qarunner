@@ -34,6 +34,13 @@ from qarunner.domain.batch_finalization import (
     BatchUnknownFactRef,
     evaluate_batch_outcome,
 )
+from qarunner.domain.bounded_queue import (
+    AdmissionDecision,
+    AdmissionDecisionKind,
+    BoundedQueue,
+    QueueClass,
+    QueueOverflow,
+)
 from qarunner.domain.cancellation import (
     BatchCancellationIntent,
     BatchCancellationResolutionKind,
@@ -340,6 +347,11 @@ __all__ = [
     "BatchRejectionStage",
     "BatchResolutionCounts",
     "BatchState",
+    "AdmissionDecision",
+    "AdmissionDecisionKind",
+    "BoundedQueue",
+    "QueueClass",
+    "QueueOverflow",
     "BatchSuccessPolicy",
     "BatchTerminalRunRef",
     "BatchUnknownFactRef",
