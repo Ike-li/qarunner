@@ -228,6 +228,13 @@ from qarunner.domain.secret_delivery import (
     SecretDeliveryState,
     redact_secret_material,
 )
+from qarunner.domain.schedule_fire import (
+    ScheduleFireIdentity,
+    ScheduleRecord,
+    ScheduleStatus,
+    compute_next_fire_at,
+    compute_schedule_fire_identity,
+)
 from qarunner.domain.suite import Suite, SuiteRevision, SuiteRevisionStatus, SuiteStatus
 from qarunner.domain.target_access import (
     EgressDecision,
@@ -491,6 +498,11 @@ __all__ = [
     "SecretDeliveryLedger",
     "SecretDeliveryState",
     "redact_secret_material",
+    "ScheduleFireIdentity",
+    "ScheduleRecord",
+    "ScheduleStatus",
+    "compute_next_fire_at",
+    "compute_schedule_fire_identity",
     "EgressDecision",
     "EgressDenyReason",
     "EgressEvaluation",
