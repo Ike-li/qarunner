@@ -1276,3 +1276,241 @@ def test_plan_multi_shard_rejects_non_manifest_input() -> None:
         plan_multi_shard(plan_id="plan-invalid", manifest="not-a-manifest")  # type: ignore[arg-type]
     assert caught.value.field == "manifest"
     assert caught.value.reason == "invalid_type"
+
+
+def test_plan_multi_shard_budget_clamps_same_profile_to_multiple_shards() -> None:
+    """T-M6-ADMIT-001: same-profile items split into budget-allowed shard count."""
+    from qarunner.domain import (
+        ResourceProfileSpec,
+        ResourceVector,
+        ShardPlanningBudget,
+        plan_multi_shard,
+    )
+
+    # 4 independent atomic groups, all same profile. Budget allows 2 shards.
+    manifest = _manifest(
+        _item(
+            0, "case-a", atomic_group_id="g-a", resource_profile_id="profile-api", duration_ms=100
+        ),
+        _item(
+            1, "case-b", atomic_group_id="g-b", resource_profile_id="profile-api", duration_ms=200
+        ),
+        _item(
+            2, "case-c", atomic_group_id="g-c", resource_profile_id="profile-api", duration_ms=150
+        ),
+        _item(
+            3, "case-d", atomic_group_id="g-d", resource_profile_id="profile-api", duration_ms=50
+        ),
+    )
+
+    budget = ShardPlanningBudget(
+        target_shard_duration_ms=200,
+        min_shards=1,
+        max_shards=16,
+        host_capacity=ResourceVector(
+            cpu_millis=100_000,
+            memory_bytes=64 * 1024**3,
+            pid_slots=10_000,
+            ephemeral_storage_bytes=64 * 1024**3,
+            browser_slots=0,
+        ),
+        profiles=(
+            ResourceProfileSpec(
+                profile_id="profile-api",
+                name="api",
+                profile_version=1,
+                framework="pytest",
+                requests=ResourceVector(
+                    cpu_millis=500,
+                    memory_bytes=100 * 1024**2,
+                    pid_slots=32,
+                    ephemeral_storage_bytes=50 * 1024**2,
+                    browser_slots=0,
+                ),
+                limits=ResourceVector(
+                    cpu_millis=2000,
+                    memory_bytes=512 * 1024**2,
+                    pid_slots=128,
+                    ephemeral_storage_bytes=256 * 1024**2,
+                    browser_slots=0,
+                ),
+                internal_workers=1,
+                security_profile_id="sec-1",
+            ),
+        ),
+    )
+
+    # target=200ms, total=500ms → desired=ceil(500/200)=3, host allows 3.
+    plan = plan_multi_shard(plan_id="plan-budget-001", manifest=manifest, budget=budget)
+
+    # LPT: sort groups by duration desc → g-b(200), g-c(150), g-a(100), g-d(50)
+    # Assign to least-loaded shard:
+    #   g-b(200) → shard0 (load 200)
+    #   g-c(150) → shard1 (load 150)
+    #   g-a(100) → shard2 (load 100)
+    #   g-d(50)  → shard2 (load 150)
+    # → 3 shards: [g-b], [g-c], [g-a+g-d]
+    assert plan.run_count == 3
+    assert plan.algorithm_version == "qep.multi-shard.v1"
+    # All items owned, zero miss/dup
+    owned = sorted(i for s in plan.shards for i in s.manifest_item_indices)
+    assert owned == [0, 1, 2, 3]
+    # Atomic groups stay whole
+    group_to_shards: dict[str, set[int]] = {}
+    for item in manifest.items:
+        shard_idx = next(
+            s.shard_index for s in plan.shards if item.item_index in s.manifest_item_indices
+        )
+        group_to_shards.setdefault(item.atomic_group_id, set()).add(shard_idx)
+    assert all(len(v) == 1 for v in group_to_shards.values())
+    # Same input → same digest
+    again = plan_multi_shard(plan_id="plan-budget-002", manifest=manifest, budget=budget)
+    assert again.digest == plan.digest
+
+
+def test_plan_multi_shard_budget_single_shard_when_budget_tight() -> None:
+    """Budget that only allows 1 concurrent shard forces all items into 1 shard."""
+    from qarunner.domain import (
+        ResourceProfileSpec,
+        ResourceVector,
+        ShardPlanningBudget,
+        plan_multi_shard,
+    )
+
+    manifest = _manifest(
+        _item(
+            0, "case-a", atomic_group_id="g-a", resource_profile_id="profile-api", duration_ms=100
+        ),
+        _item(
+            1, "case-b", atomic_group_id="g-b", resource_profile_id="profile-api", duration_ms=200
+        ),
+    )
+
+    # browser_slots=1, profile requests 1 browser → max_concurrent=1
+    budget = ShardPlanningBudget(
+        target_shard_duration_ms=100,
+        min_shards=1,
+        max_shards=16,
+        host_capacity=ResourceVector(
+            cpu_millis=100_000,
+            memory_bytes=64 * 1024**3,
+            pid_slots=10_000,
+            ephemeral_storage_bytes=64 * 1024**3,
+            browser_slots=1,
+        ),
+        profiles=(
+            ResourceProfileSpec(
+                profile_id="profile-api",
+                name="api",
+                profile_version=1,
+                framework="pytest",
+                requests=ResourceVector(
+                    cpu_millis=500,
+                    memory_bytes=100 * 1024**2,
+                    pid_slots=32,
+                    ephemeral_storage_bytes=50 * 1024**2,
+                    browser_slots=1,
+                ),
+                limits=ResourceVector(
+                    cpu_millis=2000,
+                    memory_bytes=512 * 1024**2,
+                    pid_slots=128,
+                    ephemeral_storage_bytes=256 * 1024**2,
+                    browser_slots=1,
+                ),
+                internal_workers=1,
+                security_profile_id="sec-1",
+            ),
+        ),
+    )
+
+    plan = plan_multi_shard(plan_id="plan-budget-002", manifest=manifest, budget=budget)
+    assert plan.run_count == 1
+    assert plan.shards[0].manifest_item_indices == (0, 1)
+
+
+def test_plan_multi_shard_budget_raises_when_profile_infeasible() -> None:
+    """Budget that doesn't allow even 1 concurrent shard raises."""
+    from qarunner.domain import (
+        DomainValidationError,
+        ResourceProfileSpec,
+        ResourceVector,
+        ShardPlanningBudget,
+        plan_multi_shard,
+    )
+
+    manifest = _manifest(
+        _item(
+            0, "case-a", atomic_group_id="g-a", resource_profile_id="profile-api", duration_ms=100
+        ),
+    )
+
+    # profile requests 4000 CPU but host only has 1000 → infeasible
+    budget = ShardPlanningBudget(
+        target_shard_duration_ms=100,
+        min_shards=1,
+        max_shards=16,
+        host_capacity=ResourceVector(
+            cpu_millis=1000,
+            memory_bytes=64 * 1024**3,
+            pid_slots=10_000,
+            ephemeral_storage_bytes=64 * 1024**3,
+            browser_slots=0,
+        ),
+        profiles=(
+            ResourceProfileSpec(
+                profile_id="profile-api",
+                name="api",
+                profile_version=1,
+                framework="pytest",
+                requests=ResourceVector(
+                    cpu_millis=4000,
+                    memory_bytes=100 * 1024**2,
+                    pid_slots=32,
+                    ephemeral_storage_bytes=50 * 1024**2,
+                    browser_slots=0,
+                ),
+                limits=ResourceVector(
+                    cpu_millis=8000,
+                    memory_bytes=512 * 1024**2,
+                    pid_slots=128,
+                    ephemeral_storage_bytes=256 * 1024**2,
+                    browser_slots=0,
+                ),
+                internal_workers=1,
+                security_profile_id="sec-1",
+            ),
+        ),
+    )
+
+    with pytest.raises(DomainValidationError) as caught:
+        plan_multi_shard(plan_id="plan-budget-003", manifest=manifest, budget=budget)
+    assert caught.value.reason == "infeasible"
+
+
+def test_plan_multi_shard_without_budget_preserves_original_behavior() -> None:
+    """No budget → same as before: 1 shard per profile."""
+    from qarunner.domain import plan_multi_shard
+
+    manifest = _manifest(
+        _item(
+            0, "case-a", atomic_group_id="g-a", resource_profile_id="profile-api", duration_ms=100
+        ),
+        _item(
+            1, "case-b", atomic_group_id="g-b", resource_profile_id="profile-api", duration_ms=200
+        ),
+        _item(
+            2,
+            "case-c",
+            atomic_group_id="g-c",
+            resource_profile_id="profile-browser",
+            duration_ms=150,
+        ),
+    )
+
+    plan = plan_multi_shard(plan_id="plan-no-budget", manifest=manifest)
+    assert plan.run_count == 2  # one per profile, same as before
+    assert plan.shards[0].resource_profile_id == "profile-api"
+    assert plan.shards[0].manifest_item_indices == (0, 1)
+    assert plan.shards[1].resource_profile_id == "profile-browser"
+    assert plan.shards[1].manifest_item_indices == (2,)

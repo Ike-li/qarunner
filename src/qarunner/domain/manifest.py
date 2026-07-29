@@ -5,9 +5,13 @@ from __future__ import annotations
 import enum
 from collections import Counter
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from qarunner.domain.digest import Digest, JsonValue, canonical_digest
 from qarunner.domain.errors import DomainValidationError
+
+if TYPE_CHECKING:
+    from qarunner.domain.resource_profile import ShardPlanningBudget
 
 CASE_MANIFEST_SCHEMA_VERSION = "qep.case-manifest.v1"
 SHARD_PLAN_SCHEMA_VERSION = "qep.shard-plan.v1"
@@ -451,12 +455,19 @@ def plan_multi_shard(
     plan_id: str,
     manifest: CaseManifest,
     algorithm_version: str = MULTI_SHARD_ALGORITHM_VERSION,
+    budget: ShardPlanningBudget | None = None,
 ) -> ShardPlan:
-    """M6 first-cut deterministic multi-shard planner (T-M6-SHARD-001).
+    """M6 deterministic multi-shard planner (T-M6-SHARD-001 / T-M6-ADMIT-001).
 
-    Groups items by resource_profile_id into one shard per profile. Atomic groups
-    stay intact because each shard owns whole groups that share a single profile;
-    ShardPlan validation still rejects any residual atomic-group split.
+    Groups items by resource_profile_id. Without *budget*, produces one shard per
+    profile (M6-SHARD-001 first cut). With *budget*, each profile group's shard
+    count is clamped by ``plan_shard_count_under_budget`` (T-M6-ADMIT-001): if
+    the budget allows >1 concurrent shard for a profile, items are further split
+    by LPT over atomic groups (longest-duration group first, assigned to the
+    least-loaded shard); atomic groups never split across shards.
+
+    ``ShardPlan.create`` re-validates every invariant (zero miss/dup, atomic
+    group integrity, profile consistency, deterministic digest) after planning.
     """
     if not isinstance(manifest, CaseManifest):
         _invalid("shard_plan", "manifest", "invalid_type")
@@ -469,18 +480,36 @@ def plan_multi_shard(
     shards: list[PlannedShard] = []
     # Lexicographic profile order makes shard indices deterministic.
     for resource_profile_id, indices in sorted(groups.items()):
-        ordered_indices = tuple(sorted(indices))
-        shard_items = tuple(items_by_index[index] for index in ordered_indices)
-        shards.append(
-            PlannedShard(
-                shard_index=len(shards),
-                manifest_item_indices=ordered_indices,
-                resource_profile_id=resource_profile_id,
-                estimated_duration_ms=sum(item.estimate.duration_ms for item in shard_items),
-                requirements=_aggregate_shard_requirements(shard_items),
-                flags=(),
-            )
+        group_items = tuple(items_by_index[i] for i in sorted(indices))
+        allowed = _allowed_shard_count_for_profile(
+            resource_profile_id=resource_profile_id,
+            group_items=group_items,
+            budget=budget,
         )
+        if allowed < 1:
+            _invalid(
+                "shard_plan",
+                "resource_profile_id",
+                "infeasible",
+            )
+        if allowed == 1 or len(group_items) <= 1:
+            # Single shard for this profile group (or trivially one item).
+            shards.extend(
+                _single_shard_for_group(
+                    items=group_items,
+                    resource_profile_id=resource_profile_id,
+                    shard_index_offset=len(shards),
+                )
+            )
+        else:
+            shards.extend(
+                _lpt_split_group(
+                    items=group_items,
+                    resource_profile_id=resource_profile_id,
+                    allowed_shards=allowed,
+                    shard_index_offset=len(shards),
+                )
+            )
 
     return ShardPlan.create(
         plan_id=plan_id,
@@ -489,6 +518,117 @@ def plan_multi_shard(
         algorithm_version=algorithm_version,
         shards=tuple(shards),
     )
+
+
+def _allowed_shard_count_for_profile(
+    *,
+    resource_profile_id: str,
+    group_items: tuple[ManifestItem, ...],
+    budget: ShardPlanningBudget | None,
+) -> int:
+    """Return the number of concurrent shards the budget allows for this profile.
+
+    Returns ``1`` when no budget is provided (default one-shard-per-profile
+    behavior). Returns 0 when the profile is infeasible under the budget.
+    """
+    if budget is None:
+        return 1
+    from qarunner.domain.resource_profile import (
+        ShardBudgetDecisionKind,
+        plan_shard_count_under_budget,
+    )
+
+    total_duration = sum(item.estimate.duration_ms for item in group_items)
+    decision = plan_shard_count_under_budget(
+        total_estimated_duration_ms=total_duration,
+        resource_profile_id=resource_profile_id,
+        budget=budget,
+    )
+    if decision.kind is ShardBudgetDecisionKind.INFEASIBLE:
+        return 0
+    return decision.allowed_shard_count
+
+
+def _single_shard_for_group(
+    *,
+    items: tuple[ManifestItem, ...],
+    resource_profile_id: str,
+    shard_index_offset: int,
+) -> tuple[PlannedShard, ...]:
+    """One shard covering all items in a profile group."""
+    indices = tuple(item.item_index for item in items)
+    return (
+        PlannedShard(
+            shard_index=shard_index_offset,
+            manifest_item_indices=indices,
+            resource_profile_id=resource_profile_id,
+            estimated_duration_ms=sum(item.estimate.duration_ms for item in items),
+            requirements=_aggregate_shard_requirements(items),
+            flags=(),
+        ),
+    )
+
+
+def _lpt_split_group(
+    *,
+    items: tuple[ManifestItem, ...],
+    resource_profile_id: str,
+    allowed_shards: int,
+    shard_index_offset: int,
+) -> tuple[PlannedShard, ...]:
+    """LPT (Longest Processing Time) split of a profile group across shards.
+
+    Atomic groups are indivisible work units. Groups are sorted by total
+    estimated duration descending (tie-break: atomic_group_id ascending), then
+    each group is assigned to the shard with the least accumulated duration
+    (tie-break: shard_index ascending). This produces deterministic,
+    near-optimal makespan without splitting atomic groups.
+    """
+    # 1. Build atomic-group work units.
+    group_durations: dict[str, int] = {}
+    group_indices: dict[str, list[int]] = {}
+    for item in items:
+        gid = item.atomic_group_id
+        group_durations[gid] = group_durations.get(gid, 0) + item.estimate.duration_ms
+        group_indices.setdefault(gid, []).append(item.item_index)
+
+    # 2. Sort work units: longest duration first, then lexicographic group id.
+    sorted_groups = sorted(
+        group_durations.keys(),
+        key=lambda gid: (-group_durations[gid], gid),
+    )
+
+    # 3. Cap effective shard count to number of atomic groups (can't have
+    #    more shards than groups — each group is indivisible).
+    effective = min(allowed_shards, len(sorted_groups))
+
+    # 4. LPT assignment: track per-shard load and item indices.
+    shard_loads = [0] * effective
+    shard_indices: list[list[int]] = [[] for _ in range(effective)]
+
+    for gid in sorted_groups:
+        # Pick the shard with the least accumulated load (tie-break: lowest index).
+        target = min(range(effective), key=lambda s: (shard_loads[s], s))
+        shard_loads[target] += group_durations[gid]
+        shard_indices[target].extend(group_indices[gid])
+
+    # 5. Build PlannedShards (all non-empty after capping).
+    result: list[PlannedShard] = []
+    for s in range(effective):
+        ordered = tuple(sorted(shard_indices[s]))
+        shard_items = tuple(item for item in items if item.item_index in set(ordered))
+        result.append(
+            PlannedShard(
+                shard_index=shard_index_offset + len(result),
+                manifest_item_indices=ordered,
+                resource_profile_id=resource_profile_id,
+                estimated_duration_ms=sum(item.estimate.duration_ms for item in shard_items),
+                requirements=_aggregate_shard_requirements(shard_items),
+                flags=(),
+            )
+        )
+
+    return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)
