@@ -1267,3 +1267,12 @@ def test_reconciliation_summary_rejects_non_manifest() -> None:
         ManifestReconciliationSummary.from_manifest(object())  # type: ignore[arg-type]
     assert caught.value.field == "manifest"
     assert caught.value.reason == "invalid_type"
+
+
+def test_plan_multi_shard_rejects_non_manifest_input() -> None:
+    from qarunner.domain import DomainValidationError, plan_multi_shard
+
+    with pytest.raises(DomainValidationError) as caught:
+        plan_multi_shard(plan_id="plan-invalid", manifest="not-a-manifest")  # type: ignore[arg-type]
+    assert caught.value.field == "manifest"
+    assert caught.value.reason == "invalid_type"

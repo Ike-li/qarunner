@@ -13,6 +13,7 @@ from qarunner.domain import (
     DomainValidationError,
     ResourceProfileSpec,
     ResourceVector,
+    ShardBudgetDecision,
     ShardBudgetDecisionKind,
     ShardPlanningBudget,
     admit_concurrent_shards,
@@ -369,3 +370,496 @@ def test_admit_concurrent_shards_rejects_empty_set() -> None:
         admit_concurrent_shards(shard_profile_ids=(), budget=_budget())
     assert caught.value.field == "shard_profile_ids"
     assert caught.value.reason == "empty"
+
+
+def test_shard_budget_decision_rejects_invalid_construction() -> None:
+    with pytest.raises(DomainValidationError):
+        ShardBudgetDecision(
+            kind="bad",
+            desired_shard_count=2,
+            allowed_shard_count=2,
+            limiting_dimension=None,
+            reason=None,
+        )
+    with pytest.raises(DomainValidationError):
+        ShardBudgetDecision(
+            kind=ShardBudgetDecisionKind.ADMITTED,
+            desired_shard_count=True,  # type: ignore[arg-type]
+            allowed_shard_count=2,
+            limiting_dimension=None,
+            reason=None,
+        )
+    with pytest.raises(DomainValidationError):
+        ShardBudgetDecision(
+            kind=ShardBudgetDecisionKind.ADMITTED,
+            desired_shard_count=2,
+            allowed_shard_count=-1,
+            limiting_dimension=None,
+            reason=None,
+        )
+    with pytest.raises(DomainValidationError):
+        ShardBudgetDecision(
+            kind=ShardBudgetDecisionKind.ADMITTED,
+            desired_shard_count=2,
+            allowed_shard_count=2,
+            limiting_dimension=" ",  # blank
+            reason=None,
+        )
+    with pytest.raises(DomainValidationError):
+        ShardBudgetDecision(
+            kind=ShardBudgetDecisionKind.ADMITTED,
+            desired_shard_count=2,
+            allowed_shard_count=2,
+            limiting_dimension=None,
+            reason=" ",  # blank
+        )
+
+
+def test_admit_concurrent_shards_rejects_invalid_budget_and_entry() -> None:
+    with pytest.raises(DomainValidationError):
+        admit_concurrent_shards(shard_profile_ids=(), budget=object())  # type: ignore[arg-type]
+    with pytest.raises(DomainValidationError):
+        admit_concurrent_shards(shard_profile_ids="bad", budget=_budget())  # type: ignore[arg-type]
+    with pytest.raises(DomainValidationError):
+        admit_concurrent_shards(shard_profile_ids=("  ",), budget=_budget())
+
+
+def test_plan_shard_count_under_budget_rejects_invalid_budget() -> None:
+    with pytest.raises(DomainValidationError):
+        plan_shard_count_under_budget(
+            total_estimated_duration_ms=1000,
+            resource_profile_id="profile-api-small",
+            budget=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_profile_rejects_invalid_contract_fields() -> None:
+    with pytest.raises(DomainValidationError):
+        ResourceProfileSpec(
+            profile_id=" ",
+            name="n",
+            profile_version=1,
+            framework="pytest",
+            requests=_vector(
+                cpu_millis=100,
+                memory_bytes=100,
+                pid_slots=10,
+                ephemeral_storage_bytes=50,
+                browser_slots=0,
+            ),
+            limits=_vector(
+                cpu_millis=200,
+                memory_bytes=200,
+                pid_slots=20,
+                ephemeral_storage_bytes=100,
+                browser_slots=0,
+            ),
+            internal_workers=1,
+            security_profile_id="sec",
+        )
+    with pytest.raises(DomainValidationError):
+        ResourceProfileSpec(
+            profile_id="p",
+            name="n",
+            profile_version=True,  # type: ignore[arg-type]
+            framework="pytest",
+            requests=_vector(
+                cpu_millis=100,
+                memory_bytes=100,
+                pid_slots=10,
+                ephemeral_storage_bytes=50,
+                browser_slots=0,
+            ),
+            limits=_vector(
+                cpu_millis=200,
+                memory_bytes=200,
+                pid_slots=20,
+                ephemeral_storage_bytes=100,
+                browser_slots=0,
+            ),
+            internal_workers=1,
+            security_profile_id="sec",
+        )
+    with pytest.raises(DomainValidationError):
+        ResourceProfileSpec(
+            profile_id="p",
+            name="n",
+            profile_version=1,
+            framework="pytest",
+            requests=object(),  # type: ignore[arg-type]
+            limits=_vector(
+                cpu_millis=200,
+                memory_bytes=200,
+                pid_slots=20,
+                ephemeral_storage_bytes=100,
+                browser_slots=0,
+            ),
+            internal_workers=1,
+            security_profile_id="sec",
+        )
+    with pytest.raises(DomainValidationError):
+        ResourceProfileSpec(
+            profile_id="p",
+            name="n",
+            profile_version=1,
+            framework="pytest",
+            requests=_vector(
+                cpu_millis=100,
+                memory_bytes=100,
+                pid_slots=10,
+                ephemeral_storage_bytes=50,
+                browser_slots=0,
+            ),
+            limits=object(),  # type: ignore[arg-type]
+            internal_workers=1,
+            security_profile_id="sec",
+        )
+    with pytest.raises(DomainValidationError):
+        ResourceProfileSpec(
+            profile_id="p",
+            name="n",
+            profile_version=1,
+            framework="pytest",
+            requests=_vector(
+                cpu_millis=100,
+                memory_bytes=100,
+                pid_slots=10,
+                ephemeral_storage_bytes=50,
+                browser_slots=0,
+            ),
+            limits=_vector(
+                cpu_millis=200,
+                memory_bytes=200,
+                pid_slots=20,
+                ephemeral_storage_bytes=100,
+                browser_slots=0,
+            ),
+            internal_workers=True,  # type: ignore[arg-type]
+            security_profile_id="sec",
+        )
+    with pytest.raises(DomainValidationError):
+        ResourceProfileSpec(
+            profile_id="p",
+            name="n",
+            profile_version=1,
+            framework="pytest",
+            requests=_vector(
+                cpu_millis=100,
+                memory_bytes=100,
+                pid_slots=10,
+                ephemeral_storage_bytes=50,
+                browser_slots=0,
+            ),
+            limits=_vector(
+                cpu_millis=200,
+                memory_bytes=200,
+                pid_slots=20,
+                ephemeral_storage_bytes=100,
+                browser_slots=0,
+            ),
+            internal_workers=0,
+            security_profile_id="sec",
+        )
+
+
+def test_budget_rejects_zero_request_profile() -> None:
+    zero = _vector(
+        cpu_millis=0, memory_bytes=0, pid_slots=0, ephemeral_storage_bytes=0, browser_slots=0
+    )
+    with pytest.raises(DomainValidationError, match="zero_request"):
+        ResourceProfileSpec(
+            profile_id="zero",
+            name="zero",
+            profile_version=1,
+            framework="pytest",
+            requests=zero,
+            limits=zero,
+            internal_workers=1,
+            security_profile_id="sec-1",
+        )
+
+
+def test_budget_rejects_limits_below_requests() -> None:
+    with pytest.raises(DomainValidationError, match="below_requests"):
+        ResourceProfileSpec(
+            profile_id="tight",
+            name="tight",
+            profile_version=1,
+            framework="pytest",
+            requests=_vector(
+                cpu_millis=2000,
+                memory_bytes=2048,
+                pid_slots=64,
+                ephemeral_storage_bytes=256,
+                browser_slots=1,
+            ),
+            limits=_vector(
+                cpu_millis=1000,
+                memory_bytes=2048,
+                pid_slots=64,
+                ephemeral_storage_bytes=256,
+                browser_slots=1,
+            ),
+            internal_workers=1,
+            security_profile_id="sec-1",
+        )
+
+
+def test_vector_rejects_negative_values() -> None:
+    with pytest.raises(DomainValidationError):
+        ResourceVector(
+            cpu_millis=-1, memory_bytes=0, pid_slots=0, ephemeral_storage_bytes=0, browser_slots=0
+        )
+    with pytest.raises(DomainValidationError):
+        ResourceVector(
+            cpu_millis=0,
+            memory_bytes=0,
+            pid_slots=0,
+            ephemeral_storage_bytes=0,
+            browser_slots=True,
+        )  # type: ignore[arg-type]
+
+
+def test_vector_scaled_by_rejects_non_positive_factor() -> None:
+    v = _vector(
+        cpu_millis=100, memory_bytes=100, pid_slots=10, ephemeral_storage_bytes=50, browser_slots=0
+    )
+    with pytest.raises(DomainValidationError):
+        v.scaled_by(0)
+    with pytest.raises(DomainValidationError):
+        v.scaled_by(True)  # type: ignore[arg-type]
+
+
+def test_vector_added_rejects_untyped_other() -> None:
+    v = _vector(
+        cpu_millis=100, memory_bytes=100, pid_slots=10, ephemeral_storage_bytes=50, browser_slots=0
+    )
+    with pytest.raises(DomainValidationError):
+        v.added("bad")  # type: ignore[arg-type]
+
+
+def test_vector_max_concurrent_within_all_zero_cost_returns_inf() -> None:
+    zero = _vector(
+        cpu_millis=0, memory_bytes=0, pid_slots=0, ephemeral_storage_bytes=0, browser_slots=0
+    )
+    cap = _vector(
+        cpu_millis=1000,
+        memory_bytes=1000,
+        pid_slots=100,
+        ephemeral_storage_bytes=100,
+        browser_slots=1,
+    )
+    n, dim = zero.max_concurrent_within(cap)
+    assert n == float("inf")
+    assert dim is None
+
+
+def test_vector_to_payload_returns_all_dimensions() -> None:
+    v = _vector(
+        cpu_millis=100, memory_bytes=200, pid_slots=10, ephemeral_storage_bytes=50, browser_slots=1
+    )
+    payload = v.to_payload()
+    assert payload == {
+        "cpu_millis": 100,
+        "memory_bytes": 200,
+        "pid_slots": 10,
+        "ephemeral_storage_bytes": 50,
+        "browser_slots": 1,
+    }
+
+
+def test_vector_first_exceeding_dimension_returns_matching_name() -> None:
+    v = _vector(
+        cpu_millis=100, memory_bytes=200, pid_slots=10, ephemeral_storage_bytes=50, browser_slots=1
+    )
+    cap = _vector(
+        cpu_millis=50, memory_bytes=200, pid_slots=10, ephemeral_storage_bytes=50, browser_slots=1
+    )
+    assert v.first_exceeding_dimension(cap) == "cpu_millis"
+    cap2 = _vector(
+        cpu_millis=100, memory_bytes=200, pid_slots=10, ephemeral_storage_bytes=50, browser_slots=1
+    )
+    assert v.first_exceeding_dimension(cap2) is None
+
+
+def test_vector_is_zero_reflects_all_dimensions() -> None:
+    assert (
+        _vector(
+            cpu_millis=0, memory_bytes=0, pid_slots=0, ephemeral_storage_bytes=0, browser_slots=0
+        ).is_zero()
+        is True
+    )
+    assert (
+        _vector(
+            cpu_millis=1, memory_bytes=0, pid_slots=0, ephemeral_storage_bytes=0, browser_slots=0
+        ).is_zero()
+        is False
+    )
+
+
+def test_vector_fits_within_reflects_all_dimensions() -> None:
+    small = _vector(
+        cpu_millis=100, memory_bytes=100, pid_slots=10, ephemeral_storage_bytes=10, browser_slots=0
+    )
+    big = _vector(
+        cpu_millis=200, memory_bytes=200, pid_slots=20, ephemeral_storage_bytes=20, browser_slots=1
+    )
+    assert small.fits_within(big) is True
+    assert big.fits_within(small) is False
+
+
+def test_budget_rejects_target_duration_below_one() -> None:
+    with pytest.raises(DomainValidationError):
+        _budget(target_shard_duration_ms=0)
+
+
+def test_budget_rejects_min_shards_below_one() -> None:
+    with pytest.raises(DomainValidationError):
+        _budget(min_shards=0)
+
+
+def test_budget_rejects_non_vector_host_capacity() -> None:
+    with pytest.raises(DomainValidationError):
+        ShardPlanningBudget(
+            target_shard_duration_ms=1000,
+            min_shards=1,
+            max_shards=2,
+            host_capacity="bad",  # type: ignore[arg-type]
+            profiles=(_profile(),),
+        )
+
+
+def test_budget_rejects_empty_profiles() -> None:
+    with pytest.raises(DomainValidationError):
+        ShardPlanningBudget(
+            target_shard_duration_ms=1000,
+            min_shards=1,
+            max_shards=2,
+            host_capacity=_vector(
+                cpu_millis=1000,
+                memory_bytes=1000,
+                pid_slots=100,
+                ephemeral_storage_bytes=100,
+                browser_slots=1,
+            ),
+            profiles=(),
+        )
+
+
+def test_budget_rejects_non_profile_member() -> None:
+    with pytest.raises(DomainValidationError):
+        ShardPlanningBudget(
+            target_shard_duration_ms=1000,
+            min_shards=1,
+            max_shards=2,
+            host_capacity=_vector(
+                cpu_millis=1000,
+                memory_bytes=1000,
+                pid_slots=100,
+                ephemeral_storage_bytes=100,
+                browser_slots=1,
+            ),
+            profiles=("bad",),  # type: ignore[arg-type]
+        )
+
+
+def test_plan_shard_count_rejects_negative_duration() -> None:
+    with pytest.raises(DomainValidationError):
+        plan_shard_count_under_budget(
+            total_estimated_duration_ms=-1,
+            resource_profile_id="profile-api-small",
+            budget=_budget(),
+        )
+
+
+def test_plan_shard_count_uses_min_for_zero_duration() -> None:
+    profile = _profile(internal_workers=1)
+    budget = _budget(
+        target_shard_duration_ms=60_000,
+        min_shards=2,
+        max_shards=8,
+        host_capacity=_vector(
+            cpu_millis=100_000,
+            memory_bytes=64 * 1024 * 1024 * 1024,
+            pid_slots=10_000,
+            ephemeral_storage_bytes=64 * 1024 * 1024 * 1024,
+            browser_slots=0,
+        ),
+        profiles=(profile,),
+    )
+    decision = plan_shard_count_under_budget(
+        total_estimated_duration_ms=0,
+        resource_profile_id=profile.profile_id,
+        budget=budget,
+    )
+    assert decision.desired_shard_count == 2  # min_shards
+    assert decision.allowed_shard_count == 2
+
+
+def test_plan_shard_count_clamps_to_min_for_tiny_duration() -> None:
+    profile = _profile(internal_workers=1)
+    budget = _budget(
+        target_shard_duration_ms=60_000,
+        min_shards=3,
+        max_shards=8,
+        host_capacity=_vector(
+            cpu_millis=100_000,
+            memory_bytes=64 * 1024 * 1024 * 1024,
+            pid_slots=10_000,
+            ephemeral_storage_bytes=64 * 1024 * 1024 * 1024,
+            browser_slots=0,
+        ),
+        profiles=(profile,),
+    )
+    decision = plan_shard_count_under_budget(
+        total_estimated_duration_ms=1_000,
+        resource_profile_id=profile.profile_id,
+        budget=budget,
+    )
+    assert decision.desired_shard_count == 3  # ceil(1000/60000)=1 → clamp to min_shards=3
+    assert decision.kind is ShardBudgetDecisionKind.ADMITTED
+
+
+def test_plan_shard_count_all_zero_cost_profile_path() -> None:
+    """Defense-in-depth: if a profile somehow slips through with all-zero requests
+    (impossible after validation, but the branch exists), the all-zero cost path
+    returns INFEASIBLE."""
+    profile = _profile(internal_workers=1)
+    # Forge an all-zero requests via object.__setattr__ to bypass validation.
+    forged = object.__new__(ResourceProfileSpec)
+    for field_name in profile.__dataclass_fields__:
+        if field_name == "requests":
+            object.__setattr__(
+                forged,
+                field_name,
+                _vector(
+                    cpu_millis=0,
+                    memory_bytes=0,
+                    pid_slots=0,
+                    ephemeral_storage_bytes=0,
+                    browser_slots=0,
+                ),
+            )
+        else:
+            object.__setattr__(forged, field_name, getattr(profile, field_name))
+    budget = ShardPlanningBudget(
+        target_shard_duration_ms=1000,
+        min_shards=1,
+        max_shards=4,
+        host_capacity=_vector(
+            cpu_millis=1000,
+            memory_bytes=1000,
+            pid_slots=100,
+            ephemeral_storage_bytes=100,
+            browser_slots=1,
+        ),
+        profiles=(forged,),
+    )
+    decision = plan_shard_count_under_budget(
+        total_estimated_duration_ms=5000,
+        resource_profile_id=profile.profile_id,
+        budget=budget,
+    )
+    assert decision.kind is ShardBudgetDecisionKind.INFEASIBLE
+    assert decision.allowed_shard_count == 0
+    assert decision.limiting_dimension == "cpu_millis"
