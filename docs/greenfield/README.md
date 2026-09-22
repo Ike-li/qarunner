@@ -20,7 +20,7 @@
 
 ## 1. 文档目的
 
-本目录回答十个按顺序展开的问题：
+本目录回答十一个按顺序展开的问题：
 
 1. 只有一台 ECS 时，最小可用产品必须解决什么问题？
 2. 面向 10 万+用例库存和每日约 6 万次执行时，企业目标产品必须具备什么能力？
@@ -50,7 +50,6 @@
 | 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合，以及已签 `STATE-DEC-009/010` 的 001G/001H 实现合同 |
 | 11 | [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md) | Implementation Boundary Decision Reference | 001F 生产 authority/proof/UoW/API/recovery 的九项已签 `DECIDED` implementation-boundary 决议、Evidence 门禁，以及与 001G/001H 的 fail-closed handoff 边界；签署不等于实施或生产授权 |
 | 12 | [STATE-DEC-009/010 决策与签署包](12_STATE_DEC_009_010_DECISION_PACKET.md) | Implementation Decision Packet | 001G/001H 必需的 retry scope、effective resolution、unknown lineage、policy、SLA 与 authority；已于 `2026-07-15T17:04:11Z` 五方具名签署为 `DECIDED` |
-| 13 | [产品方向评审与决策输入包](13_DIRECTION_REVIEW.md) | Direction Review / Decision Input | 执行主机分离形态、同机残余风险接受（≡既有 `GATE-IMP-006`）与 M0-M8 范围排序的三项 `PROPOSED` 决策；`DIRECTION.md` 两台机叙述与单 ECS 主线(00/01/03/06)离群、待向下对齐；经 03/06 全文对抗性复核，D2（单 ECS 同机 MVP、物理第二台机延后）未被推翻；`DRAFT`、未签署 |
 
 ## 3. “独立设计”的含义
 

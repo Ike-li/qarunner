@@ -5,7 +5,7 @@ domain-produced result of the corresponding `Run` method plus the pre-mutation s
 and persists it under one short transaction with optimistic CAS on the Run version,
 returning a `ReplayResult` (`replayed=True` when the transition was already durably applied).
 
-M1 single-worker scope (`docs/greenfield/13_DIRECTION_REVIEW.md`, `DIR-DEC-002-A`): worker
+M1 single-worker scope (single-ECS same-host MVP; physical second host deferred): worker
 identity is a seeded fixture and `offer_token_hash` is a deterministic fixture digest; the
 real Worker registration, offer-token issuance/verification, `renew`, generation rotation,
 mTLS transport, and the physical second host all defer to M3-protocol/E1.

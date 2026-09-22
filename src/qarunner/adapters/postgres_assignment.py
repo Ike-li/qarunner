@@ -4,7 +4,7 @@ Implements `AssignmentGateway` as a caller-owned one-shot transaction, mirroring
 the sticky-abort / read_committed / FOR UPDATE / version-CAS pattern used by
 `PostgresRunFinalizationUnitOfWork` and the other M1-B2 adapters.
 
-M1 single-worker scope (`docs/greenfield/13_DIRECTION_REVIEW.md`, DIR-DEC-002-A):
+M1 single-worker scope (single-ECS same-host MVP; physical second host deferred):
 worker identity is a seeded fixture and `offer_token_hash` is a deterministic
 fixture digest. Real Worker registration, offer-token security, renew,
 generation rotation, mTLS, and the physical second host defer to M3/E1.
