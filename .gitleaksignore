@@ -1,0 +1,14 @@
+# gitleaks 误报豁免。
+# generic-api-key 规则把 test_manifest_shard_plan.py 中的测试夹具误判为凭证：
+# 那是分片计划用例里的毫秒时长参数，紧跟在一个以 api 结尾的标识符之后，
+# 并非任何形式的密钥。
+# 指纹格式：commit:file:rule:line
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1293
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1296
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1299
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1302
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1382
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1385
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1444
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1497
+88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1500
