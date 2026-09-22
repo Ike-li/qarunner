@@ -19,7 +19,7 @@
 
 ### 1.1 目的
 
-本文件把[M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md)中获批的
+本文件把 M0 状态模型决议包（未随仓库发布）中获批的
 `B / A+X / B / C / A / B / A / B` 固化为一份可在八项已签范围内驱动 TDD、Schema 设计、
 迁移和故障测试的实现契约。`001F` 已验证，`STATE-DEC-009/010` 已签并解锁 001G M0 contract
 slice；001H 仍等待 001G immutable Run facts。该签署不构成 runtime 实现授权。在该边界内，
@@ -57,7 +57,7 @@ slice；001H 仍等待 001G immutable Run facts。该签署不构成 runtime 实
 ## 2. 已批准决议记录
 
 用户已明确确认有权代表 PROD、DEV、QA、SEC、OPS 五方签署下列组合。签署时间、代表和逐项
-记录同时保存在[决议包 §9](09_STATE_MODEL_DECISION_PACKET.md#9-五方评审记录)。
+记录同时保存在决议包 §9（未随仓库发布）。
 
 | Decision ID | 获批选项 | 本契约中的规范结果 | 主要关闭证据 |
 |---|---|---|---|
@@ -877,7 +877,7 @@ RED → 最小 GREEN → 重构推进，不得在实现前或仅凭本文标记�
 | `STATE-DEC-011` | `DECIDED` | 九项 G3 canonical closure | prestart null 边界；unknown retry 后归 verified Evidence；历史 chain 保留；typed decision result；item Schema/version；final Attempt 数值/终态；cancellation 复用 contract rule | 解锁 001G G3 M0 contract；不授权 runtime/production |
 
 精确参数、拒绝理由、残余风险接受与五方签署见
-[`12_STATE_DEC_009_010_DECISION_PACKET.md`](12_STATE_DEC_009_010_DECISION_PACKET.md)，baseline
+`12_STATE_DEC_009_010_DECISION_PACKET.md`（未随仓库发布），baseline
 `098d09e014ee65e098beaf8d62bd2fc67da50ee6`，UTC `2026-07-15T17:04:11Z`。效力覆盖
 `M0-STATE-V1` 全链契约，但 `GATE-IMP-003=OPEN`、production `NO-GO`。
 

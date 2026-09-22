@@ -4,7 +4,7 @@
 > 版本：V0.1.0<br>
 > 状态：草稿，待架构/安全/运维评审<br>
 > 日期：2026-07-12<br>
-> 输入：[MVP PRD](01_MVP_REQUIREMENTS.md)、[企业 PRD](02_ENTERPRISE_REQUIREMENTS.md)<br>
+> 输入：MVP PRD（未随仓库发布）、企业 PRD（未随仓库发布）<br>
 > 约束：本设计形成时未以现有 qarunner 代码为设计前提
 
 ---

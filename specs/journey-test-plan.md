@@ -121,7 +121,7 @@
      - expect: `case-history` 出现彩色历史点
      - expect: 若该用例在 A/B 间翻转，`flaky-badge` 可见
 
-**断言重点：** 跨次对比 = 产品路线 A 的灵魂（见 `docs/CROSS_RUN_PLAN.md` 阶段 0/1/2/3）。此旅程是唯一端到端验证"触发→对比→flaky"全链路的用例。
+**断言重点：** 跨次对比是本产品的核心价值（见 `docs/FEATURES.md` §5 回归视图）。此旅程是唯一端到端验证"触发→对比→flaky"全链路的用例。
 **前置依赖：** sample_tests 用例需产生可对比的差异（一 pass 一 fail），否则 diff 全空。若现成 sample 无差异，需用 mock `/diff` 兜底（见第 6 节）。
 
 ---

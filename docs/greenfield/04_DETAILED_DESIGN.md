@@ -4,7 +4,7 @@
 > 版本：V0.2.0<br>
 > 状态：草稿，待详细设计评审<br>
 > 日期：2026-07-14<br>
-> 上游：[MVP PRD](01_MVP_REQUIREMENTS.md)、[企业 PRD](02_ENTERPRISE_REQUIREMENTS.md)、[架构设计](03_ARCHITECTURE_DESIGN.md)、[状态模型决议包](09_STATE_MODEL_DECISION_PACKET.md)、[状态模型规范契约](10_STATE_MODEL_CONTRACT.md)<br>
+> 上游：MVP PRD（未随仓库发布）、企业 PRD（未随仓库发布）、[架构设计](03_ARCHITECTURE_DESIGN.md)、状态模型决议包（未随仓库发布）、[状态模型规范契约](10_STATE_MODEL_CONTRACT.md)<br>
 > 已批准范围：`STATE-DEC-001`～`STATE-DEC-008` 的状态模型语义；本详细设计其余内容仍为草稿<br>
 > 已签合同范围：`STATE-DEC-009/010=DECIDED`，适用于 `M0-STATE-V1` 全链契约；不构成真实 API/DB/Worker、migration、deployment、production runtime activation 授权<br>
 > 设计原则：本文件先于现有代码对比冻结，不以现有类、表或 API 为前提

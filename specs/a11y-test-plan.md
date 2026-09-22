@@ -3,7 +3,7 @@
 > 创建日期：2026-07-03
 > 范围：键盘导航 / 焦点管理 / 屏幕阅读器语义 / 表单关联 / 焦点指示器
 > 优先级：P2（在用户旅程、角色矩阵之后）
-> 依据：`docs/FE5_A11Y_PLAN.md`（FE-5 改造计划，已落地部分）、`frontend/src/a11y.ts`、`frontend/src/hooks/useDialogA11y.ts`
+> 依据：`frontend/src/a11y.ts`、`frontend/src/hooks/useDialogA11y.ts`（FE-5 a11y 改造已全部落地）
 > 框架：Playwright 原生键盘 API；可选用 `@axe-core/playwright` 做无门槛自动化扫描（见阶段 0）
 
 ---
@@ -32,7 +32,7 @@
 **结论**：a11y E2E 层已建立，后续重点不是从零补测试，而是继续收紧 UserManagementModal 焦点契约、减少 Semi UI 噪声白名单，并把键盘旅程纳入稳定的日常回归。
 
 ### 0.3 FE-5 验收目标回顾
-> "键盘可完整操作主流程"（FE5_A11Y_PLAN §4 验证：Tab/Enter/Esc 完整走登录→触发 modal→用户 modal→抽屉/终端，无鼠标）
+> "键盘可完整操作主流程"（验证：Tab/Enter/Esc 完整走登录→触发 modal→用户 modal→抽屉/终端，无鼠标）
 
 本计划将此验收目标转成可重复跑的自动化断言。
 

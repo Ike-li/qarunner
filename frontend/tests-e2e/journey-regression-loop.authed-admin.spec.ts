@@ -1,6 +1,6 @@
 // Journey 2 — Regression core loop (P0).
 //
-// The product's route-A soul (see docs/CROSS_RUN_PLAN.md) is cross-run
+// The product's core value (see docs/FEATURES.md §5 regression view) is cross-run
 // comparison. This journey is the ONLY spec that drives the full chain
 // end-to-end against the real backend:
 //   trigger a run  ->  poll to terminal  ->  open drawer  ->  re-run

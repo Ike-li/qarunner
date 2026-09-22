@@ -61,6 +61,17 @@ docker compose -f docker-compose.dev.yml up -d
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 代码架构（层次、端口、适配器） |
 | [specs/ui-test-plan.md](specs/ui-test-plan.md) | E2E 测试计划 |
 | [specs/TEST_PLAN_TEMPLATE.md](specs/TEST_PLAN_TEMPLATE.md) | 测试计划模板（含组件交互清单） |
+| [docs/METRICS.md](docs/METRICS.md) | 质量度量定义（通过率、flaky、时长的口径与触发动作） |
+| [docs/greenfield/](docs/greenfield/README.md) | 绿地设计文档集（**目标设计，非已交付能力**：架构、详细设计、状态模型契约） |
+
+参与项目：
+
+| 文档 | 说明 |
+|------|------|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发环境搭建、质量门禁、PR 流程 |
+| [SECURITY.md](SECURITY.md) | 漏洞报告通道、已知安全边界、报告适用范围 |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 贡献者行为准则 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 
 ## 配置参考
 
