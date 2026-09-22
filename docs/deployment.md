@@ -18,7 +18,8 @@ qarunner 提供两套 Docker Compose 配置，**日常开发用 dev，legacy 单
 
 > 新建 PostgreSQL volume 或未确认 revision 时，先按下方 **PostgreSQL migration operator**
 > 段落完成 `upgrade head`（或 exact legacy adoption）；backend 在迁移前会按设计 fail closed。
-> 已经处于 `m1_greenfield_facts` head 的数据库可以直接执行下面的完整启动命令。
+> 数据库 revision 与代码期望的 head 一致时，才可以直接执行下面的完整启动命令；
+> 不一致时后端会 fail closed 并在日志中打印 current / expected revision。
 
 ### 首次启动
 
@@ -33,7 +34,7 @@ docker compose -f docker-compose.dev.yml ps
 启动后访问：
 - **前端**: http://localhost:5173（主要入口，Vite 代理 API 请求到后端）
 - **后端 API**: http://localhost:8000/docs（Swagger 文档）
-- **默认管理员**: admin / admin123
+- **管理员**: 用户名 `admin`，密码为 `.env` 中 `QARUNNER_ADMIN_PASSWORD` 的值（弱口令会被拒绝，平台将无法启动）
 
 ### PostgreSQL migration operator
 

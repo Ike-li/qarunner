@@ -135,6 +135,6 @@
 
 ## Implementation
 
-- **Backend:** `GET /metrics` endpoint computes all metrics server-side from the SQLite database.
+- **Backend:** `GET /metrics` endpoint computes all metrics server-side from the configured database (SQLite or PostgreSQL).
 - **Frontend:** `MetricsView` component displays the metrics with trend indicators.
 - **CI:** Coverage is enforced in `.github/workflows/ci.yml` (pytest `--cov-fail-under=100`).

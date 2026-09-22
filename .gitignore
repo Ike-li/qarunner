@@ -67,3 +67,6 @@ external_tests/
 frontend/screenshot.mjs
 frontend/*-after.png
 .codex/
+
+# Codex CLI 会话记录（本地，含对话内容）
+.codex-chat-rpc.jsonl

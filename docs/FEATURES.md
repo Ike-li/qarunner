@@ -80,8 +80,13 @@
 - **Flaky 检测** — 单用例最近 N 次结果在 `pass ↔ fail/error` 间反复翻转即标记**不稳定**,默认阈值**至少 4 次观测、翻转 ≥3 次**,区别于单次回归 / 单次修复(单调变化不算 flaky)。阈值为保守占位,待真实数据校准。
 - **用例级历史** — `GET /cases/history`:点开 diff 里任一用例,懒加载它的跨 run 结果序列(状态格条 + flaky 徽章)。
 
+- **仪表板质量度量** — `GET /metrics`:服务端聚合近 7 天的通过率、平均执行时长、运行量,
+  30 天窗口的 flaky 计数,以及按套件拆分的明细(总 run 数 / 通过率 / 平均时长 / 最近一次运行时间)。
+  与上述四项共用同一份 per-case 数据,同样 owner-scope。注意这是产品自身的质量汇总接口,
+  返回 JSON,**不是** Prometheus exposition 格式。
+
 owner-scope 贯穿三端点:**非 admin 只对比 / 趋势 / 翻看自己的 run**(diff 的基线候选亦然,不泄露他人 run),admin 跨全部。纯判定逻辑(diff 分桶 / 基线选择 / flaky 翻转)均为 `core/` 下**零 DB 依赖的纯函数**,可独立单测。
-→ `core/regression.py`(diff + 基线)、`core/trend.py`、`core/flaky.py`、`adapters/sqlite_store.py`(`run_test_cases` 表 + `get_case_history`)、`frontend/src/components/{RunDetailsDrawer,SuiteTrend}.tsx`
+→ `core/regression.py`(diff + 基线)、`core/trend.py`、`core/flaky.py`、`adapters/sqlite_store.py` / `adapters/postgres_store.py`(`run_test_cases` 表 + `get_case_history`)、`frontend/src/components/{RunDetailsDrawer,SuiteTrend}.tsx`
 
 ## 6. AI 失败诊断
 

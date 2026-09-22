@@ -3,7 +3,14 @@
 > **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。运行详情支持只读的 AI 失败诊断（无 API key 时 Tab 内展示未配置说明，不隐藏入口），详见 [docs/FEATURES.md](docs/FEATURES.md)。
 
 > [!CAUTION]
-> V7.4 目标生产拓扑是“单控制面主机 + 单专用加固 Worker 主机 + 每 Run 一次性容器”。当前仓库的 Compose/代码仍是控制面直挂 Docker socket 的单宿主实现，只用于开发和现状验证；在 GAP-021/SOR-GAP-023 关闭前，不得据此承载不可信外部测试代码或宣称满足 V7.4 生产要求。
+> **当前版本请勿用来执行你不信任的测试代码。**
+>
+> 控制面进程直接挂载宿主的 `/var/run/docker.sock`。挂载 Docker socket 等价于把宿主 root 权限交给该进程 —— 测试代码一旦逃出执行容器，就能控制整台宿主机。
+>
+> - ✅ **适用**：你自己或团队编写、依赖来源可控的回归套件，部署在受信内网。
+> - ❌ **不适用**：来源不明的测试代码、外部贡献者提交的 PR 测试、多租户共享环境。
+>
+> 目标架构（控制面与专用 Worker 主机分离、控制面不持有 Docker socket、每 Run 一次性容器）尚未落地，内部追踪编号 GAP-021 / SOR-GAP-023。
 
 ## 本地部署
 
@@ -12,11 +19,19 @@
 快速启动（开发模式）：
 
 ```bash
-# 启动开发环境（前后端热更新）
+# 1) 准备配置。SECRET_KEY 与 ADMIN_PASSWORD 必须设为强值：
+#    平台会拒绝 change-me / admin123 等占位口令并拒绝启动。
+cp .env.example .env
+$EDITOR .env   # 填入自己的 QARUNNER_SECRET_KEY 与 QARUNNER_ADMIN_PASSWORD
+
+# 2) 启动开发环境（前后端热更新）
 docker compose -f docker-compose.dev.yml up -d
 
+# 3) 首次启动需要先执行数据库迁移，否则后端会按设计拒绝启动，
+#    具体命令见 docs/deployment.md 的 "PostgreSQL migration operator" 一节。
+
 # 访问 http://localhost:5173
-# 默认管理员: admin / admin123
+# 管理员用户名 admin，密码为你在 .env 中设置的值
 ```
 
 代码更新后：
