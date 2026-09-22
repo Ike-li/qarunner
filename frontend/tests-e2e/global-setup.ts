@@ -10,7 +10,6 @@
 // Invoked once before any test runs. Specs still under the plain `chromium`
 // project have NO storageState, so this changes nothing for them.
 
-import { request } from '@playwright/test';
 import {
   E2E_ADMIN,
   E2E_ADMIN_PASSWORD,
@@ -19,6 +18,7 @@ import {
   ensureAuthDir,
   adminAuthFile,
   userAuthFile,
+  persistAuthedSession,
 } from './fixtures/auth';
 import { createUser, listUsers, loginAndGetContext } from './helpers/api';
 
@@ -39,27 +39,6 @@ export default async function globalSetup() {
   //    as it and persist for chromium-authed-user.
   await ensureE2EUser();
   await persistAuthedSession(E2E_USER, E2E_USER_PASSWORD, userAuthFile);
-}
-
-/** Login via /auth/login and persist the resulting storageState to disk. */
-async function persistAuthedSession(username: string, password: string, authFile: string) {
-  const ctx = await request.newContext({
-    baseURL: process.env.BASE_URL || 'http://localhost:5173',
-  });
-  try {
-    const resp = await ctx.post('/auth/login', { data: { username, password } });
-    if (!resp.ok()) {
-      const body = await resp.text().catch(() => '');
-      throw new Error(
-        `globalSetup: admin/user login for '${username}' failed (${resp.status()})` +
-          (body ? `: ${body}` : '') +
-          ' — verify the dev backend is up on :8000/:8001 and the password matches.',
-      );
-    }
-    await ctx.storageState({ path: authFile });
-  } finally {
-    await ctx.dispose();
-  }
 }
 
 /** Create e2e_user if absent (idempotent). Uses an admin-scoped context. */

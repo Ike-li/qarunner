@@ -63,6 +63,10 @@ services:
       - ./artifacts:/app/artifacts
       - ./external_tests:/app/external_tests
       - ./examples/sample_playwright:/app/external_tests/sample_playwright:ro
+      # E2E specs trigger runs against the `sample_tests` suite. Without this the
+      # suite resolves to a path that does not exist inside the container and the
+      # backend raises RunnerError: source directory does not exist.
+      - ./examples/sample_tests:/app/external_tests/sample_tests:ro
       # This one *does* still need source==target: unlike artifacts_root, this
       # backs the real, intentional QARUNNER_EXECUTOR_EXTRA_READONLY_ROOTS
       # bind-mount-into-the-sandbox feature below (a suite referencing a local

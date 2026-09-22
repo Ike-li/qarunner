@@ -94,6 +94,39 @@ export async function loginProgrammatically(
   }
 }
 
+/**
+ * Login via POST /auth/login and persist the resulting storageState to disk.
+ *
+ * Shared by globalSetup (initial session creation) and by any spec that ends up
+ * revoking its own session: logging out bumps the backend's `token_version`
+ * (src/qarunner/api/routes.py), which invalidates EVERY JWT previously issued to
+ * that user — including the copy sitting in the shared storageState file. A spec
+ * that logs out must call this afterwards, or every later spec in the same
+ * project inherits a revoked token and fails with 401.
+ */
+export async function persistAuthedSession(
+  username: string,
+  password: string,
+  authFile: string,
+): Promise<void> {
+  const ctx = await request.newContext({ baseURL: API_BASE_URL });
+  try {
+    const resp = await ctx.post('/auth/login', { data: { username, password } });
+    if (!resp.ok()) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(
+        `persistAuthedSession: /auth/login for '${username}' failed (${resp.status()})` +
+          (body ? `: ${body}` : '') +
+          ' — verify the backend is up and the password matches.',
+      );
+    }
+    ensureAuthDir();
+    await ctx.storageState({ path: authFile });
+  } finally {
+    await ctx.dispose();
+  }
+}
+
 /** Ensure the .auth directory exists (storageState write requires it). */
 export function ensureAuthDir(): void {
   fs.mkdirSync(AUTH_DIR, { recursive: true });

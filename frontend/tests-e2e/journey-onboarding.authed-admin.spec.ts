@@ -14,6 +14,12 @@ import {
   deleteUser,
   loginAndGetContext,
 } from './helpers/api';
+import {
+  E2E_ADMIN,
+  E2E_ADMIN_PASSWORD,
+  adminAuthFile,
+  persistAuthedSession,
+} from './fixtures/auth';
 
 test.describe('Journey 1 — new user onboarding chain', () => {
   // Unique username per run to avoid collisions across parallel/serial runs.
@@ -22,6 +28,14 @@ test.describe('Journey 1 — new user onboarding chain', () => {
   const newPassword = 'J1-Pass-2026!Strong';
 
   test.afterAll(async () => {
+    // Step 3 below logs out through the UI. The backend revokes every JWT issued
+    // to that user on logout (routes.py bumps token_version), so the shared
+    // admin storageState written by globalSetup is now a revoked token — and
+    // loginAndGetContext('admin') would happily reuse that dead file. Re-auth
+    // and rewrite it FIRST: otherwise this cleanup 401s (leaking the created
+    // user) and every later authed-admin spec inherits the revoked session.
+    await persistAuthedSession(E2E_ADMIN, E2E_ADMIN_PASSWORD, adminAuthFile);
+
     if (!newUsername) return;
     const adminCtx = await loginAndGetContext('admin');
     try {
