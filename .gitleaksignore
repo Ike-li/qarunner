@@ -3,12 +3,12 @@
 # 那是分片计划用例里的毫秒时长参数，紧跟在一个以 api 结尾的标识符之后，
 # 并非任何形式的密钥。
 # 指纹格式：commit:file:rule:line
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1293
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1296
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1299
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1302
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1382
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1385
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1444
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1497
-88eba9ee2c9315c2222e3df327aa201f7b85dcd3:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1500
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1293
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1296
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1299
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1302
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1382
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1385
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1444
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1497
+b1127192a978df2ec1645c66ac4bd866e85b21d8:tests/unit/domain/test_manifest_shard_plan.py:generic-api-key:1500
