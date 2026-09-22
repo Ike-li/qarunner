@@ -10,8 +10,9 @@
 > 文档中出现的 `VERIFIED` / `MET` / `CLOSED` 等字样，指的是"该设计切片的领域层契约
 > 已由测试覆盖"，**不代表对应功能在运行时可用，也不代表可用于生产**。
 >
-> 逐milestone的验收证据账本（`evidence/`）与实施状态账本属于内部过程记录，
-> 未随本仓库发布；文档中对它们的少量引用因此不可达。
+> 逐 milestone 的验收证据账本（`evidence/`）、实施状态账本（`08_IMPLEMENTATION_STATUS.md`）
+> 与长期执行 prompt（`GOAL_PROMPT.md`）属于内部过程记录，未随本仓库发布。
+> 其余文档中对它们的引用因此指向不存在的文件，这是有意为之，不是链接失效。
 
 > 文档集状态：草稿，待产品、研发、QA、安全、运维联合评审<br>
 > 创建日期：2026-07-12<br>
@@ -45,13 +46,11 @@
 | 5 | [现有代码对比与最优解评估](05_CURRENT_STATE_COMPARISON.md) | Assessment | 前四份文档冻结后才读取现有代码 |
 | 6 | [实施计划](06_IMPLEMENTATION_PLAN.md) | Execution Plan | 已冻结设计、现状差距和迁移决策 |
 | 7 | [需求追踪矩阵](07_REQUIREMENTS_TRACEABILITY.md) | RTM | 需求、设计、实施、测试和发布证据 |
-| 8 | [实施状态账本](08_IMPLEMENTATION_STATUS.md) | Execution Ledger | 当前切片、commit、测试证据、风险和下一步 |
 | 9 | [M0 状态模型五方决议包](09_STATE_MODEL_DECISION_PACKET.md) | Implementation Decision Reference | PRD/DD/当前实现与测试的冲突、八项 implementation-level 决议、依赖与实施边界；不新增上游需求 |
 | 10 | [M0 状态模型实现契约](10_STATE_MODEL_CONTRACT.md) | Implementation Contract Reference | 五方获批的 `B/A+X/B/C/A/B/A/B` 组合，以及已签 `STATE-DEC-009/010` 的 001G/001H 实现合同 |
 | 11 | [001F 生产边界评审与授权包](11_BATCH_PREEXECUTION_PRODUCTION_BOUNDARY_REVIEW.md) | Implementation Boundary Decision Reference | 001F 生产 authority/proof/UoW/API/recovery 的九项已签 `DECIDED` implementation-boundary 决议、Evidence 门禁，以及与 001G/001H 的 fail-closed handoff 边界；签署不等于实施或生产授权 |
 | 12 | [STATE-DEC-009/010 决策与签署包](12_STATE_DEC_009_010_DECISION_PACKET.md) | Implementation Decision Packet | 001G/001H 必需的 retry scope、effective resolution、unknown lineage、policy、SLA 与 authority；已于 `2026-07-15T17:04:11Z` 五方具名签署为 `DECIDED` |
 | 13 | [产品方向评审与决策输入包](13_DIRECTION_REVIEW.md) | Direction Review / Decision Input | 执行主机分离形态、同机残余风险接受（≡既有 `GATE-IMP-006`）与 M0-M8 范围排序的三项 `PROPOSED` 决策；`DIRECTION.md` 两台机叙述与单 ECS 主线(00/01/03/06)离群、待向下对齐；经 03/06 全文对抗性复核，D2（单 ECS 同机 MVP、物理第二台机延后）未被推翻；`DRAFT`、未签署 |
-| 执行入口 | [长期 Goal Prompt](GOAL_PROMPT.md) | Codex Goal | 读取后持续执行 M0～M8（**注：M0-M8 全量执行已按 13 号方向评审暂停，待五方决策**） |
 
 ## 3. “独立设计”的含义
 
@@ -106,4 +105,4 @@
   基线化接口后才能进入 M1；真实 persistence/API/crash/real-DB/E2E 由 001G/001H 各自的独立
   Evidence 关闭，不能复用 001F 六包。Production activation 仍等待上述全部 Evidence、M8 与独立
   五方 `GO`，当前保持 `NO-GO`。
-- 后续阶段、当前验证证据和阻断项只以[实施状态账本](08_IMPLEMENTATION_STATUS.md)为事实入口。
+- 后续阶段、当前验证证据和阻断项以实施状态账本为事实入口（内部记录，未随本仓库发布）。

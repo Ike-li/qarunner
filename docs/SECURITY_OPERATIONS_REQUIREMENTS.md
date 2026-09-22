@@ -11,7 +11,7 @@
 本文定义 qarunner 在已确认部署模型下必须满足的安全、隐私、部署、健康、调度、备份恢复和事件处置要求。控制面与 Worker 的传输、身份、状态、错误和恢复细节见
 [Worker 协议参考规范](WORKER_PROTOCOL.md)。
 
-面向安全扫描代理的精简 STRIDE 上下文见 [`.bug-hunter/threat-model.md`](../.bug-hunter/threat-model.md)。
+本文即安全与运维需求的权威来源；面向自动化扫描的精简 STRIDE 上下文属于内部记录，未随本仓库发布。
 安全/运维要求到候选发布证据和签署的映射见 [REQUIREMENTS_TRACEABILITY.md](REQUIREMENTS_TRACEABILITY.md)。
 
 适用边界：

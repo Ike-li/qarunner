@@ -2,6 +2,8 @@
   "name": "qarunner-frontend",
   "private": true,
   "version": "0.1.0",
+  "description": "qarunner web console — React + TypeScript + Semi UI single-page app.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

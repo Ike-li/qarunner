@@ -183,6 +183,15 @@ docker compose -f docker-compose.dev.yml exec frontend npm run test:unit -- --ru
 依赖和 Chrome channel 差异影响结果。开发环境的 compose project network 默认是
 `qarunner_default`，容器内前端服务地址是 `http://frontend:5173`。
 
+> [!IMPORTANT]
+> 前端依赖装在 named volume `qarunner_frontend_node_modules` 里（见
+> `docker-compose.dev.yml` 的注释：刻意不让 Linux 容器依赖落到 macOS bind mount
+> 上）。因此一次性 Playwright 容器**必须同时挂载这个 volume**，否则会报
+> `Cannot find module 'playwright-core'`。下面的命令已包含该挂载。
+>
+> `E2E_ADMIN_PASSWORD` 必须与部署所用的 `QARUNNER_ADMIN_PASSWORD` 一致，
+> 否则 globalSetup 无法登录。下面用占位值，请替换为你自己的口令。
+
 > 与仓库根目录的 `Dockerfile.playwright` 是两回事：那个文件构建的是
 > `qarunner-playwright-executor:latest`——qarunner **运行时**用来在 docker
 > executor 中执行用户自己的 `runner=playwright` 测试套件的镜像（见
@@ -197,9 +206,10 @@ docker compose -f docker-compose.dev.yml up -d
 docker run --rm \
   --network qarunner_default \
   -v "$PWD":/work \
+  -v qarunner_frontend_node_modules:/work/frontend/node_modules \
   -w /work/frontend \
   -e BASE_URL=http://frontend:5173 \
-  -e E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' \
+  -e E2E_ADMIN_PASSWORD="$QARUNNER_ADMIN_PASSWORD" \
   -e PLAYWRIGHT_USE_BUNDLED_CHROMIUM=true \
   mcr.microsoft.com/playwright:v1.61.1-noble \
   bash -lc 'npx playwright test --list'
@@ -208,9 +218,10 @@ docker run --rm \
 docker run --rm \
   --network qarunner_default \
   -v "$PWD":/work \
+  -v qarunner_frontend_node_modules:/work/frontend/node_modules \
   -w /work/frontend \
   -e BASE_URL=http://frontend:5173 \
-  -e E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' \
+  -e E2E_ADMIN_PASSWORD="$QARUNNER_ADMIN_PASSWORD" \
   -e PLAYWRIGHT_USE_BUNDLED_CHROMIUM=true \
   mcr.microsoft.com/playwright:v1.61.1-noble \
   bash -lc 'npx playwright test --reporter=list'
@@ -219,9 +230,10 @@ docker run --rm \
 docker run --rm \
   --network qarunner_default \
   -v "$PWD":/work \
+  -v qarunner_frontend_node_modules:/work/frontend/node_modules \
   -w /work/frontend \
   -e BASE_URL=http://frontend:5173 \
-  -e E2E_ADMIN_PASSWORD='Demo-Qarunner-2026!' \
+  -e E2E_ADMIN_PASSWORD="$QARUNNER_ADMIN_PASSWORD" \
   -e PLAYWRIGHT_USE_BUNDLED_CHROMIUM=true \
   mcr.microsoft.com/playwright:v1.61.1-noble \
   bash -lc 'npx playwright test run-details.authed-admin.spec.ts --reporter=list'

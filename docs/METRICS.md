@@ -9,7 +9,7 @@
 > docs/RELEASE_GATE_CATALOG.md.
 
 > Defines what we measure, why, and what action each metric triggers.
-> See also: `docs/FEATURES.md` §5 (Regression View), `.agents/qa-project-context.md`.
+> See also: `docs/FEATURES.md` §5 (Regression View).
 
 ## Metric Summary
 
