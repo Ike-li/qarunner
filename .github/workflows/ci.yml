@@ -192,7 +192,13 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
-    timeout-minutes: 15
+      # Runs go through the docker executor. It injects sources via put_archive
+      # rather than bind mounts, so the runner's daemon works from inside this container.
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+    # Specs run serially (workers: 1); ~13 min for all of them locally, plus
+    # executor image builds here.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -219,18 +225,37 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      # Pre-build the executor images; building on demand would stall the first run
+      # of each kind past the specs' polling timeouts.
+      - name: Build executor images
+        run: |
+          uv run python - <<'PY'
+          import docker
+
+          client = docker.from_env()
+          for dockerfile, tag in (
+              ("Dockerfile", "qarunner-executor:latest"),
+              ("Dockerfile.playwright", "qarunner-playwright-executor:latest"),
+          ):
+              client.images.build(path=".", dockerfile=dockerfile, tag=tag, rm=True)
+          PY
+
       # ── Start backend ──
+      # Paths come from $GITHUB_WORKSPACE: in a container job ${{ github.workspace }}
+      # is the runner host's path, not this container's.
       - name: Start backend server
         run: |
           mkdir -p tmp/e2e-tests tmp/e2e-artifacts
+          # The specs run against the example suites.
+          cp -r examples/sample_tests examples/sample_playwright tmp/e2e-tests/
+          export QARUNNER_TESTS_ROOT="$GITHUB_WORKSPACE/tmp/e2e-tests"
+          export QARUNNER_ARTIFACTS_ROOT="$GITHUB_WORKSPACE/tmp/e2e-artifacts"
           uv run uvicorn qarunner.api.app:app --port 8000 &
         env:
           QARUNNER_DB_PATH: /tmp/qarunner-e2e.db
           # >= 32 chars: config.py refuses shorter HS256 keys and the server won't start.
           QARUNNER_SECRET_KEY: ci-only-not-a-real-secret-hs256-signing-key
           QARUNNER_ADMIN_PASSWORD: ci-test-pass-2026!
-          QARUNNER_TESTS_ROOT: ${{ github.workspace }}/tmp/e2e-tests
-          QARUNNER_ARTIFACTS_ROOT: ${{ github.workspace }}/tmp/e2e-artifacts
           QARUNNER_CRASH_RECOVERY_ON_STARTUP: "false"
 
       - name: Wait for backend
@@ -248,7 +273,12 @@ jobs:
 
       # ── Run E2E tests ──
       - name: Playwright E2E (shard ${{ matrix.shard }}/2)
-        run: npx playwright test --shard=${{ matrix.shard }}/2
+        run: |
+          # Journey 5 writes a fixture suite into the backend's tests_root; here the
+          # backend shares this container, so both sides see the same path.
+          export E2E_TESTS_ROOT_LOCAL="$GITHUB_WORKSPACE/tmp/e2e-tests"
+          export E2E_TESTS_ROOT_BACKEND="$GITHUB_WORKSPACE/tmp/e2e-tests"
+          npx playwright test --shard=${{ matrix.shard }}/2
         working-directory: frontend
         env:
           BASE_URL: http://localhost:5173
