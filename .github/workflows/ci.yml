@@ -39,7 +39,24 @@ jobs:
     name: Backend unit (pytest + 100% coverage)
     needs: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # ~7 min locally on 10 CPUs (pytest -n auto); GitHub's public runners have 4.
+    timeout-minutes: 30
+    # The default gate includes the Postgres adapter integration tests, which read
+    # QARUNNER_TEST_DATABASE_URL — same image and trust auth as docker-compose.dev.yml.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: qarunner
+          POSTGRES_USER: qarunner
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qarunner -d qarunner"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      QARUNNER_TEST_DATABASE_URL: postgresql://qarunner@localhost:5432/qarunner
     steps:
       - uses: actions/checkout@v4
 
@@ -125,7 +142,8 @@ jobs:
           uv run uvicorn qarunner.api.app:app --port 8000 &
         env:
           QARUNNER_DB_PATH: /tmp/qarunner-a11y.db
-          QARUNNER_SECRET_KEY: ci-test-key-2026!
+          # >= 32 chars: config.py refuses shorter HS256 keys and the server won't start.
+          QARUNNER_SECRET_KEY: ci-only-not-a-real-secret-hs256-signing-key
           QARUNNER_ADMIN_PASSWORD: ci-test-pass-2026!
           QARUNNER_TESTS_ROOT: ${{ github.workspace }}/tmp/e2e-tests
           QARUNNER_ARTIFACTS_ROOT: ${{ github.workspace }}/tmp/e2e-artifacts
@@ -200,7 +218,8 @@ jobs:
           uv run uvicorn qarunner.api.app:app --port 8000 &
         env:
           QARUNNER_DB_PATH: /tmp/qarunner-e2e.db
-          QARUNNER_SECRET_KEY: ci-test-key-2026!
+          # >= 32 chars: config.py refuses shorter HS256 keys and the server won't start.
+          QARUNNER_SECRET_KEY: ci-only-not-a-real-secret-hs256-signing-key
           QARUNNER_ADMIN_PASSWORD: ci-test-pass-2026!
           QARUNNER_TESTS_ROOT: ${{ github.workspace }}/tmp/e2e-tests
           QARUNNER_ARTIFACTS_ROOT: ${{ github.workspace }}/tmp/e2e-artifacts
