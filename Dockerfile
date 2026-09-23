@@ -20,10 +20,13 @@ RUN pip install --no-cache-dir \
 COPY src/qarunner/pytest_plugin/qarunner_canonical_plugin.py /opt/qarunner-adapter/qarunner_canonical_plugin.py
 ENV PYTHONPATH=/opt/qarunner-adapter
 
-# Run untrusted test code as a non-root uid (DEP-1). docker_runner overrides the
-# uid at runtime (user=<host uid>:<gid>, SEC-3); this keeps the image non-root
+# Run untrusted test code as a non-root uid (DEP-1). docker_runner runs every
+# sandbox as 1000:1000 (SEC-3, its _SANDBOX_UID); this keeps the image non-root
 # even if run directly. Pair with --read-only / --cap-drop ALL / --network none.
-RUN useradd --create-home --uid 1000 runner
+# /workspace is owned by that uid: the per-run named volume docker_runner mounts
+# there inherits this ownership on first mount, making the workdir writable.
+RUN useradd --create-home --uid 1000 runner \
+    && mkdir /workspace && chown 1000:1000 /workspace
 USER runner
 
 # Default command

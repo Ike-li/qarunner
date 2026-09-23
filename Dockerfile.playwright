@@ -12,8 +12,13 @@ COPY src/qarunner/playwright_reporter/qarunner_canonical_reporter.js /opt/qarunn
 ENV PLAYWRIGHT_REPORTER=/opt/qarunner-adapter/qarunner_canonical_reporter.js
 ENV QARUNNER_CASE_RESULTS_PATH=/workspace/.qarunner-results/case-results.json
 
-# Keep a non-root baked default, even though DockerRunner overrides uid:gid at
-# runtime so bind-mounted artifacts stay owned by the platform caller.
+# DockerRunner runs every sandbox as 1000:1000 (its _SANDBOX_UID) — the base
+# image's non-root `ubuntu` user, not pwuser (uid 1001). /workspace is owned by
+# that uid: the per-run named volume mounted there inherits this ownership on
+# first mount, making the workdir writable.
+RUN mkdir /workspace && chown 1000:1000 /workspace
+
+# Keep a non-root baked default for direct `docker run` use.
 USER pwuser
 
 CMD ["npx", "playwright", "--version"]

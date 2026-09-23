@@ -396,6 +396,29 @@ async def test_docker_runner_precreates_results_dir_owned_by_sandbox_user(
     assert (results.uid, results.gid) == (1000, 1000)
 
 
+@pytest.mark.parametrize(("host_uid", "host_gid"), [(0, 0), (501, 20)])
+async def test_docker_runner_sandbox_runs_as_fixed_image_user(
+    tmp_path: Path, host_uid: int, host_gid: int
+) -> None:
+    # The sandbox always runs as the executor images' baked non-root user, which owns
+    # the images' /workspace — never as the backend's own uid (root in dev, anything
+    # elsewhere). Nothing crosses back via file ownership: source goes in through
+    # put_archive and results come out through get_archive.
+    mock_client = MockClient(images_exist=True)
+    runner = DockerRunner(client=mock_client)
+
+    with (
+        patch("qarunner.adapters.docker_runner.os.getuid", return_value=host_uid),
+        patch("qarunner.adapters.docker_runner.os.getgid", return_value=host_gid),
+    ):
+        await runner.run(["python", "-m", "pytest"], cwd=_source_dir(tmp_path))
+
+    assert mock_client.create_kwargs["user"] == "1000:1000"
+    _path, put_data = mock_client.mock_container.put_archive_calls[0]
+    with tarfile.open(fileobj=io.BytesIO(put_data)) as tar:
+        assert {(m.uid, m.gid) for m in tar.getmembers()} == {(1000, 1000)}
+
+
 async def test_docker_runner_mounts_allowlisted_env_directory_readonly(tmp_path: Path) -> None:
     project_root = tmp_path / "projects"
     repo = project_root / "my-app"

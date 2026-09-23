@@ -40,6 +40,13 @@ _IN_CONTAINER_WORKDIR = "/workspace"
 _RESULTS_DIRNAME = ".qarunner-results"
 _IN_CONTAINER_RESULTS_DIR = f"{_IN_CONTAINER_WORKDIR}/{_RESULTS_DIRNAME}"
 
+# SEC-3 / T-M5-BROWSER-001: every sandbox runs as the executor images' baked
+# non-root user, never as this process's own uid (root in the dev backend
+# container). Both images create /workspace owned by it, which a fresh named
+# volume inherits on first mount — that is what makes the workdir writable.
+_SANDBOX_UID = 1000
+_SANDBOX_GID = 1000
+
 
 def build_source_tarball(
     source_dir: str, *, uid: int, gid: int, writable_dirs: Sequence[str] = ()
@@ -59,9 +66,10 @@ def build_source_tarball(
     Directories get their own entries for the same reason: the daemon creates
     any directory the tar doesn't name as root:root 0755, which a non-root
     sandbox can't write into. The extraction target itself (the volume mount
-    point) stays root-owned whatever the tar says, so each of *writable_dirs*
-    (relative to it) is added as an empty sandbox-owned directory — the only
-    way the sandbox gets a writable place at the top level.
+    point) keeps whatever owner the image gave it — the daemon ignores a "."
+    entry — so each of *writable_dirs* (relative to it) is added as an empty
+    sandbox-owned directory, writable even on an image that doesn't pre-create
+    /workspace for the sandbox user.
     """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -366,14 +374,7 @@ class DockerRunner:
             # raising, which would otherwise inject an empty tarball and run
             # the sandboxed command against nothing — fail loudly instead.
             raise RunnerError(f"source directory {cwd!r} does not exist")
-        uid, gid = os.getuid(), os.getgid()
-        # T-M5-BROWSER-001: Chromium must not run as root even when the
-        # control-plane process is root (backend dev container). Match the
-        # Playwright image's baked non-root user (pwuser / uid 1000).
-        if is_playwright and uid == 0:
-            sandbox_uid, sandbox_gid = 1000, 1000
-        else:
-            sandbox_uid, sandbox_gid = uid, gid
+        sandbox_uid, sandbox_gid = _SANDBOX_UID, _SANDBOX_GID
         try:
             tarball = await asyncio.to_thread(
                 build_source_tarball,

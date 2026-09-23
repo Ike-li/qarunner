@@ -156,7 +156,8 @@ automatically (no token is ever placed in a URL). Therefore:
   select it only when `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS=true`. V7.4 forbids
   this path and never permits it as Worker/Docker failover. The dev compose enables
   it only as a single-host development convenience. In dev the executor images are
-  built on demand; for release-like legacy validation set
+  built on demand — only when missing, so rebuild them with the commands below
+  after `Dockerfile` / `Dockerfile.playwright` change; for release-like legacy validation set
   `QARUNNER_EXECUTOR_AUTOBUILD=false` and pre-build them so a missing image
   fails fast instead of being silently (re)built:
   `docker build -f Dockerfile -t qarunner-executor:latest .` and

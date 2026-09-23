@@ -20,7 +20,6 @@ image (built on demand by ``DockerRunner._ensure_image``). They carry the
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -184,11 +183,9 @@ async def test_real_container_sec3_isolation_via_inspect(docker_client, tmp_path
     host = attrs["HostConfig"]
     config = attrs["Config"]
 
-    # Non-root: runs as the calling process's uid:gid (least privilege —
-    # SEC-3 — not for bind-mount ownership, since source/results now travel
-    # via put_archive/get_archive rather than a bind mount).
-    assert config["User"] == f"{os.getuid()}:{os.getgid()}"
-    assert not config["User"].startswith("0:"), "must not run as root uid 0"
+    # Non-root: always the executor image's baked user, whatever uid the calling
+    # process has — the dev backend itself runs as root.
+    assert config["User"] == "1000:1000"
     # No network.
     assert host["NetworkMode"] == "none"
     # All Linux capabilities dropped.
