@@ -128,6 +128,10 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+          # The backend below stays up via `uv run` until the job ends and holds uv's
+          # cache lock; the post-job prune would wait out uv's 5-minute lock timeout
+          # and fail the job after the tests already passed.
+          prune-cache: false
 
       - name: Sync backend dependencies
         run: uv sync --frozen --all-extras
@@ -203,6 +207,10 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+          # The backend below stays up via `uv run` until the job ends and holds uv's
+          # cache lock; the post-job prune would wait out uv's 5-minute lock timeout
+          # and fail the job after the tests already passed.
+          prune-cache: false
 
       - name: Sync backend dependencies
         run: uv sync --frozen --all-extras
