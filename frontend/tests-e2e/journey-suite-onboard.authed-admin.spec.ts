@@ -1,120 +1,110 @@
 // Journey 5 — Local suite onboard & first run (P1).
 //
-// Covers: link a local test directory as a suite via the UI → verify it
-// appears in sidebar → trigger a first run → run reaches terminal.
+// Covers: link a local test directory as a suite via the UI → it appears in the
+// sidebar → trigger its first run from the sidebar → the run completes.
 //
-// This journey validates the "add suite" flow that is the entry point for all
-// subsequent testing. It exercises AddSuiteModal + Sidebar refresh.
+// The suite is a throwaway fixture this spec writes itself, under a hidden
+// directory of the backend's tests_root: hidden entries are never listed as
+// suites, so only the link makes it one. It needs a unique basename — /tests/link
+// names the suite after it and replaces whatever entry already has that name.
+//
+// Paths default to the dev compose layout: tests_root is ./external_tests, mounted
+// at /app/external_tests in the backend, and the documented E2E command mounts the
+// repo so this runner reaches it at ../external_tests. Override both with
+// E2E_TESTS_ROOT_LOCAL / E2E_TESTS_ROOT_BACKEND for any other layout.
 
 import { test, expect } from '@playwright/test';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import {
   deleteSuite,
   loginAndGetContext,
   pollRunToTerminal,
 } from './helpers/api';
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const TESTS_ROOT_LOCAL =
+  process.env.E2E_TESTS_ROOT_LOCAL ?? path.resolve(here, '..', '..', 'external_tests');
+const TESTS_ROOT_BACKEND = process.env.E2E_TESTS_ROOT_BACKEND ?? '/app/external_tests';
+const FIXTURES_DIR = '.e2e-fixtures';
+
 test.describe('Journey 5 — suite onboard and first run', () => {
   const suiteName = `e2e_j5_${Date.now()}`;
+  const fixtureDir = path.join(TESTS_ROOT_LOCAL, FIXTURES_DIR, suiteName);
+
+  test.beforeAll(() => {
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(fixtureDir, 'test_j5.py'),
+      'def test_linked_suite_runs():\n    assert 1 + 1 == 2\n',
+    );
+  });
 
   test.afterAll(async () => {
     const adminCtx = await loginAndGetContext('admin');
     try {
-      // Cleanup: unlink the suite we created (or best-effort delete).
+      // Unlinks the suite's symlink and drops its record; the fixture goes next.
       await deleteSuite(adminCtx, suiteName);
     } finally {
       await adminCtx.dispose();
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 
-  test('J5.1 link a local suite via UI and trigger its first run', async ({ page }) => {
+  test('J5.1 link a local suite via UI and run it from the sidebar', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByTestId('profile-username')).toHaveText('admin');
 
-    // ── Step 1: Open the "Add Suite" modal ──
-    const addSuiteBtn = page.getByTestId('open-add-suite-button');
-    await expect(addSuiteBtn).toBeVisible({ timeout: 10000 });
-    await addSuiteBtn.click();
+    // ── Step 1: link the fixture directory through the Add Suite modal ──
+    await page.getByTestId('open-add-suite-button').click();
+    await expect(page.getByTestId('link-path-input')).toBeVisible();
+    await page
+      .getByTestId('link-path-input')
+      .fill(`${TESTS_ROOT_BACKEND}/${FIXTURES_DIR}/${suiteName}`);
 
-    // The add-suite modal should appear.
-    await expect(page.getByTestId('add-suite-modal')).toBeAttached({ timeout: 10000 });
-    await expect(page.getByTestId('link-path-input')).toBeVisible({ timeout: 5000 });
+    const [linkResp] = await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().endsWith('/tests/link') && r.request().method() === 'POST',
+      ),
+      page.getByTestId('link-submit').click(),
+    ]);
+    expect(linkResp.status(), await linkResp.text()).toBe(200);
+    expect(await linkResp.json()).toMatchObject({
+      success: true,
+      suite_name: suiteName,
+      is_accessible: true,
+    });
+    await page.getByTestId('add-suite-modal-close').click();
 
-    // ── Step 2: Fill in a valid local path and submit ──
-    // Use sample_tests which is known to exist in the dev environment.
-    // The path must be absolute or relative to QARUNNER_TESTS_ROOT on the backend.
-    // In docker-compose.dev.yml the project root is mounted, so we can use a path
-    // that resolves inside the container. 'examples/sample_tests' is a safe choice
-    // if the backend's TESTS_ROOT includes examples/.
-    await page.getByTestId('link-path-input').fill('examples/sample_tests');
+    // ── Step 2: the new suite shows up in the sidebar ──
+    await expect(page.getByTestId(`suite-filter-${suiteName}`)).toBeVisible();
 
-    // Submit the link form.
-    const linkSubmit = page.getByTestId('link-submit');
-    await linkSubmit.click();
+    // ── Step 3: trigger its first run via the sidebar quick-trigger ──
+    await page.getByTestId(`suite-quick-trigger-${suiteName}`).click();
+    await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-    // Wait for success feedback or the modal to close.
-    // On success the suite should appear in the sidebar; on error an error banner shows.
-    // We give it time to process.
-    await page.waitForTimeout(3000);
-
-    // Close the modal (success may auto-close, but ensure we're back to main view).
-    await page.keyboard.press('Escape').catch(() => {});
-
-    // ── Step 3: Verify the suite appears in the sidebar ──
-    // The sidebar lists suites; our newly linked one should be visible.
-    // Note: linking might fail if the path doesn't resolve in the container.
-    // In that case we fall back to using the pre-existing 'sample_tests' suite
-    // for the trigger step (still valuable E2E coverage).
-    const suiteInSidebar = page.locator('[data-testid^="suite-item"]').filter({
-      hasText: /sample_tests/i,
-    }).first();
-
-    const linked = await suiteInSidebar.count() > 0;
-
-    // ── Step 4: Trigger a run against the suite ──
-    // Open trigger modal (works regardless of whether J5's link succeeded).
-    await page.getByTestId('open-trigger-button').click();
-    await expect(page.getByTestId('trigger-modal')).toBeVisible({ timeout: 10000 });
-
-    // Select a suite from the dropdown via keyboard (reliable Semi Select interaction).
-    const testsSelect = page.locator('#trigger-tests-path');
-    await testsSelect.click();
-    await testsSelect.press('ArrowDown');
-    await testsSelect.press('Enter');
-
-    // Wait for tree/markers to load (proves testsPath state updated).
-    await page.waitForResponse(
-      (r) => r.url().includes('/tests/'),
-      { timeout: 10000 },
-    ).catch(() => {});
-
-    // Capture POST /runs response.
     const [postResp] = await Promise.all([
       page.waitForResponse(
         (r) => r.url().endsWith('/runs') && r.request().method() === 'POST',
-        { timeout: 15000 },
       ),
       page.getByTestId('trigger-submit-button').click(),
     ]);
-    expect(postResp.ok(), 'POST /runs should succeed').toBe(true);
-    const newRun = (await postResp.json()) as { id: string };
+    expect(postResp.status(), await postResp.text()).toBe(202);
+    const newRun = (await postResp.json()) as { id: string; tests_path: string };
+    expect(newRun.tests_path).toBe(suiteName);
+    await expect(page.getByTestId('trigger-modal')).not.toBeVisible();
 
-    // Modal closes on success.
-    await expect(page.getByTestId('trigger-modal')).not.toBeVisible({ timeout: 10000 });
-
-    // ── Step 5: Poll the run to terminal ──
+    // ── Step 4: the run executes the linked tests and completes ──
     const adminCtx = await loginAndGetContext('admin');
     try {
-      const status = await pollRunToTerminal(adminCtx, newRun.id, 60_000);
-      expect(['completed', 'failed', 'timeout']).toContain(status);
+      expect(await pollRunToTerminal(adminCtx, newRun.id, 120_000)).toBe('completed');
     } finally {
       await adminCtx.dispose();
     }
 
-    // ── Step 6: Verify the run row appears in the table ──
+    // ── Step 5: the run row appears in the table ──
     await page.goto('/');
-    await expect(page.getByTestId('execution-records-title')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByTestId(`run-id-${newRun.id}`)).toBeVisible({
-      timeout: 15000,
-    });
+    await expect(page.getByTestId(`run-id-${newRun.id}`)).toBeVisible({ timeout: 15_000 });
   });
 });

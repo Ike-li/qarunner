@@ -191,6 +191,11 @@ docker compose -f docker-compose.dev.yml exec frontend npm run test:unit -- --ru
 >
 > `E2E_ADMIN_PASSWORD` 必须与部署所用的 `QARUNNER_ADMIN_PASSWORD` 一致，
 > 否则 globalSetup 无法登录。下面用占位值，请替换为你自己的口令。
+>
+> Journey 5（`journey-suite-onboard`）会在后端 tests_root 下的隐藏目录
+> `.e2e-fixtures/` 里临时写一个小套件再链接它，结束后删除。默认按开发 compose
+> 的布局取路径：本容器内是仓库的 `external_tests/`，后端内是 `/app/external_tests`。
+> 其他布局用 `E2E_TESTS_ROOT_LOCAL` / `E2E_TESTS_ROOT_BACKEND` 覆盖。
 
 > 与仓库根目录的 `Dockerfile.playwright` 是两回事：那个文件构建的是
 > `qarunner-playwright-executor:latest`——qarunner **运行时**用来在 docker
