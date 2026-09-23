@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.4.0] — 2026-09-23
+
+First public release. qarunner is now open source under the MIT license.
+
+### Added — PostgreSQL backend
+- PostgreSQL storage with parity for users, runs, suites, credentials, profiles, schedules, per-case history, AI diagnosis cache and crash recovery; selected with `QARUNNER_DATABASE_BACKEND=postgres` and used by the development compose (SQLite remains the default)
+- Alembic migrations as the schema authority; the server fails closed when the database revision does not match the code, and detects migration drift
+- Least-privilege database roles, bounded connection pool, bounded `/health` readiness probe
+
+### Added — worker execution architecture (implemented and tested, not yet wired into the running server)
+- Domain and application contracts for the target topology in which a dedicated worker runs every attempt in a fresh container: idempotent commands, fenced attempts, assignment offer/claim/commit-start/close with concurrent PostgreSQL compare-and-swap, retry and unknown-outcome adjudication, run and batch finalization, cancellation, transactional outbox publishing
+- Immutable suite revisions, manifest shard planning, RBAC policy matrix, target access grants with fail-closed egress decisions, environment leases, secret delivery ledger, resource profiles, bounded queues, deterministic schedule fire identity, drain/audit/orphan GC, and cutover gates
+- `DockerWorkerExecutor` with per-attempt workspace isolation, resource limits, cancellation and restart reconciliation; canonical pytest and Playwright result adapters that report from inside the sandbox
+- The running server still executes runs through the legacy single-host `DockerRunner`; see the caution in the README (GAP-021 / SOR-GAP-023)
+
+### Changed
+- `DockerRunner` injects sources and collects results with `put_archive` / `get_archive` instead of host-path bind mounts
+- Sandbox containers always run as uid/gid 1000, and both executor images pre-create `/workspace` owned by it — **rebuild existing executor images** (`docker build -f Dockerfile ...`, `docker build -f Dockerfile.playwright ...`)
+- Frontend: Vite 8 (from 5) and `@vitejs/plugin-react` 5; building the frontend needs Node.js 20.19+ or 22.12+
+- Frontend: run details drawer split into focused modules; 117 hard-coded zh/en strings moved to i18n
+- README rewritten in English with a feature overview and FAQ; Chinese overview in `README.zh-CN.md`; `llms.txt` added
+
+### Fixed
+- Playwright runs in the Docker executor failed with `EACCES` because the non-root sandbox could not create its results directory
+- The development server restarted itself on every run (uvicorn `--reload` watched the artifacts directory)
+- IDOR path traversal and other audit findings; container-wait timeouts no longer reported as infrastructure failures; schedule-trigger and profile-delete races; mutation buttons now surface network and server errors
+- AI diagnosis: stderr log tail included, corrupt cache degrades instead of failing, POST rate limit
+- Storage: stable ordering for runs, profiles, schedules, claims, case history and credentials; serialized SQLite claims, case replacements and diagnosis upserts; atomic per-user in-flight cap; retention claims runs before deleting artifacts; partial startup rolls back
+
+### Security
+- Dependency upgrades clearing all open Dependabot and `npm audit` alerts, including anyio 4.14.2 (GHSA-82r6-8w77-94w6, critical), cryptography 50.0.1 and pip 26.2.1; vite 8.3, undici, postcss, browserslist, vitest 4.1.11 and the tiptap packages 3.31.3 on the frontend
+- Private vulnerability reporting enabled; see `SECURITY.md`
+
+### Project
+- `SECURITY.md`, `CODE_OF_CONDUCT.md`, issue and pull request templates
+- CI: ruff lint, backend tests with a PostgreSQL service and a 100% coverage gate, frontend unit tests, accessibility smoke tests, and sharded Playwright E2E on pull requests using the Docker executor with a merged HTML report
+- E2E tests no longer depend on data that happens to exist in a local database; several tests that used to skip silently now assert
+
 ## [0.3.0] — 2026-07-10
 
 ### Added — AI failure diagnosis
