@@ -369,6 +369,33 @@ async def test_docker_runner_uses_playwright_image_and_env_junit_mount(tmp_path:
     assert not str(user).startswith("0:")
 
 
+async def test_docker_runner_precreates_results_dir_owned_by_sandbox_user(
+    tmp_path: Path,
+) -> None:
+    # Regression: with a root backend the Playwright sandbox still runs as 1000:1000,
+    # and the fresh /workspace volume is root-owned — Playwright died with EACCES on
+    # mkdir /workspace/.qarunner-results before running a single test.
+    mock_client = MockClient(images_exist=True)
+    runner = DockerRunner(client=mock_client)
+
+    with (
+        patch("qarunner.adapters.docker_runner.os.getuid", return_value=0),
+        patch("qarunner.adapters.docker_runner.os.getgid", return_value=0),
+    ):
+        await runner.run(
+            ["npx", "playwright", "test", "--reporter=junit"],
+            cwd=_source_dir(tmp_path),
+            env={"PLAYWRIGHT_JUNIT_OUTPUT_NAME": "/tmp/results/junit.xml"},
+        )
+
+    assert mock_client.create_kwargs["user"] == "1000:1000"
+    _path, put_data = mock_client.mock_container.put_archive_calls[0]
+    with tarfile.open(fileobj=io.BytesIO(put_data)) as tar:
+        results = tar.getmember(".qarunner-results")
+    assert results.isdir()
+    assert (results.uid, results.gid) == (1000, 1000)
+
+
 async def test_docker_runner_mounts_allowlisted_env_directory_readonly(tmp_path: Path) -> None:
     project_root = tmp_path / "projects"
     repo = project_root / "my-app"
@@ -813,6 +840,64 @@ def test_build_source_tarball_excludes_jail_ignore_names(tmp_path: Path) -> None
         # node_modules must survive (Playwright red line, §5.7).
         assert "node_modules/pkg.js" in names
         assert "test_a.py" in names
+
+
+def test_build_source_tarball_includes_directories_owned_by_sandbox_user(
+    tmp_path: Path,
+) -> None:
+    # put_archive only chowns what the tar names: a directory without its own entry
+    # is created by the daemon as root:root 0755, which a non-root sandbox cannot
+    # write into.
+    source = tmp_path / "suite"
+    (source / "sub").mkdir(parents=True)
+    (source / "sub" / "test_b.py").write_text("def test_b(): pass\n")
+
+    data = build_source_tarball(str(source), uid=1234, gid=5678)
+
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        members = tar.getmembers()
+    names = [m.name for m in members]
+    sub = members[names.index("sub")]
+    assert sub.isdir()
+    assert (sub.uid, sub.gid) == (1234, 5678)
+    # The entry must precede its contents, or the daemon creates the dir first.
+    assert names.index("sub") < names.index("sub/test_b.py")
+
+
+def test_build_source_tarball_skips_symlinked_directories(tmp_path: Path) -> None:
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_a.py").write_text("def test_a(): pass\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("not part of the suite")
+    (source / "linked").symlink_to(outside, target_is_directory=True)
+
+    data = build_source_tarball(str(source), uid=0, gid=0)
+
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        names = tar.getnames()
+    assert not any(n == "linked" or n.startswith("linked/") for n in names)
+    assert "test_a.py" in names
+
+
+def test_build_source_tarball_precreates_writable_dirs(tmp_path: Path) -> None:
+    # The workdir itself is the volume mount point and stays root-owned (the daemon
+    # ignores a "." entry), so a non-root sandbox cannot mkdir anything directly
+    # under it — dirs it must write to have to arrive in the tarball.
+    source = tmp_path / "suite"
+    source.mkdir()
+    (source / "test_a.py").write_text("def test_a(): pass\n")
+
+    data = build_source_tarball(
+        str(source), uid=1000, gid=1000, writable_dirs=[".qarunner-results"]
+    )
+
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        results = tar.getmember(".qarunner-results")
+    assert results.isdir()
+    assert (results.uid, results.gid) == (1000, 1000)
+    assert results.mode & 0o700 == 0o700
 
 
 def _get_archive_style_tar(wrapper: str, files: dict[str, bytes]) -> bytes:

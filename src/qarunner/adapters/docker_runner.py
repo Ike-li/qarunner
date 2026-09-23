@@ -37,10 +37,13 @@ _MAX_LOG_BYTES = 10_000_000
 # path the caller's own process sees `cwd`/results at — see build_source_tarball
 # / extract_results_archive / rewrite_results_paths module docstrings.
 _IN_CONTAINER_WORKDIR = "/workspace"
-_IN_CONTAINER_RESULTS_DIR = f"{_IN_CONTAINER_WORKDIR}/.qarunner-results"
+_RESULTS_DIRNAME = ".qarunner-results"
+_IN_CONTAINER_RESULTS_DIR = f"{_IN_CONTAINER_WORKDIR}/{_RESULTS_DIRNAME}"
 
 
-def build_source_tarball(source_dir: str, *, uid: int, gid: int) -> bytes:
+def build_source_tarball(
+    source_dir: str, *, uid: int, gid: int, writable_dirs: Sequence[str] = ()
+) -> bytes:
     """Package *source_dir* as an in-memory tar for ``put_archive`` injection.
 
     Arcnames are root-relative (no leading path component) so extracting into
@@ -52,6 +55,13 @@ def build_source_tarball(source_dir: str, *, uid: int, gid: int) -> bytes:
     ``user=``) rather than preserved from whatever uid happens to own the
     files on the calling process's filesystem, so the sandboxed process can
     always read/write what it's given regardless of who created it.
+
+    Directories get their own entries for the same reason: the daemon creates
+    any directory the tar doesn't name as root:root 0755, which a non-root
+    sandbox can't write into. The extraction target itself (the volume mount
+    point) stays root-owned whatever the tar says, so each of *writable_dirs*
+    (relative to it) is added as an empty sandbox-owned directory — the only
+    way the sandbox gets a writable place at the top level.
     """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -60,13 +70,23 @@ def build_source_tarball(source_dir: str, *, uid: int, gid: int) -> bytes:
             relative = path.relative_to(root)
             if any(part in JAIL_IGNORE_NAMES for part in relative.parts):
                 continue
-            if path.is_dir():
-                continue
             info = tar.gettarinfo(str(path), arcname=str(relative))
             info.uid = uid
             info.gid = gid
+            if path.is_dir():
+                # A symlinked directory is still not packaged.
+                if not path.is_symlink():
+                    tar.addfile(info)
+                continue
             with open(path, "rb") as f:
                 tar.addfile(info, f)
+        for name in writable_dirs:
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            info.uid = uid
+            info.gid = gid
+            tar.addfile(info)
     return buf.getvalue()
 
 
@@ -356,7 +376,11 @@ class DockerRunner:
             sandbox_uid, sandbox_gid = uid, gid
         try:
             tarball = await asyncio.to_thread(
-                build_source_tarball, cwd, uid=sandbox_uid, gid=sandbox_gid
+                build_source_tarball,
+                cwd,
+                uid=sandbox_uid,
+                gid=sandbox_gid,
+                writable_dirs=[_RESULTS_DIRNAME],
             )
         except OSError as exc:
             raise RunnerError(f"Failed to package source directory: {exc}") from exc
