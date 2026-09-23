@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 
+import { mockRunDetailRoute, mockRunsRoute, shallowRunForList } from './helpers/runs';
+
 // Run Details Drawer E2E tests — validates the SideSheet drawer that slides in
 // when a run row is clicked, including the Logs / Report / Diff tabs, fullscreen
 // overlays, action buttons (re-run / cancel / delete), and placeholder states.
@@ -136,37 +138,6 @@ const RUN_ARTIFACTS = {
 async function openDashboard(page: import('@playwright/test').Page) {
   await page.goto('/');
   await expect(page.getByTestId('profile-username')).toHaveText('admin');
-}
-
-async function mockRunsRoute(page: import('@playwright/test').Page, runsArray: unknown[]) {
-  await page.route('**/runs', async (route) => {
-    if (route.request().method() !== 'GET') {
-      await route.fallback();
-      return;
-    }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runs: runsArray }) });
-  });
-  // Mock /suites and /tests to avoid backend dependency for sidebar / trend calls.
-  await page.route('**/suites', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
-  });
-  await page.route('**/tests', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(['suite_integration/']) });
-  });
-}
-
-function shallowRunForList<T extends object>(run: T) {
-  return { ...run, stdout: null, stderr: null, cases: [] };
-}
-
-async function mockRunDetailRoute(page: import('@playwright/test').Page, runId: string, runData: unknown) {
-  await page.route(`**/runs/${runId}`, async (route) => {
-    if (route.request().method() === 'GET') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(runData) });
-    } else {
-      await route.fallback();
-    }
-  });
 }
 
 async function mockRunArtifactsRoute(
