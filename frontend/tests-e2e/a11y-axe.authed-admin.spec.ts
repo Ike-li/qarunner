@@ -10,7 +10,7 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
-import { mockRunDetailRoute, mockRunsRoute, shallowRunForList } from './helpers/runs';
+import { mockRunWithLogsAndReport } from './helpers/runs';
 
 // Known Semi UI noise — these are library-level issues that we don't control.
 const SEMI_UI_NOISE = [
@@ -117,28 +117,7 @@ test.describe('A0.3 Modal/Drawer dialog 语义', () => {
 
   test('RunDetailsDrawer 有 dialog 语义', async ({ page }) => {
     // The drawer opens from a run row, so supply one: CI starts from an empty DB.
-    const run = {
-      id: 'run-a11y-0001',
-      status: 'completed',
-      runner: 'pytest',
-      created_by: 'admin',
-      tests_path: 'suite_integration/',
-      args: [],
-      executor_mode: 'docker',
-      summary: { total: 1, passed: 1, failed: 0, skipped: 0, error: 0, duration_ms: 100, pass_rate: 1 },
-      report: null,
-      exit_code: 0,
-      error: null,
-      passed: true,
-      created_at: '2026-07-03T10:00:00Z',
-      started_at: '2026-07-03T10:00:01Z',
-      finished_at: '2026-07-03T10:00:02Z',
-      stdout: '1 passed',
-      stderr: null,
-      cases: [],
-    };
-    await mockRunsRoute(page, [shallowRunForList(run)]);
-    await mockRunDetailRoute(page, run.id, run);
+    await mockRunWithLogsAndReport(page);
 
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible();

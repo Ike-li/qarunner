@@ -13,6 +13,8 @@
 
 import { test, expect } from '@playwright/test';
 
+import { mockRunWithLogsAndReport } from './helpers/runs';
+
 // Helper: check if document.activeElement is inside a container
 async function isFocusInside(page: import('@playwright/test').Page, selector: string) {
   return page.evaluate((sel) => {
@@ -35,6 +37,8 @@ async function openDrawerFromFirstRow(page: import('@playwright/test').Page) {
 
 test.describe('A1.6 FullscreenTerminalOverlay 焦点管理', () => {
   test('F1-F4: 焦点进入 → Tab 陷阱 → Esc 关闭 → 焦点还原', async ({ page }) => {
+    // A known run with console output, instead of whatever the database holds.
+    await mockRunWithLogsAndReport(page);
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible();
 
@@ -42,12 +46,7 @@ test.describe('A1.6 FullscreenTerminalOverlay 焦点管理', () => {
     await openDrawerFromFirstRow(page);
 
     const terminalBtn = page.getByTestId('terminal-fullscreen-button');
-    const hasTerminalBtn = await terminalBtn.isVisible({ timeout: 3_000 }).catch(() => false);
-
-    if (!hasTerminalBtn) {
-      test.skip(true, 'No terminal fullscreen button found — run may not have terminal output');
-      return;
-    }
+    await expect(terminalBtn).toBeVisible();
 
     await terminalBtn.focus();
     await expect(terminalBtn).toBeFocused();
@@ -79,6 +78,8 @@ test.describe('A1.6 FullscreenTerminalOverlay 焦点管理', () => {
 
 test.describe('A1.7 FullscreenReportOverlay 焦点管理', () => {
   test('F1-F4: 焦点进入 → Tab 陷阱 → Esc 关闭 → 焦点还原', async ({ page }) => {
+    // A known run with an HTML report, instead of whatever the database holds.
+    await mockRunWithLogsAndReport(page);
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible();
 
@@ -93,12 +94,7 @@ test.describe('A1.7 FullscreenReportOverlay 焦点管理', () => {
 
     // Look for the fullscreen report button
     const fullscreenBtn = page.getByTestId('report-fullscreen-button');
-    const hasBtn = await fullscreenBtn.isVisible({ timeout: 3_000 }).catch(() => false);
-
-    if (!hasBtn) {
-      test.skip(true, 'No report available — run may not have generated a report');
-      return;
-    }
+    await expect(fullscreenBtn).toBeVisible();
 
     // Record trigger for F4
     await fullscreenBtn.focus();
@@ -175,24 +171,24 @@ test.describe('A1.2 AddSuiteModal 焦点管理', () => {
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible();
 
-    const addSuiteBtn = page.getByTestId('add-suite-button');
-    const hasBtn = await addSuiteBtn.isVisible({ timeout: 3_000 }).catch(() => false);
-    if (!hasBtn) {
-      test.skip(true, 'Add suite button not visible');
-      return;
-    }
+    const addSuiteBtn = page.getByTestId('open-add-suite-button');
+    await expect(addSuiteBtn).toBeVisible();
 
     await addSuiteBtn.click();
-    await expect(page.getByTestId('add-suite-modal')).toBeVisible();
+    // Semi's Modal puts data-testid on a zero-height wrapper that never counts as
+    // visible (nor, for the same reason, as ever shown); assert on its content.
+    await expect(page.getByTestId('link-path-input')).toBeVisible();
 
     // Verify dialog semantics
-    const dialog = page.locator('[data-testid="add-suite-modal"][role="dialog"]');
+    // AddSuiteModal sets role/aria-modal on its own inner container (the one
+    // useDialogA11y manages), inside the element carrying the testid.
+    const dialog = page.locator('[data-testid="add-suite-modal"] [role="dialog"][tabindex="-1"]');
     await expect(dialog).toBeAttached();
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
 
     // F3: Esc closes
     await page.keyboard.press('Escape');
-    await expect(page.getByTestId('add-suite-modal')).toBeHidden({ timeout: 5_000 });
+    await expect(page.getByTestId('link-path-input')).toBeHidden({ timeout: 5_000 });
 
     // F4: Focus restores
     await expect(addSuiteBtn).toBeFocused();
@@ -299,6 +295,8 @@ test.describe('A1.4 UserManagementModal 焦点管理', () => {
 
 test.describe('A1.5 RunDetailsDrawer 焦点管理', () => {
   test('F1+F3: 焦点进入 drawer → close 关闭', async ({ page }) => {
+    // The drawer opens from a run row, so supply one: CI starts from an empty DB.
+    await mockRunWithLogsAndReport(page);
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible();
 

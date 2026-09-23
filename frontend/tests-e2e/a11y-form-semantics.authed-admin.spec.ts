@@ -10,6 +10,8 @@
 
 import { test, expect } from '@playwright/test';
 
+import { mockRunWithLogsAndReport } from './helpers/runs';
+
 // ── A3.1  Form input label associations ──────────────────────────────────
 
 test.describe('A3.1 表单 input label 关联', () => {
@@ -312,6 +314,8 @@ test.describe('A3.4 图标按钮可访问名', () => {
   });
 
   test('FullscreenOverlay icon 按钮有 aria-label', async ({ page }) => {
+    // A known run with console output, instead of whatever the database holds.
+    await mockRunWithLogsAndReport(page);
     await page.goto('/');
     await expect(page.getByTestId('stat-total')).toBeVisible();
 
@@ -326,32 +330,28 @@ test.describe('A3.4 图标按钮可访问名', () => {
     const terminalBtn = page
       .locator('button', { hasText: /^Fullscreen$|^全屏终端$/ })
       .first();
-    const hasTerminal = await terminalBtn
-      .isVisible({ timeout: 3_000 })
-      .catch(() => false);
+    await expect(terminalBtn).toBeVisible();
 
-    if (hasTerminal) {
-      await terminalBtn.click();
-      const dialog = page.locator('[role="dialog"][aria-modal="true"]');
-      await expect(dialog).toBeVisible({ timeout: 5_000 });
+    await terminalBtn.click();
+    const dialog = page.locator('[role="dialog"][aria-modal="true"]');
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-      // Check icon buttons inside the overlay
-      // Close button should have aria-label
-      const closeBtn = dialog.locator('button').last();
-      const closeLabel = await closeBtn.getAttribute('aria-label');
-      expect(closeLabel).toBeTruthy();
+    // Check icon buttons inside the overlay
+    // Close button should have aria-label
+    const closeBtn = dialog.locator('button').last();
+    const closeLabel = await closeBtn.getAttribute('aria-label');
+    expect(closeLabel).toBeTruthy();
 
-      // Font increase/decrease buttons should have aria-label
-      const fontBtns = dialog.locator(
-        'button[aria-label*="font"], button[aria-label*="Font"]',
-      );
-      const fontCount = await fontBtns.count();
-      expect(fontCount).toBeGreaterThanOrEqual(2);
+    // Font increase/decrease buttons should have aria-label
+    const fontBtns = dialog.locator(
+      'button[aria-label*="font"], button[aria-label*="Font"]',
+    );
+    const fontCount = await fontBtns.count();
+    expect(fontCount).toBeGreaterThanOrEqual(2);
 
-      // Esc to close
-      await page.keyboard.press('Escape');
-      await expect(dialog).toBeHidden({ timeout: 5_000 });
-    }
+    // Esc to close
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden({ timeout: 5_000 });
   });
 
   test('Header theme/logout 按钮有 aria-label', async ({ page }) => {
