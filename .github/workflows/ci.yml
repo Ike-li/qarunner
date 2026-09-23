@@ -252,7 +252,9 @@ jobs:
   e2e-merge-reports:
     name: E2E merged report
     needs: e2e
-    if: ${{ !cancelled() }}
+    # Same trigger as `e2e`: on push the shards are skipped, and !cancelled()
+    # alone would still run this job against no artifacts and fail.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
