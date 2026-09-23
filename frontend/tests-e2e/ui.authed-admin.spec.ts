@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 
+import { E2E_ADMIN, E2E_ADMIN_PASSWORD, adminAuthFile, persistAuthedSession } from './fixtures/auth';
 import {
   UserTestData,
   openAdminDashboard,
@@ -37,13 +38,22 @@ test.describe('qarunner Premium UI E2E Tests — admin', () => {
     await expect(page.getByTestId('execution-records-title')).toBeVisible();
   });
 
-  test('Logout from header returns to login screen', async ({ page }) => {
-    await expect(page.getByTestId('profile-username')).toHaveText('admin');
+  test.describe('logout', () => {
+    // Logging out revokes every admin JWT (routes.py bumps token_version), including
+    // the shared storageState later tests and specs load. Re-auth in a hook so the
+    // file is rewritten even when an assertion after the click fails.
+    test.afterEach(async () => {
+      await persistAuthedSession(E2E_ADMIN, E2E_ADMIN_PASSWORD, adminAuthFile);
+    });
 
-    await page.getByRole('button', { name: /sign out|退出登录/i }).click();
+    test('Logout from header returns to login screen', async ({ page }) => {
+      await expect(page.getByTestId('profile-username')).toHaveText('admin');
 
-    await expect(page.getByTestId('login-title')).toBeVisible();
-    await expect(page.getByTestId('login-submit')).toBeVisible();
+      await page.getByRole('button', { name: /sign out|退出登录/i }).click();
+
+      await expect(page.getByTestId('login-title')).toBeVisible();
+      await expect(page.getByTestId('login-submit')).toBeVisible();
+    });
   });
 
   test('Test Case 4: Run Trigger Modal Workflow', async ({ page }) => {
