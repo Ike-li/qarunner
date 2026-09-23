@@ -2,7 +2,7 @@
 
 ## Application Overview
 
-qarunner is a single-page application (React 18 + TypeScript + Vite 5 + Semi UI 2) for automated test execution, scheduling, and regression comparison. It features a full-screen login overlay, dashboard with stats cards, suite pass-rate trend sparkline, project sidebar, execution records table with filtering, run details drawer (logs/report/diff tabs), trigger-run modal with profile management, add-suite modal (local path or Git clone), schedule management, user management (admin only), and fullscreen report/terminal overlays. This plan covers all functional areas using data-testid selectors (kebab-case), covering happy paths, edge cases, error handling, and empty states across the complete application surface.
+qarunner is a single-page application (React 18 + TypeScript + Vite 8 + Semi UI 2) for automated test execution, scheduling, and regression comparison. It features a full-screen login overlay, dashboard with stats cards, suite pass-rate trend sparkline, project sidebar, execution records table with filtering, run details drawer (logs/report/diff tabs), trigger-run modal with profile management, add-suite modal (local path or Git clone), schedule management, user management (admin only), and fullscreen report/terminal overlays. This plan covers all functional areas using data-testid selectors (kebab-case), covering happy paths, edge cases, error handling, and empty states across the complete application surface.
 
 ## Test Scenarios
 

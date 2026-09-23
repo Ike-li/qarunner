@@ -42,7 +42,7 @@
 - **核心逻辑（目标）**：控制面经受认证 Worker 协议调度，Worker agent 使用本机 Docker API 创建 Source/Dependency/Report 及每 Run 一次性容器；当前 DockerRunner 尚未迁移
 
 ### 前端 (Frontend)
-- **框架/打包**：React 18.3 + TypeScript 5.2 + Vite 5.3
+- **框架/打包**：React 18.3 + TypeScript 5.2 + Vite 8
 - **UI 库**：Semi UI (Douyinfe) 2.100 + Lucide React 图标
 - **状态 & 国际化**：React Context/Hooks + i18n 多语言 + 主题切换 (Light/Dark)
 
