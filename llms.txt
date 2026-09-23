@@ -1,0 +1,26 @@
+# qarunner
+
+> qarunner is a self-hosted regression test runner for pytest and Playwright. It runs existing test suites in throwaway Docker containers, keeps logs, Allure reports, Playwright artifacts and per-case results for every run, and compares each run with the most recent comparable run (same suite, runner and arguments) to report new failures, fixed cases, still-failing cases and flaky tests. It targets a single team on a trusted internal network; it has a FastAPI backend, a React web console and a REST API, and is deployed with Docker Compose. MIT licensed, alpha status.
+
+Important notes:
+
+- The current version must not run untrusted test code: the control plane mounts the host Docker socket. The target architecture with a separate worker host is not implemented yet.
+- It is not a CI system, not a command-line tool and not multi-tenant. CI pipelines can trigger runs through the REST API.
+- AI failure diagnosis (Anthropic or OpenAI) is optional and read-only; everything else works without an API key.
+- Most design, requirements and operations documents are written in Chinese; the README, architecture overview, contributing guide and metric definitions are in English.
+
+## Docs
+
+- [README](https://github.com/Ike-li/qarunner/blob/master/README.md): overview, features, quick start, FAQ, configuration reference
+- [Features](https://github.com/Ike-li/qarunner/blob/master/docs/FEATURES.md): source-checked capability list and deliberate non-goals (Chinese)
+- [Deployment guide](https://github.com/Ike-li/qarunner/blob/master/docs/deployment.md): development and legacy single-host deployment, migrations, E2E tests (Chinese)
+- [API reference](https://github.com/Ike-li/qarunner/blob/master/docs/API_REFERENCE.md): every route with request and response fields (Chinese)
+- [Architecture](https://github.com/Ike-li/qarunner/blob/master/ARCHITECTURE.md): hexagonal layers, ports and adapters
+- [Product direction](https://github.com/Ike-li/qarunner/blob/master/docs/DIRECTION.md): positioning, trust model and product boundaries (Chinese)
+
+## Optional
+
+- [简体中文 README](https://github.com/Ike-li/qarunner/blob/master/README.zh-CN.md): Chinese overview and FAQ
+- [Security policy](https://github.com/Ike-li/qarunner/blob/master/SECURITY.md): how to report vulnerabilities, known security boundaries (Chinese)
+- [Contributing](https://github.com/Ike-li/qarunner/blob/master/CONTRIBUTING.md): container-based development setup and quality gates
+- [Quality metrics](https://github.com/Ike-li/qarunner/blob/master/docs/METRICS.md): definitions of pass rate, flakiness and duration metrics

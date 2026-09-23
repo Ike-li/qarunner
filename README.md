@@ -1,95 +1,177 @@
-# qarunner
+# qarunner — self-hosted regression test runner for pytest and Playwright
 
-> **qarunner** — 产品方向见 [docs/DIRECTION.md](docs/DIRECTION.md)。运行详情支持只读的 AI 失败诊断（无 API key 时 Tab 内展示未配置说明，不隐藏入口），详见 [docs/FEATURES.md](docs/FEATURES.md)。
+[![CI](https://github.com/Ike-li/qarunner/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Ike-li/qarunner/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
+![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
+
+English | [简体中文](README.zh-CN.md)
+
+**qarunner is a self-hosted service that runs your existing pytest and Playwright
+regression suites in throwaway Docker containers, keeps the full evidence of every
+run, and compares each run with a comparable earlier run to show new failures,
+fixes and flaky tests.** It is built for a single team on a trusted internal
+network: a FastAPI backend, a React web console and a REST API, deployed with
+Docker Compose.
 
 > [!CAUTION]
-> **当前版本请勿用来执行你不信任的测试代码。**
+> **Do not use the current version to run test code you do not trust.**
 >
-> 控制面进程直接挂载宿主的 `/var/run/docker.sock`。挂载 Docker socket 等价于把宿主 root 权限交给该进程 —— 测试代码一旦逃出执行容器，就能控制整台宿主机。
+> The control-plane process mounts the host's `/var/run/docker.sock`, which is
+> equivalent to host root: test code that escapes its execution container can take
+> over the whole machine.
 >
-> - ✅ **适用**：你自己或团队编写、依赖来源可控的回归套件，部署在受信内网。
-> - ❌ **不适用**：来源不明的测试代码、外部贡献者提交的 PR 测试、多租户共享环境。
+> - ✅ **Fits**: regression suites written by you or your team, with dependencies
+>   from sources you control, deployed on a trusted internal network.
+> - ❌ **Does not fit**: test code of unknown origin, tests from external
+>   contributors' pull requests, shared multi-tenant environments.
 >
-> 目标架构（控制面与专用 Worker 主机分离、控制面不持有 Docker socket、每 Run 一次性容器）尚未落地，内部追踪编号 GAP-021 / SOR-GAP-023。
+> The target architecture (control plane separated from a dedicated worker host,
+> no Docker socket on the control plane, one disposable container per run) is not
+> implemented yet; it is tracked internally as GAP-021 / SOR-GAP-023.
 
-## 本地部署
+## Why qarunner
 
-**日常开发和部署指南详见 [docs/deployment.md](docs/deployment.md)**。
+Running a test suite once tells you whether it passed. A regression signal needs
+more: which cases changed since the last run *that is actually comparable*,
+whether a failure is new or has been flipping for weeks, and the logs and report
+to act on it. qarunner keeps per-case results for every run and only diffs runs
+that share the same suite, runner and arguments — when there is no comparable
+baseline it says so instead of showing a misleading diff.
 
-快速启动（开发模式）：
+## Features
+
+- **Isolated execution** — pytest and Playwright run in disposable Docker
+  containers: non-root, no network, all Linux capabilities dropped, read-only
+  root filesystem, memory / CPU / PID limits, a fresh workspace per run.
+- **Bring your own tests** — link a local directory or clone a Git repository
+  (private repos via encrypted HTTPS tokens), browse files, filter by pytest
+  markers or Playwright `@tags`.
+- **Profiles, runs and schedules** — save run configurations, trigger on demand,
+  re-run, cancel, or schedule with cron expressions and per-schedule IANA time zones.
+- **Evidence for every run** — live log streaming (SSE), a JUnit-based summary,
+  an Allure HTML report, and Playwright traces, screenshots and videos.
+- **Cross-run regression view** — a baseline diff in five buckets (new failures,
+  fixed, still failing, new cases, missing cases), pass-rate trends, flaky-test
+  detection, per-case history and 7-day quality metrics.
+- **Optional AI failure diagnosis** — sends failed cases, log tails, the baseline
+  diff and flaky history to Anthropic or OpenAI and returns one of six root-cause
+  categories with a confidence level and evidence. Read-only; disabled when no
+  API key is set.
+- **Web console and REST API** — React UI with English/Chinese, light/dark themes
+  and keyboard accessibility; a REST API with Swagger UI, ReDoc and an OpenAPI schema.
+- **Accounts** — admin and user roles, owner-scoped access to runs, profiles and
+  schedules, login throttling; Feishu (Lark) notifications when a run finishes.
+
+See [docs/FEATURES.md](docs/FEATURES.md) for the complete, source-checked
+capability list, including what qarunner deliberately does not do.
+
+## Who it is for
+
+QA engineers, test developers and quality owners who already maintain pytest or
+Playwright suites and want one low-maintenance place to run them on a schedule,
+keep the evidence, and see what changed. Developers consume the results before a
+commit, a release or an incident review.
+
+It is **not** a CI system, not a command-line tool, and not multi-tenant. See
+[docs/DIRECTION.md](docs/DIRECTION.md) for the product direction and trust model.
+
+## Quick start (development mode)
+
+Requires Docker with Docker Compose. Full guide: **[docs/deployment.md](docs/deployment.md)**.
 
 ```bash
-# 1) 准备配置。SECRET_KEY 与 ADMIN_PASSWORD 必须设为强值：
-#    平台会拒绝 change-me / admin123 等占位口令并拒绝启动。
+# 1) Configure. QARUNNER_SECRET_KEY and QARUNNER_ADMIN_PASSWORD must be strong:
+#    the server refuses placeholders such as change-me or admin123.
 cp .env.example .env
-$EDITOR .env   # 填入自己的 QARUNNER_SECRET_KEY 与 QARUNNER_ADMIN_PASSWORD
+$EDITOR .env
 
-# 2) 启动开发环境（前后端热更新）
+# 2) Start the development stack (hot reload for backend and frontend)
 docker compose -f docker-compose.dev.yml up -d
 
-# 3) 首次启动需要先执行数据库迁移，否则后端会按设计拒绝启动，
-#    具体命令见 docs/deployment.md 的 "PostgreSQL migration operator" 一节。
+# 3) On first start, run the database migration — the backend refuses to start
+#    until it is done. See "PostgreSQL migration operator" in docs/deployment.md.
 
-# 访问 http://localhost:5173
-# 管理员用户名 admin，密码为你在 .env 中设置的值
+# Open http://localhost:5173 and sign in as `admin` with the password from .env
 ```
 
-代码更新后：
+After changing code:
 
-| 修改了什么 | 需要做什么 |
-|-----------|-----------|
-| 前端 `src/*.tsx` | 自动生效，刷新浏览器 |
-| 后端 `src/*.py` | 自动重启，等 2-3 秒 |
-| 新增依赖包 | `docker compose -f docker-compose.dev.yml up -d --build` |
+| What changed | What to do |
+|--------------|------------|
+| Frontend `src/*.tsx` | Applied automatically; refresh the browser |
+| Backend `src/*.py` | Server restarts automatically within 2–3 seconds |
+| Dependencies | `docker compose -f docker-compose.dev.yml up -d --build` |
 
-详细说明（开发与 legacy 验证部署、运行测试、容器运维）见 **[docs/deployment.md](docs/deployment.md)**。
+## FAQ
 
-## 文档索引
+### What is qarunner?
 
-| 文档 | 说明 |
-|------|------|
-| [docs/deployment.md](docs/deployment.md) | **本地部署与更新指南**（开发/legacy 验证模式、代码更新、运维命令） |
-| [docs/DIRECTION.md](docs/DIRECTION.md) | 产品方向（唯一权威来源） |
-| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | 产品需求（用户结果、核心范围、KPI、路线图） |
-| [docs/SYSTEM_REQUIREMENTS.md](docs/SYSTEM_REQUIREMENTS.md) | 系统需求（Worker 协议、provenance、授权、环境租约、证据、状态与接口） |
-| [docs/SECURITY_OPERATIONS_REQUIREMENTS.md](docs/SECURITY_OPERATIONS_REQUIREMENTS.md) | 安全与运维需求（控制面/Worker 边界、供应链、宿主隔离、部署与门禁） |
-| [docs/WORKER_PROTOCOL.md](docs/WORKER_PROTOCOL.md) | Worker 协议参考（mTLS 长轮询、claim/commit-start、fencing、上传、恢复与错误码） |
-| [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md) | 需求追踪矩阵（PRD → 系统/安全/运维 → 验收目录 → 发布证据） |
-| [docs/RELEASE_GATE_CATALOG.md](docs/RELEASE_GATE_CATALOG.md) | 发布验收目录（24 个 family、稳定 case ID、适用性、样本与阻断状态） |
-| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | API 端点参考（所有路由、请求/响应字段） |
-| [docs/FEATURES.md](docs/FEATURES.md) | 功能列表 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 代码架构（层次、端口、适配器） |
-| [specs/ui-test-plan.md](specs/ui-test-plan.md) | E2E 测试计划 |
-| [specs/TEST_PLAN_TEMPLATE.md](specs/TEST_PLAN_TEMPLATE.md) | 测试计划模板（含组件交互清单） |
-| [docs/METRICS.md](docs/METRICS.md) | 质量度量定义（通过率、flaky、时长的口径与触发动作） |
-| [docs/greenfield/](docs/greenfield/README.md) | 绿地设计文档集（**目标设计，非已交付能力**：架构、详细设计、状态模型契约） |
+A self-hosted regression test runner. It executes existing pytest and Playwright
+suites in isolated Docker containers, stores logs, reports and per-case results for
+every run, and compares each run with a comparable earlier run.
 
-参与项目：
+### Which test frameworks does qarunner support?
 
-| 文档 | 说明 |
-|------|------|
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发环境搭建、质量门禁、PR 流程 |
-| [SECURITY.md](SECURITY.md) | 漏洞报告通道、已知安全边界、报告适用范围 |
-| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 贡献者行为准则 |
-| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+pytest and Playwright. Each has its own executor image; qarunner collects JUnit
+results, builds an Allure report, and keeps Playwright traces, screenshots and videos.
 
-## 配置参考
+### How does qarunner detect regressions and flaky tests?
 
-所有配置通过 `QARUNNER_` 前缀的环境变量设置，见 [docs/deployment.md](docs/deployment.md) 和 `.env.example`。
+Each run is compared with the most recent completed run of the same suite, runner
+and arguments, and every case lands in one of five buckets: new failure, fixed,
+still failing, new case or missing case. A case is marked flaky when its recent
+results keep flipping between pass and fail (by default at least three flips over
+at least four observations).
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `QARUNNER_SECRET_KEY` | **（必填）** | JWT 签名密钥 |
-| `QARUNNER_ADMIN_PASSWORD` | **（必填）** | 管理员初始密码 |
-| `QARUNNER_DB_PATH` | `./artifacts/qarunner.db` | SQLite 数据库路径 |
-| `QARUNNER_ALLOW_SUBPROCESS_FOR_NON_ADMINS` | `false` | 非管理员能否使用 subprocess 执行器 |
-| `QARUNNER_COOKIE_SECURE` | `false` | 生产环境需设为 `true` |
-| `QARUNNER_MAX_CONCURRENCY` | `4` | 最大并发测试数 |
-| `QARUNNER_AI_API_KEY` | （空） | LLM provider 的 API key；选填，留空则诊断生成禁用（端点 `enabled:false`，Tab 仍显示未配置说明），不影响其余功能 |
-| `QARUNNER_AI_PROVIDER` | `anthropic` | AI 诊断使用的 LLM provider，`anthropic` 或 `openai` |
-| `QARUNNER_AI_MODEL` | `claude-opus-4-8` | AI 诊断使用的模型名称 |
-| `QARUNNER_AI_POST_MAX_CALLS` | `10` | 每用户滑动窗口内允许的 AI POST 次数；`0` 关闭限流 |
-| `QARUNNER_AI_POST_WINDOW_SECONDS` | `60` | AI POST 限流窗口秒数 |
+### Is qarunner a replacement for CI?
+
+No. qarunner is where regression suites run on a schedule or on demand and where
+results are compared over time. A CI pipeline can trigger runs through the REST API.
+
+### Is it safe to run untrusted test code?
+
+Not in the current version — see the caution at the top. Tests run in hardened
+containers, but the control plane holds the Docker socket, so use it only for test
+code you trust, on a trusted network.
+
+### Does qarunner need an LLM API key?
+
+No. AI failure diagnosis is optional; without `QARUNNER_AI_API_KEY` everything
+else works and the AI tab explains how to enable it.
+
+### Does it have a CLI or Slack/email notifications?
+
+No. qarunner has a web console and a REST API, and sends Feishu (Lark) cards when
+a run finishes. Other notification channels and a CLI are out of scope.
+
+### How is qarunner licensed?
+
+MIT.
+
+## Documentation
+
+| Document | What it covers |
+|----------|----------------|
+| [docs/deployment.md](docs/deployment.md) | Local deployment and updates (development / legacy validation modes, operations) |
+| [docs/FEATURES.md](docs/FEATURES.md) | Capability overview, checked against the source |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | Every API route with request/response fields |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Code architecture (layers, ports, adapters) |
+| [docs/DIRECTION.md](docs/DIRECTION.md) | Product direction (single source of truth) |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Product requirements (outcomes, scope, KPIs, roadmap) |
+| [docs/SYSTEM_REQUIREMENTS.md](docs/SYSTEM_REQUIREMENTS.md) | System requirements (worker protocol, provenance, authorization, evidence) |
+| [docs/SECURITY_OPERATIONS_REQUIREMENTS.md](docs/SECURITY_OPERATIONS_REQUIREMENTS.md) | Security and operations requirements |
+| [docs/WORKER_PROTOCOL.md](docs/WORKER_PROTOCOL.md) | Worker protocol reference |
+| [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md) | Requirements traceability matrix |
+| [docs/RELEASE_GATE_CATALOG.md](docs/RELEASE_GATE_CATALOG.md) | Release acceptance catalog |
+| [docs/METRICS.md](docs/METRICS.md) | Quality metric definitions (pass rate, flakiness, duration) |
+| [docs/greenfield/](docs/greenfield/README.md) | Greenfield design set — **target design, not delivered capability** |
+| [specs/ui-test-plan.md](specs/ui-test-plan.md) | End-to-end UI test plan |
+
+Most design and requirements documents are written in Chinese.
+
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Security reports: [SECURITY.md](SECURITY.md) ·
+Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) · Changes: [CHANGELOG.md](CHANGELOG.md)
 
 ## Legacy single-host validation deployment (not V7.4 production)
 
@@ -209,6 +291,11 @@ refuses to start if either is unset or left as a known placeholder (SEC-2). See
 | `QARUNNER_STATIC_ROOT` | (project `frontend/dist`) | Directory of the built SPA to serve at `/`. The server image sets this; override for a custom layout |
 | `QARUNNER_CRASH_RECOVERY_ON_STARTUP` | `true` | Fail QUEUED/RUNNING runs left by a previous process on startup. Assumes a single instance owns the DB — set `false` on all but one replica when scaling out, or sibling runs in flight will be wrongly failed |
 | `QARUNNER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS` | `30` | Grace period on shutdown to let in-flight runs persist their terminal state before the DB closes. Runs still executing after this are cancelled (and recovered as FAILED on the next start) |
+| `QARUNNER_AI_API_KEY` | (empty) | LLM provider API key. Optional; when empty, AI diagnosis is disabled (`enabled:false`) and the AI tab shows setup instructions |
+| `QARUNNER_AI_PROVIDER` | `anthropic` | LLM provider for AI diagnosis: `anthropic` or `openai` |
+| `QARUNNER_AI_MODEL` | `claude-opus-4-8` | Model name used for AI diagnosis |
+| `QARUNNER_AI_POST_MAX_CALLS` | `10` | AI diagnosis requests allowed per user per window; `0` disables the limit |
+| `QARUNNER_AI_POST_WINDOW_SECONDS` | `60` | Rate-limit window for AI diagnosis requests, in seconds |
 
 ## API
 
@@ -251,4 +338,4 @@ Quick summary: **Hexagonal (ports & adapters)** architecture — 8 abstract port
 
 ## License
 
-MIT
+[MIT](LICENSE)

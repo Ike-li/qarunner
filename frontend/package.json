@@ -4,6 +4,24 @@
   "version": "0.1.0",
   "description": "qarunner web console — React + TypeScript + Semi UI single-page app.",
   "license": "MIT",
+  "homepage": "https://github.com/Ike-li/qarunner#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ike-li/qarunner.git",
+    "directory": "frontend"
+  },
+  "bugs": {
+    "url": "https://github.com/Ike-li/qarunner/issues"
+  },
+  "keywords": [
+    "qarunner",
+    "regression-testing",
+    "test-runner",
+    "pytest",
+    "playwright",
+    "react",
+    "vite"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
