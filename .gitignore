@@ -46,6 +46,7 @@ Thumbs.db
 artifacts/
 test-results/
 playwright-report/
+blob-report/
 smoke-results/
 # E2E auth storageState (HttpOnly cookies produced by global-setup) — never commit
 frontend/tests-e2e/.auth/

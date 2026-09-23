@@ -278,7 +278,8 @@ jobs:
           # backend shares this container, so both sides see the same path.
           export E2E_TESTS_ROOT_LOCAL="$GITHUB_WORKSPACE/tmp/e2e-tests"
           export E2E_TESTS_ROOT_BACKEND="$GITHUB_WORKSPACE/tmp/e2e-tests"
-          npx playwright test --shard=${{ matrix.shard }}/2
+          # blob: the per-shard format merge-reports combines; list: readable job logs.
+          npx playwright test --shard=${{ matrix.shard }}/2 --reporter=list,blob
         working-directory: frontend
         env:
           BASE_URL: http://localhost:5173
@@ -287,14 +288,20 @@ jobs:
           CI: "true"
 
       # ── Artifacts ──
+      - name: Upload blob report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: blob-report-shard-${{ matrix.shard }}
+          path: frontend/blob-report/
+          retention-days: 1
+
       - name: Upload E2E results
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
           name: e2e-results-shard-${{ matrix.shard }}
-          path: |
-            frontend/test-results/
-            frontend/playwright-report/
+          path: frontend/test-results/
           retention-days: 7
 
       - name: Upload traces on failure
@@ -327,15 +334,17 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Download all shard results
+      # Blob file names carry the shard index (report-<hash>-<shard>.zip), so all shards
+      # can be downloaded into one directory.
+      - name: Download blob reports
         uses: actions/download-artifact@v4
         with:
-          pattern: e2e-results-shard-*
-          path: frontend/all-results
+          pattern: blob-report-shard-*
+          path: frontend/all-blob-reports
           merge-multiple: true
 
       - name: Merge into single HTML report
-        run: npx playwright merge-reports --reporter=html all-results/test-results
+        run: npx playwright merge-reports --reporter=html ./all-blob-reports
         working-directory: frontend
 
       - name: Upload merged report
