@@ -12,9 +12,8 @@ import pytest
 
 from qarunner.application.migration_compatibility import (
     COMPATIBILITY_EPOCH,
-    MigrationControl,
-    MigrationGateDecision,
     STATE_MODEL_VERSION,
+    MigrationControl,
     classify_migration_record,
     evaluate_rollback,
 )
@@ -38,32 +37,42 @@ def _control(phase: str = "shadow", **changes) -> MigrationControl:
 def test_migration_control_rejects_invalid_construction() -> None:
     with pytest.raises(ValueError):
         MigrationControl(
-            phase="", active_writer_ids=(),
-            writer_compatibility_epoch=None, writer_state_model_version=None,
+            phase="",
+            active_writer_ids=(),
+            writer_compatibility_epoch=None,
+            writer_state_model_version=None,
             v1_facts_committed=False,
         )
     with pytest.raises(ValueError):
         MigrationControl(
-            phase="shadow", active_writer_ids="bad",  # type: ignore[arg-type]
-            writer_compatibility_epoch=None, writer_state_model_version=None,
+            phase="shadow",
+            active_writer_ids="bad",  # type: ignore[arg-type]
+            writer_compatibility_epoch=None,
+            writer_state_model_version=None,
             v1_facts_committed=False,
         )
     with pytest.raises(ValueError):
         MigrationControl(
-            phase="shadow", active_writer_ids=("dup", "dup"),
-            writer_compatibility_epoch=None, writer_state_model_version=None,
+            phase="shadow",
+            active_writer_ids=("dup", "dup"),
+            writer_compatibility_epoch=None,
+            writer_state_model_version=None,
             v1_facts_committed=False,
         )
     with pytest.raises(ValueError):
         MigrationControl(
-            phase="shadow", active_writer_ids=(),
-            writer_compatibility_epoch=None, writer_state_model_version=-1,
+            phase="shadow",
+            active_writer_ids=(),
+            writer_compatibility_epoch=None,
+            writer_state_model_version=-1,
             v1_facts_committed=False,
         )
     with pytest.raises(ValueError):
         MigrationControl(
-            phase="shadow", active_writer_ids=(),
-            writer_compatibility_epoch=None, writer_state_model_version=None,
+            phase="shadow",
+            active_writer_ids=(),
+            writer_compatibility_epoch=None,
+            writer_state_model_version=None,
             v1_facts_committed="yes",  # type: ignore[arg-type]
         )
 
@@ -78,9 +87,14 @@ def test_classify_migration_record_passes_compatible_record() -> None:
     # failure — classified as legacy_unverified since neither v1_terminal nor
     # legacy_terminal is set.
     record = MigrationRecord(
-        record_id="rec-001", legacy_terminal=None,
-        state_model_version=STATE_MODEL_VERSION, compatibility_epoch=COMPATIBILITY_EPOCH,
-        ownership_digest=None, command_digest=None, basis_digest=None, proof_digest=None,
+        record_id="rec-001",
+        legacy_terminal=None,
+        state_model_version=STATE_MODEL_VERSION,
+        compatibility_epoch=COMPATIBILITY_EPOCH,
+        ownership_digest=None,
+        command_digest=None,
+        basis_digest=None,
+        proof_digest=None,
         v1_terminal=None,
     )
     result = classify_migration_record(record)
@@ -93,9 +107,14 @@ def test_classify_migration_record_fails_on_unsupported_epoch() -> None:
     from qarunner.application.migration_compatibility import MigrationRecord
 
     record = MigrationRecord(
-        record_id="rec-001", legacy_terminal=None,
-        state_model_version=STATE_MODEL_VERSION, compatibility_epoch="WRONG-EPOCH",
-        ownership_digest=None, command_digest=None, basis_digest=None, proof_digest=None,
+        record_id="rec-001",
+        legacy_terminal=None,
+        state_model_version=STATE_MODEL_VERSION,
+        compatibility_epoch="WRONG-EPOCH",
+        ownership_digest=None,
+        command_digest=None,
+        basis_digest=None,
+        proof_digest=None,
         v1_terminal=None,
     )
     result = classify_migration_record(record)
@@ -107,9 +126,14 @@ def test_classify_migration_record_fails_on_unsupported_version() -> None:
     from qarunner.application.migration_compatibility import MigrationRecord
 
     record = MigrationRecord(
-        record_id="rec-001", legacy_terminal=None,
-        state_model_version=999, compatibility_epoch=COMPATIBILITY_EPOCH,
-        ownership_digest=None, command_digest=None, basis_digest=None, proof_digest=None,
+        record_id="rec-001",
+        legacy_terminal=None,
+        state_model_version=999,
+        compatibility_epoch=COMPATIBILITY_EPOCH,
+        ownership_digest=None,
+        command_digest=None,
+        basis_digest=None,
+        proof_digest=None,
         v1_terminal=None,
     )
     result = classify_migration_record(record)
@@ -177,9 +201,7 @@ def test_legacy_write_detected_blocks_canary_to_default_transition() -> None:
         active_writer_ids=("writer-new", "writer-legacy"),
     )
     # Legacy writer present = cannot advance.
-    has_legacy = any(
-        "legacy" in wid.lower() for wid in control.active_writer_ids
-    )
+    has_legacy = any("legacy" in wid.lower() for wid in control.active_writer_ids)
     assert has_legacy is True
     # v1_facts_committed=True → rollback also forbidden.
     decision = evaluate_rollback(control)

@@ -724,9 +724,7 @@ async def test_publish_revision_rejects_history_rewritten(
                 expected_version=snapshot.version,
             )
             # Replace historical first revision with a different object.
-            other_first = _register_suite(
-                revision_id="suite-revision-xxx"
-            ).revisions[0]
+            other_first = _register_suite(revision_id="suite-revision-xxx").revisions[0]
             forged = SimpleNamespace(
                 id=SUITE_ID,
                 version=1,

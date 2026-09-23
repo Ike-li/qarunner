@@ -193,9 +193,7 @@ def test_decision_chain_must_be_contiguous_and_contract_rule_present() -> None:
         decision,
         sequence=1,
         decision_kind=FinalizationDecisionKind.SUITE_RETRY,
-        decision_result=RetryDecisionResultRef(
-            d("b"), d("e"), d("c"), "attempt-2", 2, 2, d("3")
-        ),
+        decision_result=RetryDecisionResultRef(d("b"), d("e"), d("c"), "attempt-2", 2, 2, d("3")),
     )
     with pytest.raises(DomainValidationError, match="decision_digest_mismatch"):
         replace(valid_retry, decision_digest=d("f"))
@@ -208,9 +206,7 @@ def test_decision_chain_must_be_contiguous_and_contract_rule_present() -> None:
         decision_id="retry-1",
         decision_version=1,
         decision_digest=d("a"),
-        decision_result=RetryDecisionResultRef(
-            d("b"), d("a"), d("c"), "attempt-2", 2, 2, d("3")
-        ),
+        decision_result=RetryDecisionResultRef(d("b"), d("a"), d("c"), "attempt-2", 2, 2, d("3")),
     )
     with pytest.raises(DomainValidationError, match="contract_rule_required"):
         basis(decision_chain=(retry_only,))
@@ -389,9 +385,11 @@ def test_typed_result_refs_validate_and_canonicalize_nulls() -> None:
 
 def test_builder_derives_resolution_fields_and_rejects_envelope_mismatch() -> None:
     resolved = resolution_set()
-    values = basis().__dict__ if hasattr(basis(), "__dict__") else {
-        field: getattr(basis(), field) for field in basis().__dataclass_fields__
-    }
+    values = (
+        basis().__dict__
+        if hasattr(basis(), "__dict__")
+        else {field: getattr(basis(), field) for field in basis().__dataclass_fields__}
+    )
     for derived in (
         "run_id",
         "batch_id",
@@ -465,21 +463,41 @@ def test_builder_prestart_derives_null_attempt_chain() -> None:
     )
     values = {field: getattr(prestart, field) for field in prestart.__dataclass_fields__}
     for field in (
-        "run_id", "batch_id", "source_run_version", "manifest_digest", "shard_plan_digest",
-        "run_item_set_digest", "attempt_chain_digest", "retry_chain_digest",
-        "adjudication_chain_digest", "item_resolution_set_digest",
-        "original_resolution_set_digest", "effective_resolution_set_digest", "item_count",
+        "run_id",
+        "batch_id",
+        "source_run_version",
+        "manifest_digest",
+        "shard_plan_digest",
+        "run_item_set_digest",
+        "attempt_chain_digest",
+        "retry_chain_digest",
+        "adjudication_chain_digest",
+        "item_resolution_set_digest",
+        "original_resolution_set_digest",
+        "effective_resolution_set_digest",
+        "item_count",
     ):
         values.pop(field, None)
     built = RunFinalizationBasis.build(
-        resolution_set=resolved, manifest_digest=d("1"), shard_plan_digest=d("2"),
-        run_item_set_digest=d("3"), source_run_version=0, **values
+        resolution_set=resolved,
+        manifest_digest=d("1"),
+        shard_plan_digest=d("2"),
+        run_item_set_digest=d("3"),
+        source_run_version=0,
+        **values,
     )
     assert built.attempt_chain_digest is None
 
 
-def retry_ref(sequence: int, source_id: str, source_no: int, source_fence: int,
-              target_id: str, target_no: int, target_fence: int) -> object:
+def retry_ref(
+    sequence: int,
+    source_id: str,
+    source_no: int,
+    source_fence: int,
+    target_id: str,
+    target_no: int,
+    target_fence: int,
+) -> object:
     return RunFinalizationBasis.decision_ref(
         sequence=sequence,
         decision_kind=FinalizationDecisionKind.SUITE_RETRY,
@@ -502,38 +520,60 @@ def test_retry_chain_requires_source_target_continuity_and_basis_binding() -> No
     first = retry_ref(2, "attempt-1", 1, 1, "attempt-2", 2, 2)
     second = retry_ref(3, "attempt-2", 2, 2, "attempt-3", 3, 3)
     valid = basis(
-        final_attempt_id="attempt-3", final_attempt_no=3, final_attempt_fence=3,
-        decision_chain=(rule, first, second), retry_chain_digest=d("d")
+        final_attempt_id="attempt-3",
+        final_attempt_no=3,
+        final_attempt_fence=3,
+        decision_chain=(rule, first, second),
+        retry_chain_digest=d("d"),
     )
     assert valid.final_attempt_id == "attempt-3"
     with pytest.raises(DomainValidationError, match="retry_target_discontinuous"):
-        basis(decision_chain=(rule, replace(first, decision_result=replace(
-            first.decision_result, target_attempt_no=3))), retry_chain_digest=d("d"))
+        basis(
+            decision_chain=(
+                rule,
+                replace(
+                    first, decision_result=replace(first.decision_result, target_attempt_no=3)
+                ),
+            ),
+            retry_chain_digest=d("d"),
+        )
     with pytest.raises(DomainValidationError, match="retry_source_discontinuous"):
         basis(
-            final_attempt_id="attempt-3", final_attempt_no=3, final_attempt_fence=3,
+            final_attempt_id="attempt-3",
+            final_attempt_no=3,
+            final_attempt_fence=3,
             decision_chain=(rule, first, replace(second, source_attempt_id="other")),
             retry_chain_digest=d("d"),
         )
     with pytest.raises(DomainValidationError, match="retry_basis_mismatch"):
-        basis(final_attempt_id="attempt-2", final_attempt_no=2, final_attempt_fence=2,
-              decision_chain=(rule, replace(first, source_attempt_id="other")),
-              retry_chain_digest=d("d"))
+        basis(
+            final_attempt_id="attempt-2",
+            final_attempt_no=2,
+            final_attempt_fence=2,
+            decision_chain=(rule, replace(first, source_attempt_id="other")),
+            retry_chain_digest=d("d"),
+        )
 
 
 def test_unknown_completed_matrix_and_cancel_rule_mismatch() -> None:
     completed = UnknownAdjudicationResultRef(
-        d("c"), UnknownAdjudicationDecision.MARK_COMPLETED_FROM_VERIFIED_EVIDENCE,
-        evidence_root_digest=d("6")
+        d("c"),
+        UnknownAdjudicationDecision.MARK_COMPLETED_FROM_VERIFIED_EVIDENCE,
+        evidence_root_digest=d("6"),
     )
     unknown_ref = RunFinalizationBasis.decision_ref(
-        sequence=2, decision_kind=FinalizationDecisionKind.UNKNOWN_ADJUDICATION,
-        decision_schema="qep.unknown-adjudication.v1", decision_id="adj-1",
-        decision_version=1, decision_digest=d("c"), decision_result=completed
+        sequence=2,
+        decision_kind=FinalizationDecisionKind.UNKNOWN_ADJUDICATION,
+        decision_schema="qep.unknown-adjudication.v1",
+        decision_id="adj-1",
+        decision_version=1,
+        decision_digest=d("c"),
+        decision_result=completed,
     )
     value = basis(
         final_attempt_state=AttemptExecutionFact.ATTEMPT_UNKNOWN,
-        unknown_observation_digest=d("b"), adjudication_chain_digest=d("c"),
+        unknown_observation_digest=d("b"),
+        adjudication_chain_digest=d("c"),
         decision_chain=(basis().decision_chain[0], unknown_ref),
         terminal_input_kind=TerminalInputKind.UNKNOWN_ADJUDICATION,
     )
@@ -562,7 +602,8 @@ def test_unknown_completed_matrix_and_cancel_rule_mismatch() -> None:
         replace(infra, evidence_root_digest=d("6"))
     cancelled = basis(
         final_attempt_state=AttemptExecutionFact.CANCELLED,
-        cancellation_intent_digest=d("c"), cancellation_stop_digest=d("d"),
+        cancellation_intent_digest=d("c"),
+        cancellation_stop_digest=d("d"),
         outcome=RunOutcome.CANCELLED,
         terminal_input_kind=TerminalInputKind.VERIFIED_CANCELLATION_EVIDENCE,
     )
@@ -592,9 +633,7 @@ def test_retry_decision_requires_source_attempt_binding() -> None:
         decision_id="retry-1",
         decision_version=1,
         decision_digest=d("a"),
-        decision_result=RetryDecisionResultRef(
-            d("b"), d("a"), d("c"), "attempt-2", 2, 2, d("3")
-        ),
+        decision_result=RetryDecisionResultRef(d("b"), d("a"), d("c"), "attempt-2", 2, 2, d("3")),
     )
     with pytest.raises(DomainValidationError, match="retry_source_required"):
         basis(decision_chain=(rule, unsourced), retry_chain_digest=d("d"))

@@ -105,7 +105,7 @@ def compute_next_fire_at(
     except ImportError:  # pragma: no cover — croniter is a declared dependency
         raise DomainValidationError(
             entity_type="schedule", field="cron_expr", reason="croniter_not_installed"
-        )
+        ) from None
     if not croniter.is_valid(cron_expr):
         raise DomainValidationError(entity_type="schedule", field="cron_expr", reason="invalid")
     try:
@@ -113,7 +113,9 @@ def compute_next_fire_at(
 
         tz = ZoneInfo(timezone)
     except (KeyError, Exception):
-        raise DomainValidationError(entity_type="schedule", field="timezone", reason="invalid")
+        raise DomainValidationError(
+            entity_type="schedule", field="timezone", reason="invalid"
+        ) from None
     local_after = after.astimezone(tz)
     it = croniter(cron_expr, local_after)
     next_local = it.get_next(datetime)

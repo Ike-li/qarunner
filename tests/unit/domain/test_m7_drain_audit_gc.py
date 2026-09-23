@@ -15,8 +15,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from qarunner.domain import (
+    CommitStartProof,
     ExpectedLiveAttempt,
-    ReconcileWorkerFacts,
     ResidualSandboxDisposition,
     ResidualSandboxObservation,
     WorkerGeneration,
@@ -118,9 +118,7 @@ def test_audit_record_rejects_invalid_contract() -> None:
         decision="allowed",
         reason="user-request",
         before_digest=None,
-        after_digest=canonical_digest(
-            schema_version="qep.audit-test.v1", payload={"v": 1}
-        ),
+        after_digest=canonical_digest(schema_version="qep.audit-test.v1", payload={"v": 1}),
         occurred_at=datetime(2026, 7, 29, 10, 0, tzinfo=UTC),
         source="api",
     )
@@ -158,9 +156,7 @@ def test_audit_record_is_frozen_immutable() -> None:
         decision="allowed",
         reason="user-request",
         before_digest=None,
-        after_digest=canonical_digest(
-            schema_version="qep.audit-test.v1", payload={"v": 1}
-        ),
+        after_digest=canonical_digest(schema_version="qep.audit-test.v1", payload={"v": 1}),
         occurred_at=datetime(2026, 7, 29, 10, 0, tzinfo=UTC),
         source="api",
     )
@@ -238,8 +234,6 @@ def _proof(
     assignment_id: str = "assignment-001",
     generation: int = 1,
 ) -> CommitStartProof:
-    from qarunner.domain.worker_execution import CommitStartProof
-
     return CommitStartProof(
         run_id=run_id,
         assignment_id=assignment_id,
@@ -254,7 +248,9 @@ def _proof(
     )
 
 
-def _observation(proof: CommitStartProof, *, container_id: str = "ctr-1") -> ResidualSandboxObservation:
+def _observation(
+    proof: CommitStartProof, *, container_id: str = "ctr-1"
+) -> ResidualSandboxObservation:
     from qarunner.domain.worker_execution import sandbox_labels_for_proof
 
     labels = sandbox_labels_for_proof(proof)

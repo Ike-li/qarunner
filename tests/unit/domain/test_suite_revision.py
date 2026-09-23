@@ -385,7 +385,7 @@ def test_retire_already_retired_with_current_version_raises_conflict() -> None:
 
 
 def test_suite_revision_rejects_invalid_revision_no() -> None:
-    from qarunner.domain import DomainValidationError, SuiteRevision, SuiteRevisionStatus
+    from qarunner.domain import DomainValidationError
 
     revision = _base_suite().revisions[0]
     with pytest.raises(DomainValidationError) as caught:

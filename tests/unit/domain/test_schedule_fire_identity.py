@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from qarunner.domain import (
+    Digest,
     DomainValidationError,
     ScheduleFireIdentity,
     ScheduleRecord,
@@ -19,7 +20,6 @@ from qarunner.domain import (
     compute_next_fire_at,
     compute_schedule_fire_identity,
 )
-
 
 T0 = datetime(2026, 7, 29, 10, 0, tzinfo=UTC)
 
@@ -93,9 +93,7 @@ def test_compute_next_fire_at_returns_utc_datetime() -> None:
 
 
 def test_compute_next_fire_at_returns_none_for_disabled_schedule() -> None:
-    result = compute_next_fire_at(
-        cron_expr="0 2 * * *", timezone="UTC", after=T0, enabled=False
-    )
+    result = compute_next_fire_at(cron_expr="0 2 * * *", timezone="UTC", after=T0, enabled=False)
     assert result is None
 
 
@@ -129,7 +127,7 @@ def test_fire_identity_rejects_blank_schedule_id_via_constructor() -> None:
         )
 
 
-def _digest(label: str) -> "Digest":
+def _digest(label: str) -> Digest:
     from qarunner.domain import canonical_digest
 
     return canonical_digest(
