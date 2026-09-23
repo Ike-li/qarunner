@@ -28,11 +28,12 @@ async function triggerRunViaUi(page: import('@playwright/test').Page): Promise<s
   await page.getByTestId('open-trigger-button').click();
   await expect(page.getByTestId('trigger-modal')).toBeVisible();
 
-  // Select SUITE in the tests-path dropdown via keyboard (reliable Semi Select).
+  // Select SUITE by name — ArrowDown picked whichever suite sorts first, which
+  // depends on what else happens to sit in the backend's tests_root.
   const testsSelect = page.locator('#trigger-tests-path');
   await testsSelect.click();
-  await testsSelect.press('ArrowDown');
-  await testsSelect.press('Enter');
+  await page.locator('.semi-select-option-list .semi-select-option').filter({ hasText: SUITE }).click();
+  await expect(testsSelect).toContainText(SUITE);
 
   // Wait for fetchSuiteMetadata to finish its /tests/{suite}/tree + /markers calls
   // (proves React state updated → submit button enabled, not disabled by empty
@@ -50,7 +51,8 @@ async function triggerRunViaUi(page: import('@playwright/test').Page): Promise<s
     page.getByTestId('trigger-submit-button').click(),
   ]);
   expect(postResp.ok(), 'POST /runs should succeed').toBe(true);
-  const newRun = (await postResp.json()) as { id: string };
+  const newRun = (await postResp.json()) as { id: string; tests_path: string };
+  expect(newRun.tests_path).toBe(SUITE);
 
   // Modal closes on a successful trigger.
   await expect(page.getByTestId('trigger-modal')).not.toBeVisible({ timeout: 10000 });
